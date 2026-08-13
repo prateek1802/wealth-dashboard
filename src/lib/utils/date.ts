@@ -1,11 +1,22 @@
-import { format, formatDistanceToNowStrict, parseISO } from "date-fns";
+import { format, formatDistanceToNowStrict, parseISO, isValid } from "date-fns";
 
+/**
+ * Defensive by design: a malformed date string (most commonly from a CSV
+ * import with an unrecognized date format that slipped past validation)
+ * must never crash the page it's rendered on. Falls back to the raw
+ * string rather than throwing — a single bad row degrades gracefully
+ * instead of taking down the whole list.
+ */
 export function formatDate(iso: string, pattern: string = "d MMM yyyy"): string {
-  return format(parseISO(iso), pattern);
+  const parsed = parseISO(iso);
+  if (!isValid(parsed)) return iso || "—";
+  return format(parsed, pattern);
 }
 
 export function formatRelative(iso: string): string {
-  return formatDistanceToNowStrict(parseISO(iso), { addSuffix: true });
+  const parsed = parseISO(iso);
+  if (!isValid(parsed)) return iso || "—";
+  return formatDistanceToNowStrict(parsed, { addSuffix: true });
 }
 
 export function todayISO(): string {

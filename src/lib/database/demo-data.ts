@@ -124,6 +124,10 @@ export const demoBankAccounts: BankAccount[] = [
 // Simple synthetic snapshot history so Analytics/Performance charts have
 // something to render out of the box. A real project would accumulate
 // these organically (see snapshot.service.ts).
+// Deliberately empty — see price-history.repository.ts. Never fabricated;
+// this fills in as you use Refresh Prices / Edit Asset's price field.
+export const demoPriceHistory: import("@/types/domain/price-history").PriceHistoryPoint[] = [];
+
 export const demoSnapshots: PortfolioSnapshot[] = Array.from({ length: 40 }, (_, i) => {
   const daysBack = (39 - i) * 9;
   const drift = 1 + (39 - daysBack / 9) * 0.006;

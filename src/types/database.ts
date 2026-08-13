@@ -132,6 +132,14 @@ export interface BankAccountRow {
   updated_at: string;
 }
 
+export interface PriceHistoryRow {
+  id: string;
+  asset_id: string;
+  price: number;
+  recorded_date: string;
+  created_at: string;
+}
+
 export interface WatchlistItemRow {
   id: string;
   asset_id: string;

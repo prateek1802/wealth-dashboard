@@ -32,6 +32,8 @@ export async function updateAssetPriceAction(input: unknown): Promise<ActionResu
   }
   try {
     await assetsRepository.updatePrice(parsed.data.assetId, parsed.data.currentPrice);
+    const { priceHistoryService } = await import("@/lib/services/price-history.service");
+    await priceHistoryService.record(parsed.data.assetId, parsed.data.currentPrice);
     revalidatePath(ROUTES.dashboard);
     revalidatePath(ROUTES.portfolio);
     revalidatePath(ROUTES.investmentDetail(parsed.data.assetId));
@@ -68,6 +70,7 @@ export interface RefreshPricesResult {
 export async function refreshLivePricesAction(): Promise<RefreshPricesResult | { ok: false; error: string }> {
   try {
     const { getLiveQuoteForAsset } = await import("@/lib/market-data/live-provider");
+    const { priceHistoryService } = await import("@/lib/services/price-history.service");
     const assets = await assetsRepository.findAll();
     let updated = 0;
     const skipped: string[] = [];
@@ -76,6 +79,7 @@ export async function refreshLivePricesAction(): Promise<RefreshPricesResult | {
       const quote = await getLiveQuoteForAsset(asset);
       if (quote) {
         await assetsRepository.updatePrice(asset.id, quote.price);
+        await priceHistoryService.record(asset.id, quote.price);
         updated += 1;
       } else {
         skipped.push(asset.symbol);

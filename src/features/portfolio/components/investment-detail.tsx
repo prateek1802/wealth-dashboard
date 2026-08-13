@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
+import { PerformanceLineChart } from "@/components/charts/performance-line-chart";
 import { EditAssetDialog } from "./edit-asset-dialog";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
 import { deleteTransactionAction } from "@/features/transactions/actions";
@@ -16,8 +17,9 @@ import { cn } from "@/lib/utils/cn";
 import { Pencil, Plus, Trash2, LineChart, Receipt } from "lucide-react";
 import type { Holding } from "@/types/domain/holding";
 import type { Transaction } from "@/types/domain/transaction";
+import type { PriceHistoryPoint } from "@/types/domain/price-history";
 
-export function InvestmentDetail({ holding, transactions }: { holding: Holding; transactions: Transaction[] }) {
+export function InvestmentDetail({ holding, transactions, priceHistory }: { holding: Holding; transactions: Transaction[]; priceHistory: PriceHistoryPoint[] }) {
   const [editOpen, setEditOpen] = useState(false);
   const [addTxnOpen, setAddTxnOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
@@ -90,11 +92,17 @@ export function InvestmentDetail({ holding, transactions }: { holding: Holding; 
 
       <Card className="flex flex-col gap-3 p-6">
         <CardTitle>Performance</CardTitle>
-        <EmptyState
-          icon={LineChart}
-          title="No price history yet"
-          description="V1 uses manually entered prices, which have no history by definition. Connect a real market data provider later to unlock this chart."
-        />
+        {priceHistory.length < 2 ? (
+          <EmptyState
+            icon={LineChart}
+            title="Not enough price history yet"
+            description="This chart fills in over time as you use Refresh Prices or update the price manually — one point is recorded per day, never fabricated or backfilled."
+          />
+        ) : (
+          <div className="h-64 w-full">
+            <PerformanceLineChart points={priceHistory.map((p) => ({ date: p.recordedDate, value: p.price }))} />
+          </div>
+        )}
       </Card>
 
       {asset.notes && (

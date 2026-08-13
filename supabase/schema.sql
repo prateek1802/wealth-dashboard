@@ -205,6 +205,23 @@ create trigger ppf_accounts_set_updated_at before update on ppf_accounts
   for each row execute function set_updated_at();
 
 -- =========================================================================
+-- price_history — one row per asset per calendar date, written whenever a
+-- price is actually updated (Edit Asset's manual entry, or Refresh Prices).
+-- NEVER fabricated or backfilled — a gap in history just means the price
+-- wasn't updated that day. This is what powers the per-asset performance
+-- chart on the investment detail page.
+-- =========================================================================
+create table price_history (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid not null references assets(id) on delete cascade,
+  price numeric(18,4) not null,
+  recorded_date date not null,
+  created_at timestamptz not null default now(),
+  unique (asset_id, recorded_date)
+);
+create index price_history_asset_date_idx on price_history (asset_id, recorded_date);
+
+-- =========================================================================
 -- watchlist_items — reuses `assets`; a watched asset is NOT a holding.
 -- Holding status is derived from whether transactions exist, not stored.
 -- =========================================================================
