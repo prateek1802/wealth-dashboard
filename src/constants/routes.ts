@@ -1,0 +1,15 @@
+export const ROUTES = {
+  landing: "/",
+  dashboard: "/dashboard",
+  portfolio: "/portfolio",
+  investmentDetail: (assetId: string) => `/portfolio/${assetId}`,
+  transactions: "/transactions",
+  analytics: "/analytics",
+  goals: "/goals",
+  bankAccounts: "/bank-accounts",
+  fixedDeposits: "/fixed-deposits",
+  nps: "/nps",
+  ppf: "/ppf",
+  watchlist: "/watchlist",
+  backup: "/backup",
+} as const;
