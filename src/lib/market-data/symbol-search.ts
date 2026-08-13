@@ -120,11 +120,6 @@ async function searchCrypto(query: string): Promise<SymbolSearchResult[]> {
   }
 }
 
-interface MFAPIScheme {
-  schemeCode: number;
-  schemeName: string;
-}
-
 /**
  * Indian mutual funds — mfapi.in, a free, no-key, community-run API backed
  * by AMFI's daily NAV feed. We store the scheme code AS the asset's
@@ -134,20 +129,57 @@ interface MFAPIScheme {
  * funds don't have "intraday" prices), so Refresh Prices updates this to
  * the latest published NAV, not a live tick.
  *
- * mfapi.in's search has no result limit and no relevance ranking — a broad
- * query can return hundreds of scheme codes (Direct/Regular/Growth/IDCW
- * variants of the same underlying fund, which is why two rows can look
- * identical at a glance: they're genuinely different schemes, just with
- * near-identical names). We cap to the first 8 after the request completes
- * — the size of that payload, not our code, is the main reason mutual fund
- * search feels slower than the other two sources.
+ * Matching is done entirely locally against the full cached scheme list
+ * (see mf-scheme-cache.ts) rather than trusting mfapi.in's own `/search`
+ * endpoint, whose matching behavior proved inconsistent for real fund
+ * names. A scheme matches if every word in the query appears somewhere in
+ * its name, in any order and case-insensitively — "pgim midcap" matches
+ * "PGIM India Midcap Opportunities Fund" even though the words aren't
+ * adjacent in the real name.
+ *
+ * Direct/Regular and Growth/IDCW variants are NOT duplicates — they're
+ * genuinely different schemes with different NAVs (different fee
+ * structures and payout behavior) — but "Direct Plan - Growth" is what
+ * most self-directed investors want, so that variant is sorted first
+ * rather than left to chance.
  */
+/**
+ * Whether a mutual fund scheme name matches a search query: every word in
+ * the query must appear somewhere in the name, in any order,
+ * case-insensitively. Exported and unit-tested directly (see
+ * test/mf-search-matching.test.ts) since this exact logic broke twice
+ * before — once trusting mfapi.in's own search endpoint too much, once
+ * from a leftover code-merge bug. It no longer depends on any network call.
+ */
+export function matchesMFQuery(schemeName: string, query: string): boolean {
+  const words = query.trim().toLowerCase().split(/\s+/).filter((w) => w.length >= 2);
+  if (words.length === 0) return false;
+  const lower = schemeName.toLowerCase();
+  return words.every((w) => lower.includes(w));
+}
+
 async function searchMutualFunds(query: string): Promise<SymbolSearchResult[]> {
   try {
-    const res = await fetchWithTimeout(`https://api.mfapi.in/mf/search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
-    if (!res.ok) return [];
-    const data: MFAPIScheme[] = await res.json();
-    const results = data.map(
+    const { getAllMFSchemes } = await import("./mf-scheme-cache");
+
+    // The full scheme list can take up to ~15s to download on the very
+    // first search after a fresh server start (see FETCH_TIMEOUT_MS in
+    // mf-scheme-cache.ts) — that download keeps running in the background
+    // regardless, but THIS particular keystroke's search shouldn't make
+    // the whole combined search (equities + crypto too) wait on it. Race
+    // it against a shorter local timeout instead: if the cache isn't warm
+    // yet, this search comes back empty just for mutual funds, and the
+    // very next search (once the background fetch finishes) is instant.
+    const schemesOrTimeout = await Promise.race([
+      getAllMFSchemes(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+    ]);
+    if (!schemesOrTimeout) return [];
+    const allSchemes = schemesOrTimeout;
+
+    const matches = allSchemes.filter((s) => matchesMFQuery(s.schemeName, query));
+
+    const results = matches.map(
       (s): SymbolSearchResult => ({
         symbol: String(s.schemeCode),
         name: s.schemeName,
@@ -157,22 +189,14 @@ async function searchMutualFunds(query: string): Promise<SymbolSearchResult[]> {
         country: "India",
       })
     );
-    // Scheme code is always unique per scheme, so this dedupe is a no-op
-    // for mfapi itself — kept for a consistent contract across all three
-    // sources and in case mfapi ever returns a code twice.
-    const deduped = dedupe(results);
 
-    // These are NOT duplicates — "Direct"/"Regular" and "Growth"/"IDCW" are
-    // genuinely different schemes with different NAVs (different fee
-    // structures and payout behavior). But most self-directed investors
-    // want "Direct Plan - Growth" specifically, so surface that variant
-    // first rather than making it a coin flip which shows up on top.
     const planScore = (name: string) => {
       let score = 0;
       if (/direct/i.test(name)) score += 2;
       if (/growth/i.test(name)) score += 1;
       return score;
     };
+    const deduped = dedupe(results);
     deduped.sort((a, b) => planScore(b.name) - planScore(a.name));
 
     return deduped.slice(0, 8);
