@@ -61,3 +61,16 @@ export function calculateXIRR(cashflows: Cashflow[]): CalcResult<number> {
 
   return { status: "ok", value: rate * 100 };
 }
+
+/**
+ * Projects a future value by compounding a current value forward at a
+ * fixed annual rate — used to turn a historical XIRR into a "what if this
+ * rate holds" estimate. This is explicitly a projection built on a past
+ * realized+unrealized rate continuing unchanged, NOT a prediction or
+ * guarantee — callers must label it as an estimate (see FINANCIAL SAFETY
+ * in ARCHITECTURE.md: this app never presents projections as advice).
+ */
+export function projectFutureValue(currentValue: number, annualRatePercent: number, years: number): number {
+  if (years <= 0) return currentValue;
+  return currentValue * Math.pow(1 + annualRatePercent / 100, years);
+}

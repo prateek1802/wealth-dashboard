@@ -12,6 +12,7 @@ import { netCashFlow } from "@/lib/calculations/cashflow";
 import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
 import { todayISO } from "@/lib/utils/date";
 import { ALLOCATION_CATEGORY_LABELS } from "@/constants/asset-types";
+import { GrowthProjection } from "@/features/analytics/components/growth-projection";
 import { PieChart } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -19,11 +20,12 @@ export const dynamic = "force-dynamic";
 const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
 
 export default async function AnalyticsPage() {
-  const [summary, allocation, transactions, snapshots] = await Promise.all([
+  const [summary, allocation, transactions, snapshots, holdingsWithXirr] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     transactionsRepository.findAll(),
     snapshotsRepository.findAll(),
+    portfolioService.getHoldingsWithXIRR(),
   ]);
 
   const cashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
@@ -79,6 +81,8 @@ export default async function AnalyticsPage() {
             <StatTile label="Sortino Ratio" result={sortino} format={(v) => v.toFixed(2)} colorByValue />
           </CardContent>
         </Card>
+
+        <GrowthProjection holdings={holdingsWithXirr} portfolioXirr={xirr} portfolioValue={summary.currentValue} />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <Card>

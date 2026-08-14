@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
+import { calculateCAGR, calculateXIRR, projectFutureValue } from "@/lib/calculations/returns";
 
 describe("calculateCAGR", () => {
   it("computes CAGR for doubling over 3 years", () => {
@@ -39,5 +39,21 @@ describe("calculateXIRR", () => {
       { date: "2023-06-01", amount: -500 },
     ]);
     expect(result.status).toBe("insufficient_data");
+  });
+});
+
+describe("projectFutureValue", () => {
+  it("compounds a value forward at a fixed rate", () => {
+    // 100,000 at 10% for 3 years = 100000 * 1.1^3 = 133,100
+    expect(projectFutureValue(100_000, 10, 3)).toBeCloseTo(133_100, 0);
+  });
+
+  it("returns the current value unchanged for zero or negative years", () => {
+    expect(projectFutureValue(50_000, 12, 0)).toBe(50_000);
+    expect(projectFutureValue(50_000, 12, -1)).toBe(50_000);
+  });
+
+  it("handles a negative rate (declining value)", () => {
+    expect(projectFutureValue(100_000, -10, 1)).toBeCloseTo(90_000, 0);
   });
 });

@@ -7,12 +7,20 @@ import { ppfService } from "./ppf.service";
 import { bankAccountsService } from "./bank-accounts.service";
 import { summarizeAssetPosition } from "@/lib/calculations/pnl";
 import { calculateAllocation } from "@/lib/calculations/allocation";
+import { calculateXIRR } from "@/lib/calculations/returns";
+import { netCashFlow } from "@/lib/calculations/cashflow";
+import { todayISO } from "@/lib/utils/date";
 import { periodToDays } from "@/constants/chart-periods";
 import type { ChartPeriod } from "@/constants/chart-periods";
 import type { AllocationCategory } from "@/constants/asset-types";
 import { ASSET_TYPE_GROUP } from "@/constants/asset-types";
 import type { Holding } from "@/types/domain/holding";
+import type { CalcResult } from "@/lib/calculations/returns";
 import type { PortfolioSummary, AllocationSlice, PerformancePoint, ActivityItem } from "@/types/domain/snapshot";
+
+export interface HoldingWithXIRR extends Holding {
+  xirr: CalcResult<number>;
+}
 
 /**
  * Portfolio Valuation / Aggregation Service.
@@ -67,6 +75,26 @@ export const portfolioService = {
   async getTopHoldings(limit: number = 5): Promise<Holding[]> {
     const holdings = await computeHoldings();
     return holdings.slice(0, limit);
+  },
+
+  /**
+   * Each holding's OWN XIRR — built from just that asset's transaction
+   * cash flows, plus its current value as a final "as if sold today"
+   * inflow (same pattern as the portfolio-wide XIRR on the dashboard, just
+   * scoped to one asset). Powers the per-asset growth projection on the
+   * Analytics page. Insufficient data (e.g. a single BUY with no time
+   * elapsed) is reported via CalcResult, not hidden or faked as 0%.
+   */
+  async getHoldingsWithXIRR(): Promise<HoldingWithXIRR[]> {
+    const [holdings, allTransactions] = await Promise.all([computeHoldings(), transactionsRepository.findAll()]);
+    const today = todayISO();
+
+    return holdings.map((h) => {
+      const txns = allTransactions.filter((t) => t.assetId === h.asset.id);
+      const cashflows = txns.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+      cashflows.push({ date: today, amount: h.currentValue });
+      return { ...h, xirr: calculateXIRR(cashflows) };
+    });
   },
 
   async getPortfolioSummary(): Promise<PortfolioSummary> {
