@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoBankAccounts, nextId } from "@/lib/database/demo-data";
 import type { BankAccount, NewBankAccount } from "@/types/domain/bank-account";
 import type { BankAccountRow } from "@/types/database";
@@ -19,7 +20,7 @@ function rowToBankAccount(row: BankAccountRow): BankAccount {
 export const bankAccountsRepository = {
   async findAll(): Promise<BankAccount[]> {
     if (isDemoMode()) return [...demoBankAccounts];
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("bank_accounts").select("*").order("bank_name");
     if (error) throw error;
     return (data as BankAccountRow[]).map(rowToBankAccount);
@@ -31,7 +32,7 @@ export const bankAccountsRepository = {
       demoBankAccounts.push(account);
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("bank_accounts")
       .insert({ bank_name: input.bankName, account_type: input.accountType, current_balance: input.currentBalance, notes: input.notes })
@@ -49,7 +50,7 @@ export const bankAccountsRepository = {
       account.updatedAt = new Date().toISOString();
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("bank_accounts").update({ current_balance: currentBalance }).eq("id", id).select().single();
     if (error) throw error;
     return rowToBankAccount(data as BankAccountRow);
@@ -61,7 +62,7 @@ export const bankAccountsRepository = {
       if (idx >= 0) demoBankAccounts.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("bank_accounts").delete().eq("id", id);
     if (error) throw error;
   },

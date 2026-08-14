@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoTransactions, nextId } from "@/lib/database/demo-data";
 import type { Transaction, NewTransaction } from "@/types/domain/transaction";
 import type { TransactionRow } from "@/types/database";
@@ -26,7 +27,7 @@ export const transactionsRepository = {
     if (isDemoMode()) {
       return [...demoTransactions].sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("transactions").select("*").order("transaction_date", { ascending: false });
     if (error) throw error;
     return (data as TransactionRow[]).map(rowToTransaction);
@@ -38,7 +39,7 @@ export const transactionsRepository = {
         .filter((t) => t.assetId === assetId)
         .sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("transactions")
       .select("*")
@@ -59,7 +60,7 @@ export const transactionsRepository = {
       demoTransactions.push(txn);
       return txn;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("transactions")
       .insert({
@@ -85,7 +86,7 @@ export const transactionsRepository = {
       if (idx >= 0) demoTransactions.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("transactions").delete().eq("id", id);
     if (error) throw error;
   },

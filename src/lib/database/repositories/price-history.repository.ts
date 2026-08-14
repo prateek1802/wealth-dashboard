@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoPriceHistory, nextId } from "@/lib/database/demo-data";
 import { todayISO } from "@/lib/utils/date";
 import type { PriceHistoryPoint } from "@/types/domain/price-history";
@@ -13,7 +14,7 @@ export const priceHistoryRepository = {
     if (isDemoMode()) {
       return demoPriceHistory.filter((p) => p.assetId === assetId).sort((a, b) => a.recordedDate.localeCompare(b.recordedDate));
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("price_history").select("*").eq("asset_id", assetId).order("recorded_date");
     if (error) throw error;
     return (data as PriceHistoryRow[]).map(rowToPoint);
@@ -32,7 +33,7 @@ export const priceHistoryRepository = {
       demoPriceHistory.push(point);
       return point;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("price_history")
       .upsert({ asset_id: assetId, price, recorded_date: today }, { onConflict: "asset_id,recorded_date" })

@@ -1,4 +1,16 @@
 -- Development seed data — FICTIONAL, not real financial information.
+-- ---------------------------------------------------------------------
+-- NOTE: now that Row Level Security is enabled (every table requires a
+-- user_id), this script won't work as-is when run outside an authenticated
+-- session (e.g. via psql or the SQL editor) — auth.uid() resolves to NULL
+-- there, which violates the NOT NULL constraint. This file is optional
+-- and mainly useful before you set up auth; if you want seeded demo data
+-- AFTER auth is enabled, either add data through the app itself (works
+-- correctly — it runs through your authenticated session, so auth.uid()
+-- resolves normally), or sign up first, find your user ID in Supabase
+-- Dashboard → Authentication → Users, and manually add `, user_id` with
+-- that value to each insert below.
+-- ---------------------------------------------------------------------
 -- Mirrors src/lib/database/demo-data.ts (the in-memory fallback used when
 -- no Supabase project is configured) so a freshly connected real project
 -- looks the same as the zero-config demo mode.

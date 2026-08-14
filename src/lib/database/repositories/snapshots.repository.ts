@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoSnapshots, nextId } from "@/lib/database/demo-data";
 import type { PortfolioSnapshot } from "@/types/domain/snapshot";
 import type { PortfolioSnapshotRow } from "@/types/database";
@@ -25,7 +26,7 @@ function rowToSnapshot(row: PortfolioSnapshotRow): PortfolioSnapshot {
 export const snapshotsRepository = {
   async findAll(): Promise<PortfolioSnapshot[]> {
     if (isDemoMode()) return [...demoSnapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("portfolio_snapshots").select("*").order("snapshot_date");
     if (error) throw error;
     return (data as PortfolioSnapshotRow[]).map(rowToSnapshot);
@@ -40,7 +41,7 @@ export const snapshotsRepository = {
       else demoSnapshots.push(record);
       return record;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("portfolio_snapshots")
       .upsert(

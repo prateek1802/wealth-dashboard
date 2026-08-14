@@ -26,6 +26,7 @@ $$ language plpgsql;
 -- =========================================================================
 create table assets (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   symbol text not null,
   name text not null,
   asset_type text not null check (asset_type in ('stock_in', 'stock_us', 'etf', 'mutual_fund', 'mutual_fund_debt', 'bond', 'crypto', 'cash', 'other')),
@@ -55,6 +56,7 @@ create trigger assets_set_updated_at before update on assets
 -- =========================================================================
 create table transactions (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   asset_id uuid not null references assets(id) on delete cascade,
   transaction_type text not null check (transaction_type in ('BUY', 'SELL')),
   quantity numeric(18,6) not null check (quantity > 0),
@@ -79,6 +81,7 @@ create trigger transactions_set_updated_at before update on transactions
 -- =========================================================================
 create table portfolio_snapshots (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   snapshot_date date not null unique,
   net_worth numeric(18,4) not null,
   invested_capital numeric(18,4) not null,   -- securities + crypto cost basis ONLY — see ARCHITECTURE.md trade-off #1
@@ -99,6 +102,7 @@ create index portfolio_snapshots_date_idx on portfolio_snapshots (snapshot_date)
 -- =========================================================================
 create table goals (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   name text not null,
   target_amount numeric(18,4) not null check (target_amount > 0),
   current_amount numeric(18,4) not null default 0 check (current_amount >= 0),
@@ -117,6 +121,7 @@ create trigger goals_set_updated_at before update on goals
 -- =========================================================================
 create table fixed_deposits (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   institution text not null,
   principal numeric(18,4) not null check (principal > 0),
   interest_rate numeric(9,4) not null check (interest_rate > 0),
@@ -142,6 +147,7 @@ create trigger fixed_deposits_set_updated_at before update on fixed_deposits
 -- =========================================================================
 create table nps_accounts (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   tier text not null default 'Tier I' check (tier in ('Tier I', 'Tier II')),
   pension_fund_manager text,
   pran text,
@@ -158,6 +164,7 @@ create trigger nps_accounts_set_updated_at before update on nps_accounts
 
 create table nps_contributions (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   nps_account_id uuid not null references nps_accounts(id) on delete cascade,
   contribution_date date not null,
   employee_amount numeric(18,4) not null default 0 check (employee_amount >= 0),
@@ -174,6 +181,7 @@ create index nps_contributions_account_date_idx on nps_contributions (nps_accoun
 -- =========================================================================
 create table bank_accounts (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   bank_name text not null,
   account_type text not null check (account_type in ('savings', 'current', 'salary', 'nre_nro', 'other')),
   current_balance numeric(18,4) not null default 0,
@@ -190,6 +198,7 @@ create trigger bank_accounts_set_updated_at before update on bank_accounts
 -- =========================================================================
 create table ppf_accounts (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   account_number text,
   current_balance numeric(18,4) not null default 0,
   total_contributed numeric(18,4) not null default 0,  -- principal — your own deposits; interest earned = current_balance + total_withdrawn - total_contributed, derived not stored
@@ -213,6 +222,7 @@ create trigger ppf_accounts_set_updated_at before update on ppf_accounts
 -- =========================================================================
 create table price_history (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   asset_id uuid not null references assets(id) on delete cascade,
   price numeric(18,4) not null,
   recorded_date date not null,
@@ -227,6 +237,7 @@ create index price_history_asset_date_idx on price_history (asset_id, recorded_d
 -- =========================================================================
 create table watchlist_items (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   asset_id uuid not null references assets(id) on delete cascade,
   target_price numeric(18,4),
   stop_loss numeric(18,4),
@@ -239,14 +250,49 @@ create trigger watchlist_items_set_updated_at before update on watchlist_items
   for each row execute function set_updated_at();
 
 -- =========================================================================
--- NOTE ON ROW LEVEL SECURITY
--- V1 is deliberately single-user and does NOT enable RLS (see MASTER PROMPT
--- "Security"). When authentication is introduced later:
---   1. Add a `user_id uuid references auth.users(id)` column to every table
---      above (nullable at first, backfilled, then made NOT NULL).
---   2. Enable RLS on every table and add policies scoping each row to
---      auth.uid() = user_id.
---   3. Update every repository in src/lib/database/repositories to filter
---      by the current user — this is the ONLY layer that needs to change;
---      services, calculations, and UI are untouched by this migration.
+-- ROW LEVEL SECURITY
+-- Every table above has a `user_id uuid default auth.uid()` column. Below,
+-- each table gets RLS enabled and ONE policy: a row is only visible,
+-- insertable, updatable, or deletable by the user it belongs to. Postgres
+-- enforces this at the database level — the application code never
+-- manually filters by user; it just uses the signed-in user's own session
+-- (see lib/database/client.ts), and RLS does the rest. This is real
+-- security, not UI-level hiding: even a bug in application code cannot
+-- leak one user's data to another.
 -- =========================================================================
+
+create index assets_user_id_idx on assets (user_id);
+create index transactions_user_id_idx on transactions (user_id);
+create index portfolio_snapshots_user_id_idx on portfolio_snapshots (user_id);
+create index goals_user_id_idx on goals (user_id);
+create index fixed_deposits_user_id_idx on fixed_deposits (user_id);
+create index nps_accounts_user_id_idx on nps_accounts (user_id);
+create index nps_contributions_user_id_idx on nps_contributions (user_id);
+create index bank_accounts_user_id_idx on bank_accounts (user_id);
+create index ppf_accounts_user_id_idx on ppf_accounts (user_id);
+create index price_history_user_id_idx on price_history (user_id);
+create index watchlist_items_user_id_idx on watchlist_items (user_id);
+
+alter table assets enable row level security;
+alter table transactions enable row level security;
+alter table portfolio_snapshots enable row level security;
+alter table goals enable row level security;
+alter table fixed_deposits enable row level security;
+alter table nps_accounts enable row level security;
+alter table nps_contributions enable row level security;
+alter table bank_accounts enable row level security;
+alter table ppf_accounts enable row level security;
+alter table price_history enable row level security;
+alter table watchlist_items enable row level security;
+
+create policy "owner_only" on assets for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on transactions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on portfolio_snapshots for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on goals for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on fixed_deposits for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on nps_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on nps_contributions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on bank_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on ppf_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on price_history for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on watchlist_items for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

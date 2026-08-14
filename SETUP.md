@@ -17,17 +17,25 @@ restart — connect a real Supabase project (below) for anything to stick.
 
 1. Create a project at [supabase.com](https://supabase.com).
 2. In the SQL editor, run [`supabase/schema.sql`](./supabase/schema.sql) to
-   create all tables, indexes, and constraints.
-3. (Optional) Run [`supabase/seed.sql`](./supabase/seed.sql) to load the
-   same fictional demo dataset into your real database — useful for seeing
-   the app populated before entering your own numbers.
-4. In your Supabase project settings (Project Settings → API), copy:
+   create all tables, indexes, constraints, and Row Level Security policies.
+3. In Supabase Dashboard → Authentication → Providers, confirm **Email** is
+   enabled (it is by default). For local development, you can turn off
+   "Confirm email" under Authentication → Settings so sign-up doesn't
+   require clicking an email link — turn it back on before sharing the app
+   with anyone else.
+4. (Optional) [`supabase/seed.sql`](./supabase/seed.sql) needs a small manual
+   tweak now that Row Level Security is on — see the comment at the top of
+   that file. Easiest path: skip it and add a few things through the app
+   itself once you're signed in.
+5. In your Supabase project settings (Project Settings → API), copy:
    - **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`
    - **anon public key** → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - **service_role key** → `SUPABASE_SERVICE_ROLE_KEY` (server-only —
-     never prefix with `NEXT_PUBLIC_`, never expose to the browser)
-5. Copy `.env.example` to `.env.local` and fill in the three values.
-6. Restart `npm run dev`. The app now reads/writes your real database.
+6. Copy `.env.example` to `.env.local` and fill in both values.
+7. Restart `npm run dev`. **Signing in is now required** — go to
+   `/login`, create an account (first tab, "New here? Create an account"),
+   and you're in. Every table is scoped to your account via Row Level
+   Security (see ARCHITECTURE.md) — there's no separate admin/service key
+   to manage.
 
 ## 3. Environment variables
 
@@ -37,7 +45,8 @@ See [`.env.example`](./.env.example) for the full list with comments.
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | client + server | any real (non-demo) usage |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | client + server | any real (non-demo) usage |
-| `SUPABASE_SERVICE_ROLE_KEY` | server only | bypassing RLS in V1 (there is none yet, but this is the key Server Actions use) |
+
+Both env vars set → sign-in required. Neither set → demo mode, no login.
 
 ## 4. Deploying to Vercel
 

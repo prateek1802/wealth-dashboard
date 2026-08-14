@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoNPSAccounts, demoNPSContributions, nextId } from "@/lib/database/demo-data";
 import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution } from "@/types/domain/nps";
 import type { NPSAccountRow, NPSContributionRow } from "@/types/database";
@@ -36,7 +37,7 @@ export const npsRepository = {
   /** V1 supports multiple accounts — typically one per Tier (Tier I / Tier II). */
   async findAll(): Promise<NPSAccount[]> {
     if (isDemoMode()) return [...demoNPSAccounts];
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("nps_accounts").select("*").order("tier");
     if (error) throw error;
     return (data as NPSAccountRow[]).map(rowToAccount);
@@ -53,7 +54,7 @@ export const npsRepository = {
       demoNPSAccounts.push(account);
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("nps_accounts")
       .insert({
@@ -79,7 +80,7 @@ export const npsRepository = {
       Object.assign(account, update, { updatedAt: new Date().toISOString() });
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const row: Record<string, unknown> = {};
     if (update.tier !== undefined) row.tier = update.tier;
     if (update.pensionFundManager !== undefined) row.pension_fund_manager = update.pensionFundManager;
@@ -100,7 +101,7 @@ export const npsRepository = {
       if (idx >= 0) demoNPSAccounts.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("nps_accounts").delete().eq("id", id);
     if (error) throw error;
   },
@@ -115,7 +116,7 @@ export const npsRepository = {
       account.updatedAt = new Date().toISOString();
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const current = await db.from("nps_accounts").select("current_corpus").eq("id", id).single();
     if (current.error) throw current.error;
     if (amount > current.data.current_corpus) throw new Error("Cannot withdraw more than the current corpus");
@@ -135,7 +136,7 @@ export const npsRepository = {
         .filter((c) => c.npsAccountId === npsAccountId)
         .sort((a, b) => b.contributionDate.localeCompare(a.contributionDate));
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("nps_contributions")
       .select("*")
@@ -153,7 +154,7 @@ export const npsRepository = {
       if (account) account.currentCorpus += input.employeeAmount + input.employerAmount;
       return contribution;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("nps_contributions")
       .insert({

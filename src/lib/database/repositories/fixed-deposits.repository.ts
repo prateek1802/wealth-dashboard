@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoFixedDeposits, nextId } from "@/lib/database/demo-data";
 import type { FixedDeposit, NewFixedDeposit } from "@/types/domain/fixed-deposit";
 import type { FixedDepositRow } from "@/types/database";
@@ -27,7 +28,7 @@ function rowToFD(row: FixedDepositRow): FixedDeposit {
 export const fixedDepositsRepository = {
   async findAll(): Promise<FixedDeposit[]> {
     if (isDemoMode()) return [...demoFixedDeposits].sort((a, b) => a.maturityDate.localeCompare(b.maturityDate));
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("fixed_deposits").select("*").order("maturity_date");
     if (error) throw error;
     return (data as FixedDepositRow[]).map(rowToFD);
@@ -47,7 +48,7 @@ export const fixedDepositsRepository = {
       demoFixedDeposits.push(fd);
       return fd;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("fixed_deposits")
       .insert({
@@ -78,7 +79,7 @@ export const fixedDepositsRepository = {
       fd.updatedAt = new Date().toISOString();
       return fd;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("fixed_deposits")
       .update({ status: "withdrawn", withdrawal_date: withdrawalDate, withdrawal_amount: withdrawalAmount })
@@ -95,7 +96,7 @@ export const fixedDepositsRepository = {
       if (idx >= 0) demoFixedDeposits.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("fixed_deposits").delete().eq("id", id);
     if (error) throw error;
   },

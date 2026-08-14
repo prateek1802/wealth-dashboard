@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoPPFAccounts, nextId } from "@/lib/database/demo-data";
 import type { PPFAccount, NewPPFAccount } from "@/types/domain/ppf";
 import type { PPFAccountRow } from "@/types/database";
@@ -22,7 +23,7 @@ function rowToPPF(row: PPFAccountRow): PPFAccount {
 export const ppfRepository = {
   async findAll(): Promise<PPFAccount[]> {
     if (isDemoMode()) return [...demoPPFAccounts];
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("ppf_accounts").select("*").order("open_date");
     if (error) throw error;
     return (data as PPFAccountRow[]).map(rowToPPF);
@@ -34,7 +35,7 @@ export const ppfRepository = {
       demoPPFAccounts.push(account);
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("ppf_accounts")
       .insert({
@@ -61,7 +62,7 @@ export const ppfRepository = {
       account.updatedAt = new Date().toISOString();
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("ppf_accounts")
       .update({ current_balance: currentBalance, total_contributed: totalContributed })
@@ -83,7 +84,7 @@ export const ppfRepository = {
       account.updatedAt = new Date().toISOString();
       return account;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const current = await db.from("ppf_accounts").select("current_balance, total_withdrawn").eq("id", id).single();
     if (current.error) throw current.error;
     if (amount > current.data.current_balance) throw new Error("Cannot withdraw more than the current balance");
@@ -106,7 +107,7 @@ export const ppfRepository = {
       if (idx >= 0) demoPPFAccounts.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("ppf_accounts").delete().eq("id", id);
     if (error) throw error;
   },

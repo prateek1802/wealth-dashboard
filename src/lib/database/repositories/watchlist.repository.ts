@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoWatchlist, nextId } from "@/lib/database/demo-data";
 import { assetsRepository } from "./assets.repository";
 import type { WatchlistItem, NewWatchlistItem } from "@/types/domain/watchlist";
@@ -7,7 +8,7 @@ import type { WatchlistItemRow } from "@/types/database";
 export const watchlistRepository = {
   async findAll(): Promise<WatchlistItem[]> {
     if (isDemoMode()) return [...demoWatchlist];
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("watchlist_items").select("*, assets(*)").order("created_at", { ascending: false });
     if (error) throw error;
     return (data as (WatchlistItemRow & { assets: unknown })[]).map((row) => ({
@@ -41,7 +42,7 @@ export const watchlistRepository = {
       demoWatchlist.push(item);
       return item;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("watchlist_items")
       .insert({ asset_id: input.assetId, target_price: input.targetPrice, stop_loss: input.stopLoss, note: input.note })
@@ -58,7 +59,7 @@ export const watchlistRepository = {
       if (idx >= 0) demoWatchlist.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("watchlist_items").delete().eq("id", id);
     if (error) throw error;
   },

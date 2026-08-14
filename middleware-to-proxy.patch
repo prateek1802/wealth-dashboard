@@ -1,0 +1,16 @@
+diff --git a/src/middleware.ts b/src/proxy.ts
+similarity index 97%
+rename from src/middleware.ts
+rename to src/proxy.ts
+index 0c6608a..13a0da0 100644
+--- a/src/middleware.ts
++++ b/src/proxy.ts
+@@ -9,7 +9,7 @@ import { NextResponse, type NextRequest } from "next/server";
+  * every route except the landing page and /login requires a signed-in
+  * session, redirecting to /login otherwise.
+  */
+-export async function middleware(request: NextRequest) {
++export async function proxy(request: NextRequest) {
+   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+   const isDemoMode = !supabaseUrl || !supabaseAnonKey;

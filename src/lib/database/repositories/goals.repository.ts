@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoGoals, nextId } from "@/lib/database/demo-data";
 import type { Goal, NewGoal } from "@/types/domain/goal";
 import type { GoalRow } from "@/types/database";
@@ -20,7 +21,7 @@ function rowToGoal(row: GoalRow): Goal {
 export const goalsRepository = {
   async findAll(): Promise<Goal[]> {
     if (isDemoMode()) return [...demoGoals];
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("goals").select("*").order("target_date", { ascending: true, nullsFirst: false });
     if (error) throw error;
     return (data as GoalRow[]).map(rowToGoal);
@@ -32,7 +33,7 @@ export const goalsRepository = {
       demoGoals.push(goal);
       return goal;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("goals")
       .insert({
@@ -56,7 +57,7 @@ export const goalsRepository = {
       Object.assign(goal, update, { updatedAt: new Date().toISOString() });
       return goal;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const row: Record<string, unknown> = {};
     if (update.name !== undefined) row.name = update.name;
     if (update.targetAmount !== undefined) row.target_amount = update.targetAmount;
@@ -75,7 +76,7 @@ export const goalsRepository = {
       if (idx >= 0) demoGoals.splice(idx, 1);
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("goals").delete().eq("id", id);
     if (error) throw error;
   },

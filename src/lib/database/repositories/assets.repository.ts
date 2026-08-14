@@ -1,4 +1,5 @@
-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
+import { isDemoMode } from "@/lib/database/client";
+import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoAssets, nextId } from "@/lib/database/demo-data";
 import type { Asset, NewAsset, AssetUpdate } from "@/types/domain/asset";
 import type { AssetRow } from "@/types/database";
@@ -44,7 +45,7 @@ function assetToRow(a: NewAsset) {
 export const assetsRepository = {
   async findAll(): Promise<Asset[]> {
     if (isDemoMode()) return [...demoAssets].filter((a) => a.isActive);
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("assets").select("*").eq("is_active", true).order("name");
     if (error) throw error;
     return (data as AssetRow[]).map(rowToAsset);
@@ -52,7 +53,7 @@ export const assetsRepository = {
 
   async findById(id: string): Promise<Asset | null> {
     if (isDemoMode()) return demoAssets.find((a) => a.id === id) ?? null;
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("assets").select("*").eq("id", id).maybeSingle();
     if (error) throw error;
     return data ? rowToAsset(data as AssetRow) : null;
@@ -62,7 +63,7 @@ export const assetsRepository = {
     if (isDemoMode()) {
       return demoAssets.find((a) => a.symbol === symbol && a.assetType === assetType) ?? null;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db
       .from("assets")
       .select("*")
@@ -83,7 +84,7 @@ export const assetsRepository = {
       demoAssets.push(asset);
       return asset;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { data, error } = await db.from("assets").insert(assetToRow(input)).select().single();
     if (error) throw error;
     return rowToAsset(data as AssetRow);
@@ -96,7 +97,7 @@ export const assetsRepository = {
       Object.assign(asset, update, { updatedAt: new Date().toISOString() });
       return asset;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const row: Record<string, unknown> = {};
     if (update.name !== undefined) row.name = update.name;
     if (update.currentPrice !== undefined) {
@@ -125,7 +126,7 @@ export const assetsRepository = {
       if (asset) asset.isActive = false;
       return;
     }
-    const db = getServerSupabaseClient();
+    const db = await getServerSupabaseClient();
     const { error } = await db.from("assets").update({ is_active: false }).eq("id", id);
     if (error) throw error;
   },

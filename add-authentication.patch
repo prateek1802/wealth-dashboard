@@ -1,0 +1,1155 @@
+diff --git a/SETUP.md b/SETUP.md
+index ba0b6eb..e2ecf8f 100644
+--- a/SETUP.md
++++ b/SETUP.md
+@@ -17,17 +17,25 @@ restart — connect a real Supabase project (below) for anything to stick.
+ 
+ 1. Create a project at [supabase.com](https://supabase.com).
+ 2. In the SQL editor, run [`supabase/schema.sql`](./supabase/schema.sql) to
+-   create all tables, indexes, and constraints.
+-3. (Optional) Run [`supabase/seed.sql`](./supabase/seed.sql) to load the
+-   same fictional demo dataset into your real database — useful for seeing
+-   the app populated before entering your own numbers.
+-4. In your Supabase project settings (Project Settings → API), copy:
++   create all tables, indexes, constraints, and Row Level Security policies.
++3. In Supabase Dashboard → Authentication → Providers, confirm **Email** is
++   enabled (it is by default). For local development, you can turn off
++   "Confirm email" under Authentication → Settings so sign-up doesn't
++   require clicking an email link — turn it back on before sharing the app
++   with anyone else.
++4. (Optional) [`supabase/seed.sql`](./supabase/seed.sql) needs a small manual
++   tweak now that Row Level Security is on — see the comment at the top of
++   that file. Easiest path: skip it and add a few things through the app
++   itself once you're signed in.
++5. In your Supabase project settings (Project Settings → API), copy:
+    - **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`
+    - **anon public key** → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+-   - **service_role key** → `SUPABASE_SERVICE_ROLE_KEY` (server-only —
+-     never prefix with `NEXT_PUBLIC_`, never expose to the browser)
+-5. Copy `.env.example` to `.env.local` and fill in the three values.
+-6. Restart `npm run dev`. The app now reads/writes your real database.
++6. Copy `.env.example` to `.env.local` and fill in both values.
++7. Restart `npm run dev`. **Signing in is now required** — go to
++   `/login`, create an account (first tab, "New here? Create an account"),
++   and you're in. Every table is scoped to your account via Row Level
++   Security (see ARCHITECTURE.md) — there's no separate admin/service key
++   to manage.
+ 
+ ## 3. Environment variables
+ 
+@@ -37,7 +45,8 @@ See [`.env.example`](./.env.example) for the full list with comments.
+ |---|---|---|
+ | `NEXT_PUBLIC_SUPABASE_URL` | client + server | any real (non-demo) usage |
+ | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | client + server | any real (non-demo) usage |
+-| `SUPABASE_SERVICE_ROLE_KEY` | server only | bypassing RLS in V1 (there is none yet, but this is the key Server Actions use) |
++
++Both env vars set → sign-in required. Neither set → demo mode, no login.
+ 
+ ## 4. Deploying to Vercel
+ 
+diff --git a/package-lock.json b/package-lock.json
+index e573a9c..74a8e93 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -15,6 +15,7 @@
+         "@radix-ui/react-slot": "^1.3.3",
+         "@radix-ui/react-tabs": "^1.1.21",
+         "@radix-ui/react-tooltip": "^1.2.16",
++        "@supabase/ssr": "^0.12.4",
+         "@supabase/supabase-js": "^2.112.2",
+         "class-variance-authority": "^0.7.1",
+         "clsx": "^2.1.1",
+@@ -27,6 +28,7 @@
+         "react": "19.2.8",
+         "react-dom": "19.2.8",
+         "recharts": "^3.10.1",
++        "server-only": "^0.0.1",
+         "sonner": "^2.0.8",
+         "tailwind-merge": "^3.6.0",
+         "zod": "^4.4.3"
+@@ -2478,6 +2480,18 @@
+         "node": ">=22.0.0"
+       }
+     },
++    "node_modules/@supabase/ssr": {
++      "version": "0.12.4",
++      "resolved": "https://registry.npmjs.org/@supabase/ssr/-/ssr-0.12.4.tgz",
++      "integrity": "sha512-xHzcgI8cC1TpBKSwJcR5Yd8CCwfIq0SBc5yb4yz/YFw5tbCrEQ0QT3a+2jymCxHgQWLfzwN93HZ6eRbcoMkOlA==",
++      "license": "MIT",
++      "dependencies": {
++        "cookie": "^1.0.2"
++      },
++      "peerDependencies": {
++        "@supabase/supabase-js": "^2.111.0"
++      }
++    },
+     "node_modules/@supabase/storage-js": {
+       "version": "2.112.2",
+       "resolved": "https://registry.npmjs.org/@supabase/storage-js/-/storage-js-2.112.2.tgz",
+@@ -4281,6 +4295,19 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/cookie": {
++      "version": "1.1.1",
++      "resolved": "https://registry.npmjs.org/cookie/-/cookie-1.1.1.tgz",
++      "integrity": "sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=18"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/express"
++      }
++    },
+     "node_modules/cross-spawn": {
+       "version": "7.0.6",
+       "resolved": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz",
+@@ -7822,6 +7849,12 @@
+         "semver": "bin/semver.js"
+       }
+     },
++    "node_modules/server-only": {
++      "version": "0.0.1",
++      "resolved": "https://registry.npmjs.org/server-only/-/server-only-0.0.1.tgz",
++      "integrity": "sha512-qepMx2JxAa5jjfzxG79yPPq+8BuFToHd1hm7kI+Z4zAq1ftQiP7HcxMhDDItrbtwVeLg/cY2JnKnrcFkmiswNA==",
++      "license": "MIT"
++    },
+     "node_modules/set-function-length": {
+       "version": "1.2.2",
+       "resolved": "https://registry.npmjs.org/set-function-length/-/set-function-length-1.2.2.tgz",
+diff --git a/package.json b/package.json
+index 632d9cf..d365fa7 100644
+--- a/package.json
++++ b/package.json
+@@ -17,6 +17,7 @@
+     "@radix-ui/react-slot": "^1.3.3",
+     "@radix-ui/react-tabs": "^1.1.21",
+     "@radix-ui/react-tooltip": "^1.2.16",
++    "@supabase/ssr": "^0.12.4",
+     "@supabase/supabase-js": "^2.112.2",
+     "class-variance-authority": "^0.7.1",
+     "clsx": "^2.1.1",
+@@ -29,6 +30,7 @@
+     "react": "19.2.8",
+     "react-dom": "19.2.8",
+     "recharts": "^3.10.1",
++    "server-only": "^0.0.1",
+     "sonner": "^2.0.8",
+     "tailwind-merge": "^3.6.0",
+     "zod": "^4.4.3"
+diff --git a/src/app/login/page.tsx b/src/app/login/page.tsx
+new file mode 100644
+index 0000000..e03b212
+--- /dev/null
++++ b/src/app/login/page.tsx
+@@ -0,0 +1,13 @@
++import { Suspense } from "react";
++import { AuthForm } from "@/features/auth/components/auth-form";
++import { Loader2 } from "lucide-react";
++
++export default function LoginPage() {
++  return (
++    <div className="flex min-h-screen items-center justify-center bg-surface p-6">
++      <Suspense fallback={<Loader2 className="size-6 animate-spin text-accent" />}>
++        <AuthForm />
++      </Suspense>
++    </div>
++  );
++}
+diff --git a/src/components/layout/sidebar.tsx b/src/components/layout/sidebar.tsx
+index 3a96638..9a39ab6 100644
+--- a/src/components/layout/sidebar.tsx
++++ b/src/components/layout/sidebar.tsx
+@@ -4,6 +4,8 @@ import { usePathname } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+ import { useTheme } from "./theme-provider";
++import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
++import { useRouter } from "next/navigation";
+ import {
+   LayoutDashboard,
+   Wallet,
+@@ -19,6 +21,7 @@ import {
+   Sun,
+   Moon,
+   Gem,
++  LogOut,
+ } from "lucide-react";
+ 
+ const NAV_ITEMS = [
+@@ -37,8 +40,16 @@ const NAV_ITEMS = [
+ 
+ export function Sidebar() {
+   const pathname = usePathname();
++  const router = useRouter();
+   const { theme, toggleTheme } = useTheme();
+ 
++  async function handleSignOut() {
++    const supabase = getBrowserSupabaseClient();
++    await supabase.auth.signOut();
++    router.push("/login");
++    router.refresh();
++  }
++
+   return (
+     <aside className="hidden w-60 shrink-0 flex-col border-r border-border-subtle bg-surface-raised p-4 lg:flex">
+       <Link href={ROUTES.dashboard} className="mb-6 flex items-center gap-2 px-2">
+@@ -73,6 +84,16 @@ export function Sidebar() {
+         {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
+         {theme === "light" ? "Dark mode" : "Light mode"}
+       </button>
++
++      {!isDemoMode() && (
++        <button
++          onClick={handleSignOut}
++          className="mt-1 flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium text-ink-muted hover:bg-surface-sunken hover:text-loss"
++        >
++          <LogOut className="size-4" />
++          Sign out
++        </button>
++      )}
+     </aside>
+   );
+ }
+diff --git a/src/features/auth/components/auth-form.tsx b/src/features/auth/components/auth-form.tsx
+new file mode 100644
+index 0000000..8bcf61e
+--- /dev/null
++++ b/src/features/auth/components/auth-form.tsx
+@@ -0,0 +1,100 @@
++"use client";
++import { useState } from "react";
++import { useRouter, useSearchParams } from "next/navigation";
++import { toast } from "sonner";
++import { Button } from "@/components/ui/button";
++import { Input } from "@/components/ui/input";
++import { Label } from "@/components/ui/label";
++import { getBrowserSupabaseClient } from "@/lib/database/client";
++import { Gem } from "lucide-react";
++
++/**
++ * Email + password auth via Supabase, run entirely client-side — signInWithPassword
++ * and signUp both set the session cookie in the browser directly, which
++ * middleware.ts then reads on the next navigation. No Server Action needed
++ * for this; it's the standard Supabase Auth pattern.
++ */
++export function AuthForm() {
++  const router = useRouter();
++  const searchParams = useSearchParams();
++  const redirectTo = searchParams.get("redirectTo") || "/dashboard";
++
++  const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
++  const [email, setEmail] = useState("");
++  const [password, setPassword] = useState("");
++  const [isPending, setIsPending] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const [signUpDone, setSignUpDone] = useState(false);
++
++  async function handleSubmit(e: React.FormEvent) {
++    e.preventDefault();
++    setError(null);
++    setIsPending(true);
++    const supabase = getBrowserSupabaseClient();
++
++    if (mode === "signIn") {
++      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
++      setIsPending(false);
++      if (signInError) {
++        setError(signInError.message);
++        return;
++      }
++      toast.success("Signed in");
++      router.push(redirectTo);
++      router.refresh();
++    } else {
++      const { error: signUpError } = await supabase.auth.signUp({ email, password });
++      setIsPending(false);
++      if (signUpError) {
++        setError(signUpError.message);
++        return;
++      }
++      setSignUpDone(true);
++    }
++  }
++
++  if (signUpDone) {
++    return (
++      <div className="flex flex-col items-center gap-3 text-center">
++        <p className="font-medium text-ink">Check your email</p>
++        <p className="max-w-sm text-sm text-ink-muted">
++          We sent a confirmation link to <span className="font-medium text-ink">{email}</span>. Click it, then come
++          back and sign in.
++        </p>
++        <Button variant="outline" onClick={() => { setMode("signIn"); setSignUpDone(false); }}>Back to sign in</Button>
++      </div>
++    );
++  }
++
++  return (
++    <div className="flex w-full max-w-sm flex-col gap-6">
++      <div className="flex flex-col items-center gap-2">
++        <Gem className="size-6 text-accent" />
++        <h1 className="font-display text-xl font-medium text-ink">{mode === "signIn" ? "Sign in" : "Create an account"}</h1>
++        <p className="text-sm text-ink-muted">Your wealth dashboard, protected by your own login.</p>
++      </div>
++
++      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
++        <div className="flex flex-col gap-1.5">
++          <Label htmlFor="email">Email</Label>
++          <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
++        </div>
++        <div className="flex flex-col gap-1.5">
++          <Label htmlFor="password">Password</Label>
++          <Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters" />
++        </div>
++        {error && <p className="text-sm text-loss">{error}</p>}
++        <Button type="submit" disabled={isPending}>
++          {isPending ? "Please wait…" : mode === "signIn" ? "Sign in" : "Sign up"}
++        </Button>
++      </form>
++
++      <button
++        onClick={() => { setMode(mode === "signIn" ? "signUp" : "signIn"); setError(null); }}
++        className="text-center text-sm text-ink-muted hover:text-ink"
++      >
++        {mode === "signIn" ? "New here? Create an account" : "Already have an account? Sign in"}
++      </button>
++    </div>
++  );
++}
+diff --git a/src/lib/database/client.ts b/src/lib/database/client.ts
+index 0cb4ca6..5a1356d 100644
+--- a/src/lib/database/client.ts
++++ b/src/lib/database/client.ts
+@@ -1,48 +1,30 @@
+-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
++import { createBrowserClient } from "@supabase/ssr";
++import type { SupabaseClient } from "@supabase/supabase-js";
+ 
+ /**
+- * Single Supabase client factory. Repositories are the ONLY layer that
+- * imports this file — no UI or service code talks to Supabase directly.
++ * Browser-safe exports only — no `next/headers` import here, so this file
++ * can be imported from both Client and Server Components. The server-only
++ * counterpart (which reads/writes the auth cookie via `next/headers`) is
++ * getServerSupabaseClient in server-client.ts, imported only by
++ * repositories (server-only files).
+  *
+- * DEMO MODE: when no Supabase project is configured (no env vars set),
+- * repositories fall back to an in-memory seed dataset (see demo-data.ts)
+- * so the app is fully explorable before you connect a real database.
+- * This is a development convenience only — see SETUP.md to connect a
+- * real Supabase project, which is required for anything to persist.
++ * DEMO MODE: when no Supabase project is configured, repositories fall
++ * back to an in-memory seed dataset (see demo-data.ts) — no login
++ * required. This is a development convenience only.
++ *
++ * AUTH: once a real Supabase project is connected, every request is
++ * scoped to the signed-in user's own session, not a service-role key that
++ * bypasses security. Row Level Security policies in supabase/schema.sql
++ * do the actual enforcement — see server-client.ts and middleware.ts.
+  */
+ export function isDemoMode(): boolean {
+   return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+ }
+ 
+-let browserClient: SupabaseClient | null = null;
+-
+-/** Client for use in Client Components (anon key only, respects future RLS). */
++/** Client for use in Client Components — reads/writes the auth session cookie in the browser. */
+ export function getBrowserSupabaseClient(): SupabaseClient {
+   if (isDemoMode()) {
+     throw new Error("Supabase is not configured — this should not be called in demo mode.");
+   }
+-  if (!browserClient) {
+-    browserClient = createClient(
+-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+-    );
+-  }
+-  return browserClient;
+-}
+-
+-/**
+- * Client for use in Server Components / Server Actions. Uses the
+- * service-role key when present (server-only env var, never exposed to
+- * the browser) so V1's single-user app isn't blocked by RLS that doesn't
+- * exist yet; falls back to the anon key otherwise. See ARCHITECTURE.md
+- * "Security" for what changes here once auth is introduced.
+- */
+-export function getServerSupabaseClient(): SupabaseClient {
+-  if (isDemoMode()) {
+-    throw new Error("Supabase is not configured — this should not be called in demo mode.");
+-  }
+-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, key, {
+-    auth: { persistSession: false },
+-  });
++  return createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+ }
+diff --git a/src/lib/database/repositories/assets.repository.ts b/src/lib/database/repositories/assets.repository.ts
+index 958eedf..d5356c7 100644
+--- a/src/lib/database/repositories/assets.repository.ts
++++ b/src/lib/database/repositories/assets.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoAssets, nextId } from "@/lib/database/demo-data";
+ import type { Asset, NewAsset, AssetUpdate } from "@/types/domain/asset";
+ import type { AssetRow } from "@/types/database";
+@@ -44,7 +45,7 @@ function assetToRow(a: NewAsset) {
+ export const assetsRepository = {
+   async findAll(): Promise<Asset[]> {
+     if (isDemoMode()) return [...demoAssets].filter((a) => a.isActive);
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("assets").select("*").eq("is_active", true).order("name");
+     if (error) throw error;
+     return (data as AssetRow[]).map(rowToAsset);
+@@ -52,7 +53,7 @@ export const assetsRepository = {
+ 
+   async findById(id: string): Promise<Asset | null> {
+     if (isDemoMode()) return demoAssets.find((a) => a.id === id) ?? null;
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("assets").select("*").eq("id", id).maybeSingle();
+     if (error) throw error;
+     return data ? rowToAsset(data as AssetRow) : null;
+@@ -62,7 +63,7 @@ export const assetsRepository = {
+     if (isDemoMode()) {
+       return demoAssets.find((a) => a.symbol === symbol && a.assetType === assetType) ?? null;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("assets")
+       .select("*")
+@@ -83,7 +84,7 @@ export const assetsRepository = {
+       demoAssets.push(asset);
+       return asset;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("assets").insert(assetToRow(input)).select().single();
+     if (error) throw error;
+     return rowToAsset(data as AssetRow);
+@@ -96,7 +97,7 @@ export const assetsRepository = {
+       Object.assign(asset, update, { updatedAt: new Date().toISOString() });
+       return asset;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const row: Record<string, unknown> = {};
+     if (update.name !== undefined) row.name = update.name;
+     if (update.currentPrice !== undefined) {
+@@ -125,7 +126,7 @@ export const assetsRepository = {
+       if (asset) asset.isActive = false;
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("assets").update({ is_active: false }).eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/repositories/bank-accounts.repository.ts b/src/lib/database/repositories/bank-accounts.repository.ts
+index cc44625..5486486 100644
+--- a/src/lib/database/repositories/bank-accounts.repository.ts
++++ b/src/lib/database/repositories/bank-accounts.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoBankAccounts, nextId } from "@/lib/database/demo-data";
+ import type { BankAccount, NewBankAccount } from "@/types/domain/bank-account";
+ import type { BankAccountRow } from "@/types/database";
+@@ -19,7 +20,7 @@ function rowToBankAccount(row: BankAccountRow): BankAccount {
+ export const bankAccountsRepository = {
+   async findAll(): Promise<BankAccount[]> {
+     if (isDemoMode()) return [...demoBankAccounts];
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("bank_accounts").select("*").order("bank_name");
+     if (error) throw error;
+     return (data as BankAccountRow[]).map(rowToBankAccount);
+@@ -31,7 +32,7 @@ export const bankAccountsRepository = {
+       demoBankAccounts.push(account);
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("bank_accounts")
+       .insert({ bank_name: input.bankName, account_type: input.accountType, current_balance: input.currentBalance, notes: input.notes })
+@@ -49,7 +50,7 @@ export const bankAccountsRepository = {
+       account.updatedAt = new Date().toISOString();
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("bank_accounts").update({ current_balance: currentBalance }).eq("id", id).select().single();
+     if (error) throw error;
+     return rowToBankAccount(data as BankAccountRow);
+@@ -61,7 +62,7 @@ export const bankAccountsRepository = {
+       if (idx >= 0) demoBankAccounts.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("bank_accounts").delete().eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/repositories/fixed-deposits.repository.ts b/src/lib/database/repositories/fixed-deposits.repository.ts
+index 00a99fe..513d9a5 100644
+--- a/src/lib/database/repositories/fixed-deposits.repository.ts
++++ b/src/lib/database/repositories/fixed-deposits.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoFixedDeposits, nextId } from "@/lib/database/demo-data";
+ import type { FixedDeposit, NewFixedDeposit } from "@/types/domain/fixed-deposit";
+ import type { FixedDepositRow } from "@/types/database";
+@@ -27,7 +28,7 @@ function rowToFD(row: FixedDepositRow): FixedDeposit {
+ export const fixedDepositsRepository = {
+   async findAll(): Promise<FixedDeposit[]> {
+     if (isDemoMode()) return [...demoFixedDeposits].sort((a, b) => a.maturityDate.localeCompare(b.maturityDate));
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("fixed_deposits").select("*").order("maturity_date");
+     if (error) throw error;
+     return (data as FixedDepositRow[]).map(rowToFD);
+@@ -47,7 +48,7 @@ export const fixedDepositsRepository = {
+       demoFixedDeposits.push(fd);
+       return fd;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("fixed_deposits")
+       .insert({
+@@ -78,7 +79,7 @@ export const fixedDepositsRepository = {
+       fd.updatedAt = new Date().toISOString();
+       return fd;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("fixed_deposits")
+       .update({ status: "withdrawn", withdrawal_date: withdrawalDate, withdrawal_amount: withdrawalAmount })
+@@ -95,7 +96,7 @@ export const fixedDepositsRepository = {
+       if (idx >= 0) demoFixedDeposits.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("fixed_deposits").delete().eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/repositories/goals.repository.ts b/src/lib/database/repositories/goals.repository.ts
+index db00a9e..ecebcbe 100644
+--- a/src/lib/database/repositories/goals.repository.ts
++++ b/src/lib/database/repositories/goals.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoGoals, nextId } from "@/lib/database/demo-data";
+ import type { Goal, NewGoal } from "@/types/domain/goal";
+ import type { GoalRow } from "@/types/database";
+@@ -20,7 +21,7 @@ function rowToGoal(row: GoalRow): Goal {
+ export const goalsRepository = {
+   async findAll(): Promise<Goal[]> {
+     if (isDemoMode()) return [...demoGoals];
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("goals").select("*").order("target_date", { ascending: true, nullsFirst: false });
+     if (error) throw error;
+     return (data as GoalRow[]).map(rowToGoal);
+@@ -32,7 +33,7 @@ export const goalsRepository = {
+       demoGoals.push(goal);
+       return goal;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("goals")
+       .insert({
+@@ -56,7 +57,7 @@ export const goalsRepository = {
+       Object.assign(goal, update, { updatedAt: new Date().toISOString() });
+       return goal;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const row: Record<string, unknown> = {};
+     if (update.name !== undefined) row.name = update.name;
+     if (update.targetAmount !== undefined) row.target_amount = update.targetAmount;
+@@ -75,7 +76,7 @@ export const goalsRepository = {
+       if (idx >= 0) demoGoals.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("goals").delete().eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/repositories/nps.repository.ts b/src/lib/database/repositories/nps.repository.ts
+index e1b7fdd..448d546 100644
+--- a/src/lib/database/repositories/nps.repository.ts
++++ b/src/lib/database/repositories/nps.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoNPSAccounts, demoNPSContributions, nextId } from "@/lib/database/demo-data";
+ import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution } from "@/types/domain/nps";
+ import type { NPSAccountRow, NPSContributionRow } from "@/types/database";
+@@ -36,7 +37,7 @@ export const npsRepository = {
+   /** V1 supports multiple accounts — typically one per Tier (Tier I / Tier II). */
+   async findAll(): Promise<NPSAccount[]> {
+     if (isDemoMode()) return [...demoNPSAccounts];
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("nps_accounts").select("*").order("tier");
+     if (error) throw error;
+     return (data as NPSAccountRow[]).map(rowToAccount);
+@@ -53,7 +54,7 @@ export const npsRepository = {
+       demoNPSAccounts.push(account);
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("nps_accounts")
+       .insert({
+@@ -79,7 +80,7 @@ export const npsRepository = {
+       Object.assign(account, update, { updatedAt: new Date().toISOString() });
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const row: Record<string, unknown> = {};
+     if (update.tier !== undefined) row.tier = update.tier;
+     if (update.pensionFundManager !== undefined) row.pension_fund_manager = update.pensionFundManager;
+@@ -100,7 +101,7 @@ export const npsRepository = {
+       if (idx >= 0) demoNPSAccounts.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("nps_accounts").delete().eq("id", id);
+     if (error) throw error;
+   },
+@@ -115,7 +116,7 @@ export const npsRepository = {
+       account.updatedAt = new Date().toISOString();
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const current = await db.from("nps_accounts").select("current_corpus").eq("id", id).single();
+     if (current.error) throw current.error;
+     if (amount > current.data.current_corpus) throw new Error("Cannot withdraw more than the current corpus");
+@@ -135,7 +136,7 @@ export const npsRepository = {
+         .filter((c) => c.npsAccountId === npsAccountId)
+         .sort((a, b) => b.contributionDate.localeCompare(a.contributionDate));
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("nps_contributions")
+       .select("*")
+@@ -153,7 +154,7 @@ export const npsRepository = {
+       if (account) account.currentCorpus += input.employeeAmount + input.employerAmount;
+       return contribution;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("nps_contributions")
+       .insert({
+diff --git a/src/lib/database/repositories/ppf.repository.ts b/src/lib/database/repositories/ppf.repository.ts
+index da16844..040c460 100644
+--- a/src/lib/database/repositories/ppf.repository.ts
++++ b/src/lib/database/repositories/ppf.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoPPFAccounts, nextId } from "@/lib/database/demo-data";
+ import type { PPFAccount, NewPPFAccount } from "@/types/domain/ppf";
+ import type { PPFAccountRow } from "@/types/database";
+@@ -22,7 +23,7 @@ function rowToPPF(row: PPFAccountRow): PPFAccount {
+ export const ppfRepository = {
+   async findAll(): Promise<PPFAccount[]> {
+     if (isDemoMode()) return [...demoPPFAccounts];
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("ppf_accounts").select("*").order("open_date");
+     if (error) throw error;
+     return (data as PPFAccountRow[]).map(rowToPPF);
+@@ -34,7 +35,7 @@ export const ppfRepository = {
+       demoPPFAccounts.push(account);
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("ppf_accounts")
+       .insert({
+@@ -61,7 +62,7 @@ export const ppfRepository = {
+       account.updatedAt = new Date().toISOString();
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("ppf_accounts")
+       .update({ current_balance: currentBalance, total_contributed: totalContributed })
+@@ -83,7 +84,7 @@ export const ppfRepository = {
+       account.updatedAt = new Date().toISOString();
+       return account;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const current = await db.from("ppf_accounts").select("current_balance, total_withdrawn").eq("id", id).single();
+     if (current.error) throw current.error;
+     if (amount > current.data.current_balance) throw new Error("Cannot withdraw more than the current balance");
+@@ -106,7 +107,7 @@ export const ppfRepository = {
+       if (idx >= 0) demoPPFAccounts.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("ppf_accounts").delete().eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/repositories/price-history.repository.ts b/src/lib/database/repositories/price-history.repository.ts
+index 18f4f7f..7a5dd67 100644
+--- a/src/lib/database/repositories/price-history.repository.ts
++++ b/src/lib/database/repositories/price-history.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoPriceHistory, nextId } from "@/lib/database/demo-data";
+ import { todayISO } from "@/lib/utils/date";
+ import type { PriceHistoryPoint } from "@/types/domain/price-history";
+@@ -13,7 +14,7 @@ export const priceHistoryRepository = {
+     if (isDemoMode()) {
+       return demoPriceHistory.filter((p) => p.assetId === assetId).sort((a, b) => a.recordedDate.localeCompare(b.recordedDate));
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("price_history").select("*").eq("asset_id", assetId).order("recorded_date");
+     if (error) throw error;
+     return (data as PriceHistoryRow[]).map(rowToPoint);
+@@ -32,7 +33,7 @@ export const priceHistoryRepository = {
+       demoPriceHistory.push(point);
+       return point;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("price_history")
+       .upsert({ asset_id: assetId, price, recorded_date: today }, { onConflict: "asset_id,recorded_date" })
+diff --git a/src/lib/database/repositories/snapshots.repository.ts b/src/lib/database/repositories/snapshots.repository.ts
+index c447102..a49a2a1 100644
+--- a/src/lib/database/repositories/snapshots.repository.ts
++++ b/src/lib/database/repositories/snapshots.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoSnapshots, nextId } from "@/lib/database/demo-data";
+ import type { PortfolioSnapshot } from "@/types/domain/snapshot";
+ import type { PortfolioSnapshotRow } from "@/types/database";
+@@ -25,7 +26,7 @@ function rowToSnapshot(row: PortfolioSnapshotRow): PortfolioSnapshot {
+ export const snapshotsRepository = {
+   async findAll(): Promise<PortfolioSnapshot[]> {
+     if (isDemoMode()) return [...demoSnapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("portfolio_snapshots").select("*").order("snapshot_date");
+     if (error) throw error;
+     return (data as PortfolioSnapshotRow[]).map(rowToSnapshot);
+@@ -40,7 +41,7 @@ export const snapshotsRepository = {
+       else demoSnapshots.push(record);
+       return record;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("portfolio_snapshots")
+       .upsert(
+diff --git a/src/lib/database/repositories/transactions.repository.ts b/src/lib/database/repositories/transactions.repository.ts
+index 9946cdf..9a96836 100644
+--- a/src/lib/database/repositories/transactions.repository.ts
++++ b/src/lib/database/repositories/transactions.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoTransactions, nextId } from "@/lib/database/demo-data";
+ import type { Transaction, NewTransaction } from "@/types/domain/transaction";
+ import type { TransactionRow } from "@/types/database";
+@@ -26,7 +27,7 @@ export const transactionsRepository = {
+     if (isDemoMode()) {
+       return [...demoTransactions].sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("transactions").select("*").order("transaction_date", { ascending: false });
+     if (error) throw error;
+     return (data as TransactionRow[]).map(rowToTransaction);
+@@ -38,7 +39,7 @@ export const transactionsRepository = {
+         .filter((t) => t.assetId === assetId)
+         .sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("transactions")
+       .select("*")
+@@ -59,7 +60,7 @@ export const transactionsRepository = {
+       demoTransactions.push(txn);
+       return txn;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("transactions")
+       .insert({
+@@ -85,7 +86,7 @@ export const transactionsRepository = {
+       if (idx >= 0) demoTransactions.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("transactions").delete().eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/repositories/watchlist.repository.ts b/src/lib/database/repositories/watchlist.repository.ts
+index 60c1522..f3adc6f 100644
+--- a/src/lib/database/repositories/watchlist.repository.ts
++++ b/src/lib/database/repositories/watchlist.repository.ts
+@@ -1,4 +1,5 @@
+-import { getServerSupabaseClient, isDemoMode } from "@/lib/database/client";
++import { isDemoMode } from "@/lib/database/client";
++import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoWatchlist, nextId } from "@/lib/database/demo-data";
+ import { assetsRepository } from "./assets.repository";
+ import type { WatchlistItem, NewWatchlistItem } from "@/types/domain/watchlist";
+@@ -7,7 +8,7 @@ import type { WatchlistItemRow } from "@/types/database";
+ export const watchlistRepository = {
+   async findAll(): Promise<WatchlistItem[]> {
+     if (isDemoMode()) return [...demoWatchlist];
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db.from("watchlist_items").select("*, assets(*)").order("created_at", { ascending: false });
+     if (error) throw error;
+     return (data as (WatchlistItemRow & { assets: unknown })[]).map((row) => ({
+@@ -41,7 +42,7 @@ export const watchlistRepository = {
+       demoWatchlist.push(item);
+       return item;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("watchlist_items")
+       .insert({ asset_id: input.assetId, target_price: input.targetPrice, stop_loss: input.stopLoss, note: input.note })
+@@ -58,7 +59,7 @@ export const watchlistRepository = {
+       if (idx >= 0) demoWatchlist.splice(idx, 1);
+       return;
+     }
+-    const db = getServerSupabaseClient();
++    const db = await getServerSupabaseClient();
+     const { error } = await db.from("watchlist_items").delete().eq("id", id);
+     if (error) throw error;
+   },
+diff --git a/src/lib/database/server-client.ts b/src/lib/database/server-client.ts
+new file mode 100644
+index 0000000..6909a43
+--- /dev/null
++++ b/src/lib/database/server-client.ts
+@@ -0,0 +1,36 @@
++import "server-only";
++import { createServerClient } from "@supabase/ssr";
++import type { SupabaseClient } from "@supabase/supabase-js";
++import { cookies } from "next/headers";
++import { isDemoMode } from "./client";
++
++/**
++ * Server-only client — imported exclusively by repositories (and nothing
++ * that could end up in a Client Component bundle; the `server-only`
++ * import above makes that a build error if it ever happens by accident).
++ * Cookie-aware, so it acts as the currently signed-in user (RLS applies)
++ * rather than a privileged service-role client. Must be awaited —
++ * `cookies()` is async.
++ */
++export async function getServerSupabaseClient(): Promise<SupabaseClient> {
++  if (isDemoMode()) {
++    throw new Error("Supabase is not configured — this should not be called in demo mode.");
++  }
++  const cookieStore = await cookies();
++  return createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
++    cookies: {
++      getAll() {
++        return cookieStore.getAll();
++      },
++      setAll(cookiesToSet) {
++        try {
++          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
++        } catch {
++          // Called from a Server Component render, where cookies can't be
++          // written — middleware.ts refreshes the session on every request
++          // instead, so this is safe to ignore here.
++        }
++      },
++    },
++  });
++}
+diff --git a/src/middleware.ts b/src/middleware.ts
+new file mode 100644
+index 0000000..0c6608a
+--- /dev/null
++++ b/src/middleware.ts
+@@ -0,0 +1,64 @@
++import { createServerClient } from "@supabase/ssr";
++import { NextResponse, type NextRequest } from "next/server";
++
++/**
++ * Route protection + session refresh, running on every request. In demo
++ * mode (no Supabase project connected — see lib/database/client.ts), auth
++ * is skipped entirely: no login required, matching the rest of the app's
++ * zero-setup demo behavior. Once a real Supabase project is connected,
++ * every route except the landing page and /login requires a signed-in
++ * session, redirecting to /login otherwise.
++ */
++export async function middleware(request: NextRequest) {
++  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
++  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
++  const isDemoMode = !supabaseUrl || !supabaseAnonKey;
++
++  if (isDemoMode) {
++    return NextResponse.next();
++  }
++
++  let response = NextResponse.next({ request });
++
++  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
++    cookies: {
++      getAll() {
++        return request.cookies.getAll();
++      },
++      setAll(cookiesToSet) {
++        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
++        response = NextResponse.next({ request });
++        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
++      },
++    },
++  });
++
++  const {
++    data: { user },
++  } = await supabase.auth.getUser();
++
++  const isPublicPath = request.nextUrl.pathname === "/" || request.nextUrl.pathname.startsWith("/login");
++
++  if (!user && !isPublicPath) {
++    const loginUrl = new URL("/login", request.url);
++    loginUrl.searchParams.set("redirectTo", request.nextUrl.pathname);
++    return NextResponse.redirect(loginUrl);
++  }
++
++  if (user && request.nextUrl.pathname.startsWith("/login")) {
++    return NextResponse.redirect(new URL("/dashboard", request.url));
++  }
++
++  return response;
++}
++
++export const config = {
++  matcher: [
++    /*
++     * Match all request paths except:
++     * - _next/static, _next/image (Next.js internals)
++     * - favicon.ico and other static assets
++     */
++    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
++  ],
++};
+diff --git a/supabase/schema.sql b/supabase/schema.sql
+index da843c3..be17d1b 100644
+--- a/supabase/schema.sql
++++ b/supabase/schema.sql
+@@ -26,6 +26,7 @@ $$ language plpgsql;
+ -- =========================================================================
+ create table assets (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   symbol text not null,
+   name text not null,
+   asset_type text not null check (asset_type in ('stock_in', 'stock_us', 'etf', 'mutual_fund', 'mutual_fund_debt', 'bond', 'crypto', 'cash', 'other')),
+@@ -55,6 +56,7 @@ create trigger assets_set_updated_at before update on assets
+ -- =========================================================================
+ create table transactions (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   asset_id uuid not null references assets(id) on delete cascade,
+   transaction_type text not null check (transaction_type in ('BUY', 'SELL')),
+   quantity numeric(18,6) not null check (quantity > 0),
+@@ -79,6 +81,7 @@ create trigger transactions_set_updated_at before update on transactions
+ -- =========================================================================
+ create table portfolio_snapshots (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   snapshot_date date not null unique,
+   net_worth numeric(18,4) not null,
+   invested_capital numeric(18,4) not null,   -- securities + crypto cost basis ONLY — see ARCHITECTURE.md trade-off #1
+@@ -99,6 +102,7 @@ create index portfolio_snapshots_date_idx on portfolio_snapshots (snapshot_date)
+ -- =========================================================================
+ create table goals (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   name text not null,
+   target_amount numeric(18,4) not null check (target_amount > 0),
+   current_amount numeric(18,4) not null default 0 check (current_amount >= 0),
+@@ -117,6 +121,7 @@ create trigger goals_set_updated_at before update on goals
+ -- =========================================================================
+ create table fixed_deposits (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   institution text not null,
+   principal numeric(18,4) not null check (principal > 0),
+   interest_rate numeric(9,4) not null check (interest_rate > 0),
+@@ -142,6 +147,7 @@ create trigger fixed_deposits_set_updated_at before update on fixed_deposits
+ -- =========================================================================
+ create table nps_accounts (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   tier text not null default 'Tier I' check (tier in ('Tier I', 'Tier II')),
+   pension_fund_manager text,
+   pran text,
+@@ -158,6 +164,7 @@ create trigger nps_accounts_set_updated_at before update on nps_accounts
+ 
+ create table nps_contributions (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   nps_account_id uuid not null references nps_accounts(id) on delete cascade,
+   contribution_date date not null,
+   employee_amount numeric(18,4) not null default 0 check (employee_amount >= 0),
+@@ -174,6 +181,7 @@ create index nps_contributions_account_date_idx on nps_contributions (nps_accoun
+ -- =========================================================================
+ create table bank_accounts (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   bank_name text not null,
+   account_type text not null check (account_type in ('savings', 'current', 'salary', 'nre_nro', 'other')),
+   current_balance numeric(18,4) not null default 0,
+@@ -190,6 +198,7 @@ create trigger bank_accounts_set_updated_at before update on bank_accounts
+ -- =========================================================================
+ create table ppf_accounts (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   account_number text,
+   current_balance numeric(18,4) not null default 0,
+   total_contributed numeric(18,4) not null default 0,  -- principal — your own deposits; interest earned = current_balance + total_withdrawn - total_contributed, derived not stored
+@@ -213,6 +222,7 @@ create trigger ppf_accounts_set_updated_at before update on ppf_accounts
+ -- =========================================================================
+ create table price_history (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   asset_id uuid not null references assets(id) on delete cascade,
+   price numeric(18,4) not null,
+   recorded_date date not null,
+@@ -227,6 +237,7 @@ create index price_history_asset_date_idx on price_history (asset_id, recorded_d
+ -- =========================================================================
+ create table watchlist_items (
+   id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   asset_id uuid not null references assets(id) on delete cascade,
+   target_price numeric(18,4),
+   stop_loss numeric(18,4),
+@@ -239,14 +250,49 @@ create trigger watchlist_items_set_updated_at before update on watchlist_items
+   for each row execute function set_updated_at();
+ 
+ -- =========================================================================
+--- NOTE ON ROW LEVEL SECURITY
+--- V1 is deliberately single-user and does NOT enable RLS (see MASTER PROMPT
+--- "Security"). When authentication is introduced later:
+---   1. Add a `user_id uuid references auth.users(id)` column to every table
+---      above (nullable at first, backfilled, then made NOT NULL).
+---   2. Enable RLS on every table and add policies scoping each row to
+---      auth.uid() = user_id.
+---   3. Update every repository in src/lib/database/repositories to filter
+---      by the current user — this is the ONLY layer that needs to change;
+---      services, calculations, and UI are untouched by this migration.
++-- ROW LEVEL SECURITY
++-- Every table above has a `user_id uuid default auth.uid()` column. Below,
++-- each table gets RLS enabled and ONE policy: a row is only visible,
++-- insertable, updatable, or deletable by the user it belongs to. Postgres
++-- enforces this at the database level — the application code never
++-- manually filters by user; it just uses the signed-in user's own session
++-- (see lib/database/client.ts), and RLS does the rest. This is real
++-- security, not UI-level hiding: even a bug in application code cannot
++-- leak one user's data to another.
+ -- =========================================================================
++
++create index assets_user_id_idx on assets (user_id);
++create index transactions_user_id_idx on transactions (user_id);
++create index portfolio_snapshots_user_id_idx on portfolio_snapshots (user_id);
++create index goals_user_id_idx on goals (user_id);
++create index fixed_deposits_user_id_idx on fixed_deposits (user_id);
++create index nps_accounts_user_id_idx on nps_accounts (user_id);
++create index nps_contributions_user_id_idx on nps_contributions (user_id);
++create index bank_accounts_user_id_idx on bank_accounts (user_id);
++create index ppf_accounts_user_id_idx on ppf_accounts (user_id);
++create index price_history_user_id_idx on price_history (user_id);
++create index watchlist_items_user_id_idx on watchlist_items (user_id);
++
++alter table assets enable row level security;
++alter table transactions enable row level security;
++alter table portfolio_snapshots enable row level security;
++alter table goals enable row level security;
++alter table fixed_deposits enable row level security;
++alter table nps_accounts enable row level security;
++alter table nps_contributions enable row level security;
++alter table bank_accounts enable row level security;
++alter table ppf_accounts enable row level security;
++alter table price_history enable row level security;
++alter table watchlist_items enable row level security;
++
++create policy "owner_only" on assets for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on transactions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on portfolio_snapshots for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on goals for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on fixed_deposits for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on nps_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on nps_contributions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on bank_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on ppf_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on price_history for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on watchlist_items for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+diff --git a/supabase/seed.sql b/supabase/seed.sql
+index fa6128c..98c0fb4 100644
+--- a/supabase/seed.sql
++++ b/supabase/seed.sql
+@@ -1,4 +1,16 @@
+ -- Development seed data — FICTIONAL, not real financial information.
++-- ---------------------------------------------------------------------
++-- NOTE: now that Row Level Security is enabled (every table requires a
++-- user_id), this script won't work as-is when run outside an authenticated
++-- session (e.g. via psql or the SQL editor) — auth.uid() resolves to NULL
++-- there, which violates the NOT NULL constraint. This file is optional
++-- and mainly useful before you set up auth; if you want seeded demo data
++-- AFTER auth is enabled, either add data through the app itself (works
++-- correctly — it runs through your authenticated session, so auth.uid()
++-- resolves normally), or sign up first, find your user ID in Supabase
++-- Dashboard → Authentication → Users, and manually add `, user_id` with
++-- that value to each insert below.
++-- ---------------------------------------------------------------------
+ -- Mirrors src/lib/database/demo-data.ts (the in-memory fallback used when
+ -- no Supabase project is configured) so a freshly connected real project
+ -- looks the same as the zero-config demo mode.

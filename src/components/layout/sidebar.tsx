@@ -4,6 +4,8 @@ import { usePathname } from "next/navigation";
 import { ROUTES } from "@/constants/routes";
 import { cn } from "@/lib/utils/cn";
 import { useTheme } from "./theme-provider";
+import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
+import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Wallet,
@@ -19,6 +21,7 @@ import {
   Sun,
   Moon,
   Gem,
+  LogOut,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -37,7 +40,15 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
+
+  async function handleSignOut() {
+    const supabase = getBrowserSupabaseClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-border-subtle bg-surface-raised p-4 lg:flex">
@@ -73,6 +84,16 @@ export function Sidebar() {
         {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
         {theme === "light" ? "Dark mode" : "Light mode"}
       </button>
+
+      {!isDemoMode() && (
+        <button
+          onClick={handleSignOut}
+          className="mt-1 flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium text-ink-muted hover:bg-surface-sunken hover:text-loss"
+        >
+          <LogOut className="size-4" />
+          Sign out
+        </button>
+      )}
     </aside>
   );
 }
