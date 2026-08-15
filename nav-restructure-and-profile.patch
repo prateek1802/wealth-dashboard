@@ -1,0 +1,546 @@
+diff --git a/src/app/(app)/layout.tsx b/src/app/(app)/layout.tsx
+index 030d071..6ba8c28 100644
+--- a/src/app/(app)/layout.tsx
++++ b/src/app/(app)/layout.tsx
+@@ -2,6 +2,7 @@ import { Sidebar } from "@/components/layout/sidebar";
+ import { MobileNav } from "@/components/layout/mobile-nav";
+ import { CommandPalette } from "@/features/search/command-palette";
+ import { assetsRepository } from "@/lib/database/repositories/assets.repository";
++import { isDemoMode } from "@/lib/database/client";
+ import { ROUTES } from "@/constants/routes";
+ 
+ export const dynamic = "force-dynamic";
+@@ -14,13 +15,21 @@ export default async function AppLayout({ children }: { children: React.ReactNod
+     href: ROUTES.investmentDetail(a.id),
+   }));
+ 
++  let userEmail: string | null = null;
++  if (!isDemoMode()) {
++    const { getServerSupabaseClient } = await import("@/lib/database/server-client");
++    const supabase = await getServerSupabaseClient();
++    const { data } = await supabase.auth.getUser();
++    userEmail = data.user?.email ?? null;
++  }
++
+   return (
+     <div className="flex min-h-screen bg-surface">
+-      <Sidebar />
++      <Sidebar userEmail={userEmail} />
+       <div className="flex min-h-screen flex-1 flex-col pb-16 lg:pb-0">
+         <main className="flex-1">{children}</main>
+       </div>
+-      <MobileNav />
++      <MobileNav userEmail={userEmail} />
+       <CommandPalette assetEntries={assetEntries} />
+     </div>
+   );
+diff --git a/src/components/layout/mobile-nav.tsx b/src/components/layout/mobile-nav.tsx
+index 752de47..4dd0ea0 100644
+--- a/src/components/layout/mobile-nav.tsx
++++ b/src/components/layout/mobile-nav.tsx
+@@ -1,39 +1,135 @@
+ "use client";
++import { useState } from "react";
+ import Link from "next/link";
+-import { usePathname } from "next/navigation";
++import { usePathname, useRouter } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+-import { LayoutDashboard, Wallet, Receipt, LineChart, Target } from "lucide-react";
++import { useTheme } from "./theme-provider";
++import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
++import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import {
++  LayoutDashboard,
++  Wallet,
++  Receipt,
++  LineChart,
++  Menu,
++  Banknote,
++  PiggyBank,
++  ShieldCheck,
++  Landmark,
++  Eye,
++  DatabaseBackup,
++  Target,
++  Sun,
++  Moon,
++  LogOut,
++} from "lucide-react";
+ 
+-const MOBILE_ITEMS = [
++const MOBILE_TABS = [
+   { href: ROUTES.dashboard, label: "Home", icon: LayoutDashboard },
+-  { href: ROUTES.portfolio, label: "Portfolio", icon: Wallet },
++  { href: ROUTES.portfolio, label: "Stocks", icon: Wallet },
+   { href: ROUTES.transactions, label: "Activity", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
++];
++
++/** Everything that doesn't fit in the 4 fixed tabs — reachable via the "More" sheet instead of only the Cmd+K search, which was the only way in on mobile before this. */
++const MORE_ITEMS = [
+   { href: ROUTES.goals, label: "Goals", icon: Target },
++  { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
++  { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
++  { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
++  { href: ROUTES.ppf, label: "PPF", icon: Landmark },
++  { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
++  { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
+ ];
+ 
+-export function MobileNav() {
++export function MobileNav({ userEmail }: { userEmail: string | null }) {
+   const pathname = usePathname();
++  const router = useRouter();
++  const { theme, toggleTheme } = useTheme();
++  const [moreOpen, setMoreOpen] = useState(false);
++  const moreActive = MORE_ITEMS.some((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
++
++  async function handleSignOut() {
++    const supabase = getBrowserSupabaseClient();
++    await supabase.auth.signOut();
++    router.push("/login");
++    router.refresh();
++  }
++
+   return (
+-    <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border-subtle bg-surface-raised lg:hidden">
+-      {MOBILE_ITEMS.map((item) => {
+-        const active = pathname === item.href || pathname.startsWith(item.href + "/");
+-        const Icon = item.icon;
+-        return (
+-          <Link
+-            key={item.href}
+-            href={item.href}
+-            className={cn(
+-              "flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium",
+-              active ? "text-accent" : "text-ink-muted"
++    <>
++      <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border-subtle bg-surface-raised lg:hidden">
++        {MOBILE_TABS.map((item) => {
++          const active = pathname === item.href || pathname.startsWith(item.href + "/");
++          const Icon = item.icon;
++          return (
++            <Link
++              key={item.href}
++              href={item.href}
++              className={cn("flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium", active ? "text-accent" : "text-ink-muted")}
++            >
++              <Icon className="size-5" />
++              {item.label}
++            </Link>
++          );
++        })}
++        <button
++          onClick={() => setMoreOpen(true)}
++          className={cn("flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium", moreActive ? "text-accent" : "text-ink-muted")}
++        >
++          <Menu className="size-5" />
++          More
++        </button>
++      </nav>
++
++      <Dialog open={moreOpen} onOpenChange={setMoreOpen}>
++        <DialogContent className="max-w-sm">
++          <DialogHeader>
++            <DialogTitle>More</DialogTitle>
++          </DialogHeader>
++          <div className="flex flex-col gap-1">
++            {MORE_ITEMS.map((item) => {
++              const active = pathname === item.href || pathname.startsWith(item.href + "/");
++              const Icon = item.icon;
++              return (
++                <Link
++                  key={item.href}
++                  href={item.href}
++                  onClick={() => setMoreOpen(false)}
++                  className={cn(
++                    "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium",
++                    active ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
++                  )}
++                >
++                  <Icon className="size-4" />
++                  {item.label}
++                </Link>
++              );
++            })}
++
++            <button
++              onClick={toggleTheme}
++              className="mt-2 flex items-center gap-3 rounded-[var(--radius-control)] border-t border-border-subtle px-3 pt-4 pb-2.5 text-sm font-medium text-ink-muted hover:bg-surface-sunken hover:text-ink"
++            >
++              {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
++              {theme === "light" ? "Dark mode" : "Light mode"}
++            </button>
++
++            {!isDemoMode() && (
++              <div className="mt-1 flex items-center gap-2 px-3 py-2">
++                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-medium text-accent">
++                  {userEmail ? userEmail[0].toUpperCase() : "?"}
++                </div>
++                <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">{userEmail ?? "Signed in"}</p>
++                <button onClick={handleSignOut} title="Sign out" className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-ink-muted hover:text-loss">
++                  <LogOut className="size-4" />
++                </button>
++              </div>
+             )}
+-          >
+-            <Icon className="size-5" />
+-            {item.label}
+-          </Link>
+-        );
+-      })}
+-    </nav>
++          </div>
++        </DialogContent>
++      </Dialog>
++    </>
+   );
+ }
+diff --git a/src/components/layout/sidebar.tsx b/src/components/layout/sidebar.tsx
+index 9a39ab6..1f711cf 100644
+--- a/src/components/layout/sidebar.tsx
++++ b/src/components/layout/sidebar.tsx
+@@ -1,47 +1,59 @@
+ "use client";
++import { useState } from "react";
+ import Link from "next/link";
+-import { usePathname } from "next/navigation";
++import { usePathname, useRouter } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+ import { useTheme } from "./theme-provider";
+ import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
+-import { useRouter } from "next/navigation";
+ import {
+   LayoutDashboard,
+-  Wallet,
+   Receipt,
+   LineChart,
+   Target,
++  DatabaseBackup,
++  Wallet,
+   Banknote,
+   PiggyBank,
+   ShieldCheck,
+   Landmark,
+   Eye,
+-  DatabaseBackup,
+   Sun,
+   Moon,
+   Gem,
+   LogOut,
++  ChevronDown,
+ } from "lucide-react";
+ 
+-const NAV_ITEMS = [
++const TOP_ITEMS = [
+   { href: ROUTES.dashboard, label: "Dashboard", icon: LayoutDashboard },
+-  { href: ROUTES.portfolio, label: "Portfolio", icon: Wallet },
+   { href: ROUTES.transactions, label: "Transactions", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
+   { href: ROUTES.goals, label: "Goals", icon: Target },
++];
++
++/** Everything that represents something you hold — securities live inside Portfolio itself, grouped by asset class; the rest are their own asset classes with dedicated pages. */
++const HOLDINGS_ITEMS = [
++  { href: ROUTES.portfolio, label: "Stocks & Funds", icon: Wallet },
+   { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+   { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
+   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
+   { href: ROUTES.ppf, label: "PPF", icon: Landmark },
+   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
+-  { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
+ ];
+ 
+-export function Sidebar() {
++const BOTTOM_ITEMS = [{ href: ROUTES.backup, label: "Backup", icon: DatabaseBackup }];
++
++function isActive(pathname: string, href: string) {
++  return pathname === href || pathname.startsWith(href + "/");
++}
++
++export function Sidebar({ userEmail }: { userEmail: string | null }) {
+   const pathname = usePathname();
+   const router = useRouter();
+   const { theme, toggleTheme } = useTheme();
++  const holdingsActive = HOLDINGS_ITEMS.some((item) => isActive(pathname, item.href));
++  const [holdingsOpen, setHoldingsOpen] = useState(holdingsActive);
+ 
+   async function handleSignOut() {
+     const supabase = getBrowserSupabaseClient();
+@@ -50,31 +62,54 @@ export function Sidebar() {
+     router.refresh();
+   }
+ 
++  const NavLink = ({ href, label, icon: Icon, indent = false }: { href: string; label: string; icon: typeof Wallet; indent?: boolean }) => (
++    <Link
++      href={href}
++      className={cn(
++        "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
++        indent && "ml-3",
++        isActive(pathname, href) ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
++      )}
++    >
++      <Icon className="size-4" />
++      {label}
++    </Link>
++  );
++
+   return (
+-    <aside className="hidden w-60 shrink-0 flex-col border-r border-border-subtle bg-surface-raised p-4 lg:flex">
++    <aside className="hidden w-64 shrink-0 flex-col border-r border-border-subtle bg-surface-raised p-4 lg:flex">
+       <Link href={ROUTES.dashboard} className="mb-6 flex items-center gap-2 px-2">
+         <Gem className="size-5 text-accent" />
+         <span className="font-display text-lg font-medium text-ink">Wealth</span>
+       </Link>
+ 
+       <nav className="flex flex-1 flex-col gap-1">
+-        {NAV_ITEMS.map((item) => {
+-          const active = pathname === item.href || pathname.startsWith(item.href + "/");
+-          const Icon = item.icon;
+-          return (
+-            <Link
+-              key={item.href}
+-              href={item.href}
+-              className={cn(
+-                "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
+-                active ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
+-              )}
+-            >
+-              <Icon className="size-4" />
+-              {item.label}
+-            </Link>
+-          );
+-        })}
++        {TOP_ITEMS.map((item) => (
++          <NavLink key={item.href} {...item} />
++        ))}
++
++        <button
++          onClick={() => setHoldingsOpen((o) => !o)}
++          className={cn(
++            "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
++            holdingsActive && !holdingsOpen ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
++          )}
++        >
++          <Wallet className="size-4" />
++          Holdings
++          <ChevronDown className={cn("ml-auto size-3.5 transition-transform", holdingsOpen && "rotate-180")} />
++        </button>
++        {holdingsOpen && (
++          <div className="flex flex-col gap-1">
++            {HOLDINGS_ITEMS.map((item) => (
++              <NavLink key={item.href} {...item} indent />
++            ))}
++          </div>
++        )}
++
++        {BOTTOM_ITEMS.map((item) => (
++          <NavLink key={item.href} {...item} />
++        ))}
+       </nav>
+ 
+       <button
+@@ -86,13 +121,17 @@ export function Sidebar() {
+       </button>
+ 
+       {!isDemoMode() && (
+-        <button
+-          onClick={handleSignOut}
+-          className="mt-1 flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium text-ink-muted hover:bg-surface-sunken hover:text-loss"
+-        >
+-          <LogOut className="size-4" />
+-          Sign out
+-        </button>
++        <div className="mt-3 flex items-center gap-2 border-t border-border-subtle pt-3">
++          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-medium text-accent">
++            {userEmail ? userEmail[0].toUpperCase() : "?"}
++          </div>
++          <div className="min-w-0 flex-1">
++            <p className="truncate text-xs font-medium text-ink">{userEmail ?? "Signed in"}</p>
++          </div>
++          <button onClick={handleSignOut} title="Sign out" className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-ink-muted hover:bg-surface-sunken hover:text-loss">
++            <LogOut className="size-4" />
++          </button>
++        </div>
+       )}
+     </aside>
+   );
+diff --git a/src/features/portfolio/components/portfolio-view.tsx b/src/features/portfolio/components/portfolio-view.tsx
+index d12cd6e..bf896a7 100644
+--- a/src/features/portfolio/components/portfolio-view.tsx
++++ b/src/features/portfolio/components/portfolio-view.tsx
+@@ -8,13 +8,106 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+ import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
+ import { refreshLivePricesAction } from "../actions";
+ import { formatCurrency, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
+-import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
++import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+ import { cn } from "@/lib/utils/cn";
+-import { Wallet, Plus, LayoutGrid, List, RefreshCw } from "lucide-react";
++import { Wallet, Plus, LayoutGrid, List, RefreshCw, ChevronDown } from "lucide-react";
+ import Link from "next/link";
+ import { ROUTES } from "@/constants/routes";
+ import type { Holding } from "@/types/domain/holding";
+ 
++/**
++ * Groups holdings into per-asset-class sections (Stocks, Mutual Funds,
++ * Crypto, ETFs, Bonds, Other) — each independently collapsible, so you can
++ * fold away what you're not looking at right now. Grouping is by exact
++ * asset_type, not the coarser Equity/Debt buckets used in the dashboard
++ * breakdown — those answer "how is my money split," this answers "which
++ * specific stocks/funds do I hold."
++ */
++const GROUP_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund", "mutual_fund_debt", "crypto", "bond", "other"];
++const GROUP_LABELS: Partial<Record<AssetType, string>> = {
++  stock_in: "Indian Stocks",
++  stock_us: "US Stocks",
++  etf: "ETFs",
++  mutual_fund: "Mutual Funds (Equity)",
++  mutual_fund_debt: "Mutual Funds (Debt)",
++  crypto: "Crypto",
++  bond: "Bonds",
++  other: "Other",
++};
++
++function groupHoldings(holdings: Holding[]) {
++  const groups = new Map<AssetType, Holding[]>();
++  for (const h of holdings) {
++    const list = groups.get(h.asset.assetType) ?? [];
++    list.push(h);
++    groups.set(h.asset.assetType, list);
++  }
++  return GROUP_ORDER.filter((t) => groups.has(t)).map((t) => ({ type: t, label: GROUP_LABELS[t] ?? ASSET_TYPE_LABELS[t], holdings: groups.get(t)! }));
++}
++
++function HoldingsGroup({ label, holdings, view }: { label: string; holdings: Holding[]; view: "cards" | "table" }) {
++  const [open, setOpen] = useState(true);
++  const total = holdings.reduce((s, h) => s + h.currentValue, 0);
++
++  return (
++    <div className="flex flex-col gap-3">
++      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1 text-left">
++        <div className="flex items-center gap-2">
++          <ChevronDown className={cn("size-4 text-ink-muted transition-transform", !open && "-rotate-90")} />
++          <span className="text-sm font-medium text-ink">{label}</span>
++          <span className="text-xs text-ink-muted">({holdings.length})</span>
++        </div>
++        <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
++      </button>
++
++      {open && (
++        view === "cards" ? (
++          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
++            {holdings.map((h) => <InvestmentCard key={h.asset.id} holding={h} />)}
++          </div>
++        ) : (
++          <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
++            <table className="w-full text-sm">
++              <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
++                <tr>
++                  <th className="px-4 py-3">Asset</th>
++                  <th className="px-4 py-3 text-right">Qty</th>
++                  <th className="px-4 py-3 text-right">Avg. Cost</th>
++                  <th className="px-4 py-3 text-right">Value</th>
++                  <th className="px-4 py-3 text-right">P&amp;L</th>
++                  <th className="px-4 py-3 text-right">Allocation</th>
++                </tr>
++              </thead>
++              <tbody>
++                {holdings.map((h) => {
++                  const isGain = h.unrealizedPnl >= 0;
++                  return (
++                    <tr key={h.asset.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
++                      <td className="px-4 py-3">
++                        <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex flex-col">
++                          <span className="font-mono font-medium text-ink">{h.asset.symbol}</span>
++                          <span className="text-xs text-ink-muted">{h.asset.name}</span>
++                        </Link>
++                      </td>
++                      <td className="px-4 py-3 text-right font-tabular">{h.quantity}</td>
++                      <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.weightedAverageCost, h.asset.currency)}</td>
++                      <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.currentValue, h.asset.currency)}</td>
++                      <td className={cn("px-4 py-3 text-right font-tabular", isGain ? "text-gain" : "text-loss")}>
++                        {formatSignedCurrency(h.unrealizedPnl, h.asset.currency)} ({formatPercent(h.unrealizedPnlPercent)})
++                      </td>
++                      <td className="px-4 py-3 text-right font-tabular text-ink-muted">{h.allocationPercent.toFixed(1)}%</td>
++                    </tr>
++                  );
++                })}
++              </tbody>
++            </table>
++          </div>
++        )
++      )}
++    </div>
++  );
++}
++
+ /** Cards are the default view; table is a secondary, opt-in view (MASTER PROMPT "Portfolio"). */
+ export function PortfolioView({ holdings }: { holdings: Holding[] }) {
+   const [view, setView] = useState<"cards" | "table">("cards");
+@@ -36,6 +129,8 @@ export function PortfolioView({ holdings }: { holdings: Holding[] }) {
+     });
+   }
+ 
++  const groups = groupHoldings(holdings);
++
+   return (
+     <div className="flex flex-col gap-4 p-4 lg:p-8">
+       <div className="flex flex-wrap items-center justify-between gap-3">
+@@ -62,50 +157,11 @@ export function PortfolioView({ holdings }: { holdings: Holding[] }) {
+           description="Add your first investment to start tracking your portfolio."
+           action={<Button onClick={() => setDialogOpen(true)}><Plus className="size-4" /> Add Investment</Button>}
+         />
+-      ) : view === "cards" ? (
+-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+-          {holdings.map((h) => (
+-            <InvestmentCard key={h.asset.id} holding={h} />
+-          ))}
+-        </div>
+       ) : (
+-        <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
+-          <table className="w-full text-sm">
+-            <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
+-              <tr>
+-                <th className="px-4 py-3">Asset</th>
+-                <th className="px-4 py-3">Type</th>
+-                <th className="px-4 py-3 text-right">Qty</th>
+-                <th className="px-4 py-3 text-right">Avg. Cost</th>
+-                <th className="px-4 py-3 text-right">Value</th>
+-                <th className="px-4 py-3 text-right">P&amp;L</th>
+-                <th className="px-4 py-3 text-right">Allocation</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {holdings.map((h) => {
+-                const isGain = h.unrealizedPnl >= 0;
+-                return (
+-                  <tr key={h.asset.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
+-                    <td className="px-4 py-3">
+-                      <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex flex-col">
+-                        <span className="font-mono font-medium text-ink">{h.asset.symbol}</span>
+-                        <span className="text-xs text-ink-muted">{h.asset.name}</span>
+-                      </Link>
+-                    </td>
+-                    <td className="px-4 py-3 text-ink-muted">{ASSET_TYPE_LABELS[h.asset.assetType]}</td>
+-                    <td className="px-4 py-3 text-right font-tabular">{h.quantity}</td>
+-                    <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.weightedAverageCost, h.asset.currency)}</td>
+-                    <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.currentValue, h.asset.currency)}</td>
+-                    <td className={cn("px-4 py-3 text-right font-tabular", isGain ? "text-gain" : "text-loss")}>
+-                      {formatSignedCurrency(h.unrealizedPnl, h.asset.currency)} ({formatPercent(h.unrealizedPnlPercent)})
+-                    </td>
+-                    <td className="px-4 py-3 text-right font-tabular text-ink-muted">{h.allocationPercent.toFixed(1)}%</td>
+-                  </tr>
+-                );
+-              })}
+-            </tbody>
+-          </table>
++        <div className="flex flex-col gap-6">
++          {groups.map((g) => (
++            <HoldingsGroup key={g.type} label={g.label} holdings={g.holdings} view={view} />
++          ))}
+         </div>
+       )}
+ 
