@@ -82,7 +82,7 @@ create trigger transactions_set_updated_at before update on transactions
 create table portfolio_snapshots (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
-  snapshot_date date not null unique,
+  snapshot_date date not null,
   net_worth numeric(18,4) not null,
   invested_capital numeric(18,4) not null,   -- securities + crypto cost basis ONLY — see ARCHITECTURE.md trade-off #1
   securities_value numeric(18,4) not null,
@@ -93,7 +93,8 @@ create table portfolio_snapshots (
   ppf_value numeric(18,4) not null default 0,
   cash_value numeric(18,4) not null default 0,
   allocation_snapshot jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique (user_id, snapshot_date)
 );
 create index portfolio_snapshots_date_idx on portfolio_snapshots (snapshot_date);
 

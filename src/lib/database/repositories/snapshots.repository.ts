@@ -58,7 +58,7 @@ export const snapshotsRepository = {
           cash_value: snapshot.cashValue,
           allocation_snapshot: snapshot.allocationSnapshot,
         },
-        { onConflict: "snapshot_date" }
+        { onConflict: "user_id,snapshot_date" }
       )
       .select()
       .single();

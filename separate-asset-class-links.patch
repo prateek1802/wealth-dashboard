@@ -1,0 +1,568 @@
+diff --git a/src/app/(app)/layout.tsx b/src/app/(app)/layout.tsx
+index 6ba8c28..7f6acf6 100644
+--- a/src/app/(app)/layout.tsx
++++ b/src/app/(app)/layout.tsx
+@@ -2,18 +2,23 @@ import { Sidebar } from "@/components/layout/sidebar";
+ import { MobileNav } from "@/components/layout/mobile-nav";
+ import { CommandPalette } from "@/features/search/command-palette";
+ import { assetsRepository } from "@/lib/database/repositories/assets.repository";
++import { portfolioService } from "@/lib/services/portfolio.service";
+ import { isDemoMode } from "@/lib/database/client";
+ import { ROUTES } from "@/constants/routes";
+ 
+ export const dynamic = "force-dynamic";
+ 
+ export default async function AppLayout({ children }: { children: React.ReactNode }) {
+-  const assets = await assetsRepository.findAll();
++  const [assets, holdings] = await Promise.all([assetsRepository.findAll(), portfolioService.getHoldings()]);
+   const assetEntries = assets.map((a) => ({
+     label: `${a.symbol} — ${a.name}`,
+     group: "Investments",
+     href: ROUTES.investmentDetail(a.id),
+   }));
++  // Distinct asset classes actually held — drives one sidebar link per
++  // class instead of a single combined "Portfolio" link, and skips
++  // classes you don't hold anything in (no dead links).
++  const heldAssetTypes = Array.from(new Set(holdings.map((h) => h.asset.assetType)));
+ 
+   let userEmail: string | null = null;
+   if (!isDemoMode()) {
+@@ -25,11 +30,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
+ 
+   return (
+     <div className="flex min-h-screen bg-surface">
+-      <Sidebar userEmail={userEmail} />
++      <Sidebar userEmail={userEmail} heldAssetTypes={heldAssetTypes} />
+       <div className="flex min-h-screen flex-1 flex-col pb-16 lg:pb-0">
+         <main className="flex-1">{children}</main>
+       </div>
+-      <MobileNav userEmail={userEmail} />
++      <MobileNav userEmail={userEmail} heldAssetTypes={heldAssetTypes} />
+       <CommandPalette assetEntries={assetEntries} />
+     </div>
+   );
+diff --git a/src/app/(app)/portfolio/page.tsx b/src/app/(app)/portfolio/page.tsx
+index 168213d..4d0c447 100644
+--- a/src/app/(app)/portfolio/page.tsx
++++ b/src/app/(app)/portfolio/page.tsx
+@@ -1,15 +1,20 @@
+ import { TopBar } from "@/components/layout/top-bar";
+ import { portfolioService } from "@/lib/services/portfolio.service";
+ import { PortfolioView } from "@/features/portfolio/components/portfolio-view";
++import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+ 
+ export const dynamic = "force-dynamic";
+ 
+-export default async function PortfolioPage() {
+-  const holdings = await portfolioService.getHoldings();
++export default async function PortfolioPage({ searchParams }: { searchParams: Promise<{ type?: string }> }) {
++  const { type } = await searchParams;
++  const allHoldings = await portfolioService.getHoldings();
++  const holdings = type ? allHoldings.filter((h) => h.asset.assetType === type) : allHoldings;
++  const title = type ? ASSET_TYPE_LABELS[type as AssetType] ?? "Portfolio" : "Portfolio";
++
+   return (
+     <div>
+-      <TopBar title="Portfolio" subtitle={`${holdings.length} holding${holdings.length === 1 ? "" : "s"}`} />
+-      <PortfolioView holdings={holdings} />
++      <TopBar title={title} subtitle={`${holdings.length} holding${holdings.length === 1 ? "" : "s"}`} />
++      <PortfolioView holdings={holdings} flatten={!!type} />
+     </div>
+   );
+ }
+diff --git a/src/components/layout/mobile-nav.tsx b/src/components/layout/mobile-nav.tsx
+index 4dd0ea0..3fe1131 100644
+--- a/src/components/layout/mobile-nav.tsx
++++ b/src/components/layout/mobile-nav.tsx
+@@ -1,15 +1,20 @@
+ "use client";
+-import { useState } from "react";
++import { Suspense, useState } from "react";
+ import Link from "next/link";
+-import { usePathname, useRouter } from "next/navigation";
++import { usePathname, useSearchParams, useRouter } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+ import { useTheme } from "./theme-provider";
+ import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
+ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+ import {
+   LayoutDashboard,
+   Wallet,
++  TrendingUp,
++  PieChart,
++  Bitcoin,
++  FileText,
+   Receipt,
+   LineChart,
+   Menu,
+@@ -25,16 +30,33 @@ import {
+   LogOut,
+ } from "lucide-react";
+ 
+-const MOBILE_TABS = [
++interface NavItem {
++  href: string;
++  label: string;
++  icon: typeof Wallet;
++}
++
++const MOBILE_TABS: NavItem[] = [
+   { href: ROUTES.dashboard, label: "Home", icon: LayoutDashboard },
+-  { href: ROUTES.portfolio, label: "Stocks", icon: Wallet },
+   { href: ROUTES.transactions, label: "Activity", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
++  { href: ROUTES.goals, label: "Goals", icon: Target },
+ ];
+ 
+-/** Everything that doesn't fit in the 4 fixed tabs — reachable via the "More" sheet instead of only the Cmd+K search, which was the only way in on mobile before this. */
+-const MORE_ITEMS = [
+-  { href: ROUTES.goals, label: "Goals", icon: Target },
++const SECURITY_ICONS: Partial<Record<AssetType, typeof Wallet>> = {
++  stock_in: TrendingUp,
++  stock_us: TrendingUp,
++  etf: TrendingUp,
++  mutual_fund: PieChart,
++  mutual_fund_debt: PieChart,
++  crypto: Bitcoin,
++  bond: FileText,
++  other: FileText,
++};
++const SECURITY_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund", "mutual_fund_debt", "crypto", "bond", "other"];
++
++/** Same set as the desktop sidebar's "Holdings" group, plus Backup — reachable via the "More" sheet since there's no room for this many items in the fixed bottom tab bar. */
++const OTHER_MORE_ITEMS: NavItem[] = [
+   { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+   { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
+   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
+@@ -43,12 +65,38 @@ const MORE_ITEMS = [
+   { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
+ ];
+ 
+-export function MobileNav({ userEmail }: { userEmail: string | null }) {
++/** Needs useSearchParams (for highlighting the active ?type= link), so it gets its own Suspense boundary — same pattern as the desktop sidebar. */
++function MoreSheetContent({
++  heldAssetTypes,
++  userEmail,
++  onNavigate,
++}: {
++  heldAssetTypes: AssetType[];
++  userEmail: string | null;
++  onNavigate: () => void;
++}) {
+   const pathname = usePathname();
++  const searchParams = useSearchParams();
++  const currentType = searchParams.get("type");
+   const router = useRouter();
+   const { theme, toggleTheme } = useTheme();
+-  const [moreOpen, setMoreOpen] = useState(false);
+-  const moreActive = MORE_ITEMS.some((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
++
++  const securityItems: NavItem[] = SECURITY_ORDER.filter((t) => heldAssetTypes.includes(t)).map((t) => ({
++    href: `${ROUTES.portfolio}?type=${t}`,
++    label: ASSET_TYPE_LABELS[t],
++    icon: SECURITY_ICONS[t] ?? Wallet,
++  }));
++  const items: NavItem[] =
++    securityItems.length > 0 ? [...securityItems, ...OTHER_MORE_ITEMS] : [{ href: ROUTES.portfolio, label: "Portfolio", icon: Wallet }, ...OTHER_MORE_ITEMS];
++
++  function isItemActive(href: string): boolean {
++    if (href.includes("?type=")) {
++      const [path, query] = href.split("?type=");
++      return pathname === path && currentType === query;
++    }
++    if (href === ROUTES.portfolio) return pathname === ROUTES.portfolio && !currentType;
++    return pathname === href || pathname.startsWith(href + "/");
++  }
+ 
+   async function handleSignOut() {
+     const supabase = getBrowserSupabaseClient();
+@@ -57,6 +105,51 @@ export function MobileNav({ userEmail }: { userEmail: string | null }) {
+     router.refresh();
+   }
+ 
++  return (
++    <div className="flex flex-col gap-1">
++      {items.map((item) => (
++        <Link
++          key={item.href}
++          href={item.href}
++          onClick={onNavigate}
++          className={cn(
++            "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium",
++            isItemActive(item.href) ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
++          )}
++        >
++          <item.icon className="size-4" />
++          {item.label}
++        </Link>
++      ))}
++
++      <button
++        onClick={toggleTheme}
++        className="mt-2 flex items-center gap-3 rounded-[var(--radius-control)] border-t border-border-subtle px-3 pt-4 pb-2.5 text-sm font-medium text-ink-muted hover:bg-surface-sunken hover:text-ink"
++      >
++        {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
++        {theme === "light" ? "Dark mode" : "Light mode"}
++      </button>
++
++      {!isDemoMode() && (
++        <div className="mt-1 flex items-center gap-2 px-3 py-2">
++          <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-medium text-accent">
++            {userEmail ? userEmail[0].toUpperCase() : "?"}
++          </div>
++          <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">{userEmail ?? "Signed in"}</p>
++          <button onClick={handleSignOut} title="Sign out" className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-ink-muted hover:text-loss">
++            <LogOut className="size-4" />
++          </button>
++        </div>
++      )}
++    </div>
++  );
++}
++
++export function MobileNav({ userEmail, heldAssetTypes }: { userEmail: string | null; heldAssetTypes: AssetType[] }) {
++  const pathname = usePathname();
++  const [moreOpen, setMoreOpen] = useState(false);
++  const moreActive = pathname === ROUTES.portfolio || OTHER_MORE_ITEMS.some((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
++
+   return (
+     <>
+       <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border-subtle bg-surface-raised lg:hidden">
+@@ -88,46 +181,9 @@ export function MobileNav({ userEmail }: { userEmail: string | null }) {
+           <DialogHeader>
+             <DialogTitle>More</DialogTitle>
+           </DialogHeader>
+-          <div className="flex flex-col gap-1">
+-            {MORE_ITEMS.map((item) => {
+-              const active = pathname === item.href || pathname.startsWith(item.href + "/");
+-              const Icon = item.icon;
+-              return (
+-                <Link
+-                  key={item.href}
+-                  href={item.href}
+-                  onClick={() => setMoreOpen(false)}
+-                  className={cn(
+-                    "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium",
+-                    active ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
+-                  )}
+-                >
+-                  <Icon className="size-4" />
+-                  {item.label}
+-                </Link>
+-              );
+-            })}
+-
+-            <button
+-              onClick={toggleTheme}
+-              className="mt-2 flex items-center gap-3 rounded-[var(--radius-control)] border-t border-border-subtle px-3 pt-4 pb-2.5 text-sm font-medium text-ink-muted hover:bg-surface-sunken hover:text-ink"
+-            >
+-              {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
+-              {theme === "light" ? "Dark mode" : "Light mode"}
+-            </button>
+-
+-            {!isDemoMode() && (
+-              <div className="mt-1 flex items-center gap-2 px-3 py-2">
+-                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-medium text-accent">
+-                  {userEmail ? userEmail[0].toUpperCase() : "?"}
+-                </div>
+-                <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">{userEmail ?? "Signed in"}</p>
+-                <button onClick={handleSignOut} title="Sign out" className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-ink-muted hover:text-loss">
+-                  <LogOut className="size-4" />
+-                </button>
+-              </div>
+-            )}
+-          </div>
++          <Suspense fallback={null}>
++            <MoreSheetContent heldAssetTypes={heldAssetTypes} userEmail={userEmail} onNavigate={() => setMoreOpen(false)} />
++          </Suspense>
+         </DialogContent>
+       </Dialog>
+     </>
+diff --git a/src/components/layout/sidebar.tsx b/src/components/layout/sidebar.tsx
+index 1f711cf..11660e9 100644
+--- a/src/components/layout/sidebar.tsx
++++ b/src/components/layout/sidebar.tsx
+@@ -1,11 +1,12 @@
+ "use client";
+-import { useState } from "react";
++import { Suspense, useState } from "react";
+ import Link from "next/link";
+-import { usePathname, useRouter } from "next/navigation";
++import { usePathname, useSearchParams, useRouter } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+ import { useTheme } from "./theme-provider";
+ import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
++import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+ import {
+   LayoutDashboard,
+   Receipt,
+@@ -13,6 +14,10 @@ import {
+   Target,
+   DatabaseBackup,
+   Wallet,
++  TrendingUp,
++  PieChart,
++  Bitcoin,
++  FileText,
+   Banknote,
+   PiggyBank,
+   ShieldCheck,
+@@ -25,16 +30,34 @@ import {
+   ChevronDown,
+ } from "lucide-react";
+ 
+-const TOP_ITEMS = [
++interface NavItem {
++  href: string;
++  label: string;
++  icon: typeof Wallet;
++}
++
++const TOP_ITEMS: NavItem[] = [
+   { href: ROUTES.dashboard, label: "Dashboard", icon: LayoutDashboard },
+   { href: ROUTES.transactions, label: "Transactions", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
+   { href: ROUTES.goals, label: "Goals", icon: Target },
+ ];
+ 
+-/** Everything that represents something you hold — securities live inside Portfolio itself, grouped by asset class; the rest are their own asset classes with dedicated pages. */
+-const HOLDINGS_ITEMS = [
+-  { href: ROUTES.portfolio, label: "Stocks & Funds", icon: Wallet },
++/** One icon per security asset class — used for the dynamic per-class Holdings links. */
++const SECURITY_ICONS: Partial<Record<AssetType, typeof Wallet>> = {
++  stock_in: TrendingUp,
++  stock_us: TrendingUp,
++  etf: TrendingUp,
++  mutual_fund: PieChart,
++  mutual_fund_debt: PieChart,
++  crypto: Bitcoin,
++  bond: FileText,
++  other: FileText,
++};
++const SECURITY_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund", "mutual_fund_debt", "crypto", "bond", "other"];
++
++/** Non-security asset classes always get their own dedicated page — they never share a route with anything else, unlike securities which all live under /portfolio filtered by ?type=. */
++const OTHER_HOLDINGS_ITEMS: NavItem[] = [
+   { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+   { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
+   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
+@@ -42,33 +65,48 @@ const HOLDINGS_ITEMS = [
+   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
+ ];
+ 
+-const BOTTOM_ITEMS = [{ href: ROUTES.backup, label: "Backup", icon: DatabaseBackup }];
++const BOTTOM_ITEMS: NavItem[] = [{ href: ROUTES.backup, label: "Backup", icon: DatabaseBackup }];
+ 
+-function isActive(pathname: string, href: string) {
+-  return pathname === href || pathname.startsWith(href + "/");
+-}
+-
+-export function Sidebar({ userEmail }: { userEmail: string | null }) {
++/**
++ * Reads pathname + the ?type= query param, so it needs its own Suspense
++ * boundary (useSearchParams requirement) — kept as a small child component
++ * rather than making the whole Sidebar suspend, so the logo/theme
++ * toggle/profile block never flash a fallback state.
++ */
++function SidebarNav({ heldAssetTypes }: { heldAssetTypes: AssetType[] }) {
+   const pathname = usePathname();
+-  const router = useRouter();
+-  const { theme, toggleTheme } = useTheme();
+-  const holdingsActive = HOLDINGS_ITEMS.some((item) => isActive(pathname, item.href));
+-  const [holdingsOpen, setHoldingsOpen] = useState(holdingsActive);
++  const searchParams = useSearchParams();
++  const currentType = searchParams.get("type");
+ 
+-  async function handleSignOut() {
+-    const supabase = getBrowserSupabaseClient();
+-    await supabase.auth.signOut();
+-    router.push("/login");
+-    router.refresh();
++  const securityItems: NavItem[] = SECURITY_ORDER.filter((t) => heldAssetTypes.includes(t)).map((t) => ({
++    href: `${ROUTES.portfolio}?type=${t}`,
++    label: ASSET_TYPE_LABELS[t],
++    icon: SECURITY_ICONS[t] ?? Wallet,
++  }));
++  const holdingsItems: NavItem[] =
++    securityItems.length > 0 ? [...securityItems, ...OTHER_HOLDINGS_ITEMS] : [{ href: ROUTES.portfolio, label: "Portfolio", icon: Wallet }, ...OTHER_HOLDINGS_ITEMS];
++
++  function isItemActive(href: string): boolean {
++    if (href.includes("?type=")) {
++      const [path, query] = href.split("?type=");
++      return pathname === path && currentType === query;
++    }
++    if (href === ROUTES.portfolio) {
++      return pathname === ROUTES.portfolio && !currentType;
++    }
++    return pathname === href || pathname.startsWith(href + "/");
+   }
+ 
+-  const NavLink = ({ href, label, icon: Icon, indent = false }: { href: string; label: string; icon: typeof Wallet; indent?: boolean }) => (
++  const holdingsActive = holdingsItems.some((item) => isItemActive(item.href));
++  const [holdingsOpen, setHoldingsOpen] = useState(holdingsActive);
++
++  const NavLink = ({ href, label, icon: Icon, indent = false }: NavItem & { indent?: boolean }) => (
+     <Link
+       href={href}
+       className={cn(
+         "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
+         indent && "ml-3",
+-        isActive(pathname, href) ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
++        isItemActive(href) ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
+       )}
+     >
+       <Icon className="size-4" />
+@@ -76,6 +114,49 @@ export function Sidebar({ userEmail }: { userEmail: string | null }) {
+     </Link>
+   );
+ 
++  return (
++    <>
++      {TOP_ITEMS.map((item) => (
++        <NavLink key={item.href} {...item} />
++      ))}
++
++      <button
++        onClick={() => setHoldingsOpen((o) => !o)}
++        className={cn(
++          "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
++          holdingsActive && !holdingsOpen ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
++        )}
++      >
++        <Wallet className="size-4" />
++        Holdings
++        <ChevronDown className={cn("ml-auto size-3.5 transition-transform", holdingsOpen && "rotate-180")} />
++      </button>
++      {holdingsOpen && (
++        <div className="flex flex-col gap-1">
++          {holdingsItems.map((item) => (
++            <NavLink key={item.href} {...item} indent />
++          ))}
++        </div>
++      )}
++
++      {BOTTOM_ITEMS.map((item) => (
++        <NavLink key={item.href} {...item} />
++      ))}
++    </>
++  );
++}
++
++export function Sidebar({ userEmail, heldAssetTypes }: { userEmail: string | null; heldAssetTypes: AssetType[] }) {
++  const { theme, toggleTheme } = useTheme();
++  const router = useRouter();
++
++  async function handleSignOut() {
++    const supabase = getBrowserSupabaseClient();
++    await supabase.auth.signOut();
++    router.push("/login");
++    router.refresh();
++  }
++
+   return (
+     <aside className="hidden w-64 shrink-0 flex-col border-r border-border-subtle bg-surface-raised p-4 lg:flex">
+       <Link href={ROUTES.dashboard} className="mb-6 flex items-center gap-2 px-2">
+@@ -84,32 +165,9 @@ export function Sidebar({ userEmail }: { userEmail: string | null }) {
+       </Link>
+ 
+       <nav className="flex flex-1 flex-col gap-1">
+-        {TOP_ITEMS.map((item) => (
+-          <NavLink key={item.href} {...item} />
+-        ))}
+-
+-        <button
+-          onClick={() => setHoldingsOpen((o) => !o)}
+-          className={cn(
+-            "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
+-            holdingsActive && !holdingsOpen ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
+-          )}
+-        >
+-          <Wallet className="size-4" />
+-          Holdings
+-          <ChevronDown className={cn("ml-auto size-3.5 transition-transform", holdingsOpen && "rotate-180")} />
+-        </button>
+-        {holdingsOpen && (
+-          <div className="flex flex-col gap-1">
+-            {HOLDINGS_ITEMS.map((item) => (
+-              <NavLink key={item.href} {...item} indent />
+-            ))}
+-          </div>
+-        )}
+-
+-        {BOTTOM_ITEMS.map((item) => (
+-          <NavLink key={item.href} {...item} />
+-        ))}
++        <Suspense fallback={null}>
++          <SidebarNav heldAssetTypes={heldAssetTypes} />
++        </Suspense>
+       </nav>
+ 
+       <button
+diff --git a/src/features/portfolio/components/portfolio-view.tsx b/src/features/portfolio/components/portfolio-view.tsx
+index bf896a7..e1ea4db 100644
+--- a/src/features/portfolio/components/portfolio-view.tsx
++++ b/src/features/portfolio/components/portfolio-view.tsx
+@@ -45,22 +45,24 @@ function groupHoldings(holdings: Holding[]) {
+   return GROUP_ORDER.filter((t) => groups.has(t)).map((t) => ({ type: t, label: GROUP_LABELS[t] ?? ASSET_TYPE_LABELS[t], holdings: groups.get(t)! }));
+ }
+ 
+-function HoldingsGroup({ label, holdings, view }: { label: string; holdings: Holding[]; view: "cards" | "table" }) {
++function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: string; holdings: Holding[]; view: "cards" | "table"; hideHeader?: boolean }) {
+   const [open, setOpen] = useState(true);
+   const total = holdings.reduce((s, h) => s + h.currentValue, 0);
+ 
+   return (
+     <div className="flex flex-col gap-3">
+-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1 text-left">
+-        <div className="flex items-center gap-2">
+-          <ChevronDown className={cn("size-4 text-ink-muted transition-transform", !open && "-rotate-90")} />
+-          <span className="text-sm font-medium text-ink">{label}</span>
+-          <span className="text-xs text-ink-muted">({holdings.length})</span>
+-        </div>
+-        <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
+-      </button>
++      {!hideHeader && (
++        <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1 text-left">
++          <div className="flex items-center gap-2">
++            <ChevronDown className={cn("size-4 text-ink-muted transition-transform", !open && "-rotate-90")} />
++            <span className="text-sm font-medium text-ink">{label}</span>
++            <span className="text-xs text-ink-muted">({holdings.length})</span>
++          </div>
++          <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
++        </button>
++      )}
+ 
+-      {open && (
++      {(open || hideHeader) && (
+         view === "cards" ? (
+           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+             {holdings.map((h) => <InvestmentCard key={h.asset.id} holding={h} />)}
+@@ -108,8 +110,8 @@ function HoldingsGroup({ label, holdings, view }: { label: string; holdings: Hol
+   );
+ }
+ 
+-/** Cards are the default view; table is a secondary, opt-in view (MASTER PROMPT "Portfolio"). */
+-export function PortfolioView({ holdings }: { holdings: Holding[] }) {
++/** Cards are the default view; table is a secondary, opt-in view (MASTER PROMPT "Portfolio"). Pass `flatten` when the page itself is already scoped to one asset class (e.g. via a dedicated sidebar link) — skips the redundant per-group header. */
++export function PortfolioView({ holdings, flatten = false }: { holdings: Holding[]; flatten?: boolean }) {
+   const [view, setView] = useState<"cards" | "table">("cards");
+   const [dialogOpen, setDialogOpen] = useState(false);
+   const [isRefreshing, startRefresh] = useTransition();
+@@ -159,9 +161,11 @@ export function PortfolioView({ holdings }: { holdings: Holding[] }) {
+         />
+       ) : (
+         <div className="flex flex-col gap-6">
+-          {groups.map((g) => (
+-            <HoldingsGroup key={g.type} label={g.label} holdings={g.holdings} view={view} />
+-          ))}
++          {flatten ? (
++            <HoldingsGroup label="" holdings={holdings} view={view} hideHeader />
++          ) : (
++            groups.map((g) => <HoldingsGroup key={g.type} label={g.label} holdings={g.holdings} view={view} />)
++          )}
+         </div>
+       )}
+ 

@@ -45,22 +45,24 @@ function groupHoldings(holdings: Holding[]) {
   return GROUP_ORDER.filter((t) => groups.has(t)).map((t) => ({ type: t, label: GROUP_LABELS[t] ?? ASSET_TYPE_LABELS[t], holdings: groups.get(t)! }));
 }
 
-function HoldingsGroup({ label, holdings, view }: { label: string; holdings: Holding[]; view: "cards" | "table" }) {
+function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: string; holdings: Holding[]; view: "cards" | "table"; hideHeader?: boolean }) {
   const [open, setOpen] = useState(true);
   const total = holdings.reduce((s, h) => s + h.currentValue, 0);
 
   return (
     <div className="flex flex-col gap-3">
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1 text-left">
-        <div className="flex items-center gap-2">
-          <ChevronDown className={cn("size-4 text-ink-muted transition-transform", !open && "-rotate-90")} />
-          <span className="text-sm font-medium text-ink">{label}</span>
-          <span className="text-xs text-ink-muted">({holdings.length})</span>
-        </div>
-        <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
-      </button>
+      {!hideHeader && (
+        <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1 text-left">
+          <div className="flex items-center gap-2">
+            <ChevronDown className={cn("size-4 text-ink-muted transition-transform", !open && "-rotate-90")} />
+            <span className="text-sm font-medium text-ink">{label}</span>
+            <span className="text-xs text-ink-muted">({holdings.length})</span>
+          </div>
+          <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
+        </button>
+      )}
 
-      {open && (
+      {(open || hideHeader) && (
         view === "cards" ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {holdings.map((h) => <InvestmentCard key={h.asset.id} holding={h} />)}
@@ -108,8 +110,8 @@ function HoldingsGroup({ label, holdings, view }: { label: string; holdings: Hol
   );
 }
 
-/** Cards are the default view; table is a secondary, opt-in view (MASTER PROMPT "Portfolio"). */
-export function PortfolioView({ holdings }: { holdings: Holding[] }) {
+/** Cards are the default view; table is a secondary, opt-in view (MASTER PROMPT "Portfolio"). Pass `flatten` when the page itself is already scoped to one asset class (e.g. via a dedicated sidebar link) — skips the redundant per-group header. */
+export function PortfolioView({ holdings, flatten = false }: { holdings: Holding[]; flatten?: boolean }) {
   const [view, setView] = useState<"cards" | "table">("cards");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isRefreshing, startRefresh] = useTransition();
@@ -159,9 +161,11 @@ export function PortfolioView({ holdings }: { holdings: Holding[] }) {
         />
       ) : (
         <div className="flex flex-col gap-6">
-          {groups.map((g) => (
-            <HoldingsGroup key={g.type} label={g.label} holdings={g.holdings} view={view} />
-          ))}
+          {flatten ? (
+            <HoldingsGroup label="" holdings={holdings} view={view} hideHeader />
+          ) : (
+            groups.map((g) => <HoldingsGroup key={g.type} label={g.label} holdings={g.holdings} view={view} />)
+          )}
         </div>
       )}
 
