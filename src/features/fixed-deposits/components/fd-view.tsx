@@ -96,17 +96,20 @@ export function FDView({ fds }: { fds: FDWithProjection[] }) {
           {activeFds.length > 0 && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {activeFds.map((fd) => (
-                <div key={fd.id} className="relative">
-                  <FDCard fd={fd} />
-                  <div className="absolute right-4 top-4 flex gap-1">
-                    <button onClick={() => { setWithdrawTarget(fd); setWithdrawalAmount(fd.projectedMaturityAmount.toString()); }} className="text-ink-muted hover:text-accent" title="Withdraw">
-                      <Banknote className="size-4" />
-                    </button>
-                    <button onClick={() => setDeleteTarget(fd)} className="text-ink-muted hover:text-loss" title="Delete">
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
-                </div>
+                <FDCard
+                  key={fd.id}
+                  fd={fd}
+                  actions={
+                    <>
+                      <button onClick={() => { setWithdrawTarget(fd); setWithdrawalAmount(fd.projectedMaturityAmount.toString()); }} className="text-ink-muted hover:text-accent" title="Withdraw">
+                        <Banknote className="size-4" />
+                      </button>
+                      <button onClick={() => setDeleteTarget(fd)} className="text-ink-muted hover:text-loss" title="Delete">
+                        <Trash2 className="size-4" />
+                      </button>
+                    </>
+                  }
+                />
               ))}
             </div>
           )}

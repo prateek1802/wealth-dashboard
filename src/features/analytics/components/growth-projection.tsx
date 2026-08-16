@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, formatPercent } from "@/lib/utils/currency";
 import { projectFutureValue } from "@/lib/calculations/returns";
 import { cn } from "@/lib/utils/cn";
+import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { TrendingUp } from "lucide-react";
 import type { CalcResult } from "@/lib/calculations/returns";
 import type { HoldingWithXIRR } from "@/lib/services/portfolio.service";
@@ -82,20 +83,33 @@ export function GrowthProjection({
                 </tr>
               </thead>
               <tbody>
-                {holdings.map((h) => (
-                  <tr key={h.asset.id} className="border-b border-border-subtle last:border-0">
-                    <td className="py-2 pr-4">
-                      <span className="font-mono font-medium text-ink">{h.asset.symbol}</span>
-                    </td>
-                    <td className="py-2 pr-4 text-right font-tabular text-ink">{formatCurrency(h.currentValue, h.asset.currency)}</td>
-                    <td className={cn("py-2 pr-4 text-right font-tabular", h.xirr.status === "ok" && h.xirr.value >= 0 ? "text-gain" : h.xirr.status === "ok" ? "text-loss" : "text-ink-muted")}>
-                      {h.xirr.status === "ok" ? formatPercent(h.xirr.value) : "insufficient data"}
-                    </td>
-                    <td className="py-2 text-right font-tabular text-ink">
-                      {h.xirr.status === "ok" ? formatCurrency(projectFutureValue(h.currentValue, h.xirr.value, horizon), h.asset.currency) : "—"}
-                    </td>
-                  </tr>
-                ))}
+                {holdings.map((h) => {
+                  // A short holding period can produce a very large annualized
+                  // XIRR (e.g. +335% from a few weeks of gains) that's
+                  // mathematically correct but wildly misleading if compounded
+                  // forward for years — a brief spike isn't a multi-year trend.
+                  // Below 1 year, show the honest XIRR but withhold the
+                  // long-horizon projection rather than extrapolate it.
+                  const tooShortToProject = h.holdingPeriodDays < 365;
+                  return (
+                    <tr key={h.asset.id} className="border-b border-border-subtle last:border-0">
+                      <td className="py-2 pr-4">
+                        <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(h.asset).primary}</span>
+                      </td>
+                      <td className="py-2 pr-4 text-right font-tabular text-ink">{formatCurrency(h.currentValue, h.asset.currency)}</td>
+                      <td className={cn("py-2 pr-4 text-right font-tabular", h.xirr.status === "ok" && h.xirr.value >= 0 ? "text-gain" : h.xirr.status === "ok" ? "text-loss" : "text-ink-muted")}>
+                        {h.xirr.status === "ok" ? formatPercent(h.xirr.value) : "insufficient data"}
+                      </td>
+                      <td className="py-2 text-right font-tabular text-ink">
+                        {h.xirr.status === "ok" && !tooShortToProject
+                          ? formatCurrency(projectFutureValue(h.currentValue, h.xirr.value, horizon), h.asset.currency)
+                          : h.xirr.status === "ok"
+                            ? <span className="text-xs text-ink-muted">held &lt;1yr — too soon to project</span>
+                            : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

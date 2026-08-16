@@ -20,6 +20,8 @@ import type { PortfolioSummary, AllocationSlice, PerformancePoint, ActivityItem 
 
 export interface HoldingWithXIRR extends Holding {
   xirr: CalcResult<number>;
+  /** Days since the earliest transaction for this asset — used to flag when a projection would be extrapolating a short-term spike over a much longer horizon (see growth-projection.tsx). */
+  holdingPeriodDays: number;
 }
 
 /**
@@ -93,7 +95,9 @@ export const portfolioService = {
       const txns = allTransactions.filter((t) => t.assetId === h.asset.id);
       const cashflows = txns.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
       cashflows.push({ date: today, amount: h.currentValue });
-      return { ...h, xirr: calculateXIRR(cashflows) };
+      const earliestDate = txns.reduce((min, t) => (t.transactionDate < min ? t.transactionDate : min), today);
+      const holdingPeriodDays = Math.max(0, (new Date(today).getTime() - new Date(earliestDate).getTime()) / (1000 * 60 * 60 * 24));
+      return { ...h, xirr: calculateXIRR(cashflows), holdingPeriodDays };
     });
   },
 

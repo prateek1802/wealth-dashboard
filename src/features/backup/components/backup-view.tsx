@@ -27,19 +27,26 @@ export function BackupView({ isDemoMode }: { isDemoMode: boolean }) {
   const [error, setError] = useState<string | null>(null);
 
   function handleExport() {
+    setError(null);
     startExport(async () => {
-      const backup = await exportBackupAction();
-      const json = JSON.stringify(backup, null, 2);
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `wealth-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      toast.success("Backup downloaded");
+      try {
+        const backup = await exportBackupAction();
+        const json = JSON.stringify(backup, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `wealth-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        toast.success("Backup downloaded");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Export failed";
+        setError(message);
+        toast.error(message);
+      }
     });
   }
 

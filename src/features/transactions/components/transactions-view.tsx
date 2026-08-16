@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { TransactionDialog } from "./transaction-dialog";
 import { ImportCSVDialog } from "./import-csv-dialog";
 import { deleteTransactionAction } from "../actions";
-import { formatCurrency } from "@/lib/utils/currency";
+import { formatCurrency, formatCurrencyPrecise } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { toCSV, downloadCSV } from "@/lib/utils/csv-export";
 import { Receipt, Plus, Download, Upload, Trash2 } from "lucide-react";
@@ -103,7 +103,7 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
                     <Badge className={r.transactionType === "BUY" ? "bg-gain-soft text-gain" : "bg-loss-soft text-loss"}>{r.transactionType}</Badge>
                   </td>
                   <td className="px-4 py-3 text-right font-tabular">{r.quantity}</td>
-                  <td className="px-4 py-3 text-right font-tabular">{formatCurrency(r.price, r.asset?.currency)}</td>
+                  <td className="px-4 py-3 text-right font-tabular">{formatCurrencyPrecise(r.price, r.asset?.currency)}</td>
                   <td className="px-4 py-3 text-right font-tabular text-ink-muted">{formatCurrency(r.fees + r.taxes, r.asset?.currency)}</td>
                   <td className="px-4 py-3 text-ink-muted">{r.broker ?? "—"}</td>
                   <td className="px-4 py-3 text-right">

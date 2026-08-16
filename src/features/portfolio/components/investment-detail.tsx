@@ -10,9 +10,10 @@ import { PerformanceLineChart } from "@/components/charts/performance-line-chart
 import { EditAssetDialog } from "./edit-asset-dialog";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
 import { deleteTransactionAction } from "@/features/transactions/actions";
-import { formatCurrency, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
+import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
 import { Pencil, Plus, Trash2, LineChart, Receipt } from "lucide-react";
 import type { Holding } from "@/types/domain/holding";
@@ -37,11 +38,11 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <h2 className="font-mono text-xl font-medium text-ink">{asset.symbol}</h2>
+            <h2 className={cn("text-xl font-medium text-ink", asset.assetType !== "mutual_fund" && asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(asset).primary}</h2>
             <Badge>{ASSET_TYPE_LABELS[asset.assetType]}</Badge>
             {asset.exchange && <Badge>{asset.exchange}</Badge>}
           </div>
-          <p className="text-sm text-ink-muted">{asset.name}</p>
+          <p className="text-sm text-ink-muted">{getAssetDisplayLabel(asset).secondary}</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setEditOpen(true)}>
@@ -60,7 +61,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">Current Price</span>
-          <span className="font-tabular text-lg font-medium text-ink">{asset.currentPrice ? formatCurrency(asset.currentPrice, asset.currency) : "—"}</span>
+          <span className="font-tabular text-lg font-medium text-ink">{asset.currentPrice ? formatCurrencyPrecise(asset.currentPrice, asset.currency) : "—"}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">Quantity</span>
@@ -68,7 +69,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">Avg. Cost</span>
-          <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(holding.weightedAverageCost, asset.currency)}</span>
+          <span className="font-tabular text-lg font-medium text-ink">{formatCurrencyPrecise(holding.weightedAverageCost, asset.currency)}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">Invested Amount</span>
@@ -128,7 +129,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
                       <Badge className={t.transactionType === "BUY" ? "bg-gain-soft text-gain" : "bg-loss-soft text-loss"}>
                         {t.transactionType}
                       </Badge>
-                      {t.quantity} @ {formatCurrency(t.price, asset.currency)}
+                      {t.quantity} @ {formatCurrencyPrecise(t.price, asset.currency)}
                     </span>
                     <span className="text-xs text-ink-muted">
                       {formatDate(t.transactionDate)} {t.broker && `· ${t.broker}`} {(t.fees > 0 || t.taxes > 0) && `· fees/taxes ${formatCurrency(t.fees + t.taxes, asset.currency)}`}

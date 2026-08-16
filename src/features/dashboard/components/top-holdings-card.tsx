@@ -2,6 +2,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { formatCurrency, formatPercent } from "@/lib/utils/currency";
 import { cn } from "@/lib/utils/cn";
+import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { Wallet } from "lucide-react";
 import Link from "next/link";
 import { ROUTES } from "@/constants/routes";
@@ -23,8 +24,8 @@ export function TopHoldingsCard({ holdings }: { holdings: Holding[] }) {
               return (
                 <li key={h.asset.id}>
                   <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex items-center justify-between gap-3 text-sm hover:opacity-80">
-                    <div className="flex flex-col">
-                      <span className="font-mono font-medium text-ink">{h.asset.symbol}</span>
+                    <div className="flex min-w-0 flex-col">
+                      <span className={cn("truncate font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(h.asset).primary}</span>
                       <span className="text-xs text-ink-muted">{h.allocationPercent.toFixed(1)}%</span>
                     </div>
                     <div className="flex flex-col items-end">

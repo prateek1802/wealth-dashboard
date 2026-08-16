@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
 import { refreshLivePricesAction } from "../actions";
-import { formatCurrency, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
 import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
 import { Wallet, Plus, LayoutGrid, List, RefreshCw, ChevronDown } from "lucide-react";
 import Link from "next/link";
@@ -87,12 +88,12 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
                     <tr key={h.asset.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
                       <td className="px-4 py-3">
                         <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex flex-col">
-                          <span className="font-mono font-medium text-ink">{h.asset.symbol}</span>
-                          <span className="text-xs text-ink-muted">{h.asset.name}</span>
+                          <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(h.asset).primary}</span>
+                          <span className={cn("text-xs text-ink-muted", (h.asset.assetType === "mutual_fund" || h.asset.assetType === "mutual_fund_debt") && "font-mono")}>{getAssetDisplayLabel(h.asset).secondary}</span>
                         </Link>
                       </td>
                       <td className="px-4 py-3 text-right font-tabular">{h.quantity}</td>
-                      <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.weightedAverageCost, h.asset.currency)}</td>
+                      <td className="px-4 py-3 text-right font-tabular">{formatCurrencyPrecise(h.weightedAverageCost, h.asset.currency)}</td>
                       <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.currentValue, h.asset.currency)}</td>
                       <td className={cn("px-4 py-3 text-right font-tabular", isGain ? "text-gain" : "text-loss")}>
                         {formatSignedCurrency(h.unrealizedPnl, h.asset.currency)} ({formatPercent(h.unrealizedPnlPercent)})
