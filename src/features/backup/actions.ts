@@ -1,6 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { backupService, BACKUP_FORMAT_VERSION } from "@/lib/services/backup.service";
+import { backupService } from "@/lib/services/backup.service";
 import type { WealthBackup, BackupImportSummary } from "@/lib/services/backup.service";
 import { ROUTES } from "@/constants/routes";
 
@@ -28,5 +28,3 @@ export async function importBackupAction(
     return { ok: false, error: err instanceof Error ? err.message : "Import failed" };
   }
 }
-
-export { BACKUP_FORMAT_VERSION };

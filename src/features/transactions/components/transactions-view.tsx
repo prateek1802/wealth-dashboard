@@ -11,6 +11,8 @@ import { deleteTransactionAction } from "../actions";
 import { formatCurrency, formatCurrencyPrecise } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { toCSV, downloadCSV } from "@/lib/utils/csv-export";
+import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
+import { cn } from "@/lib/utils/cn";
 import { Receipt, Plus, Download, Upload, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { ROUTES } from "@/constants/routes";
@@ -94,8 +96,8 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
                   <td className="px-4 py-3 text-ink-muted">{formatDate(r.transactionDate)}</td>
                   <td className="px-4 py-3">
                     {r.asset ? (
-                      <Link href={ROUTES.investmentDetail(r.asset.id)} className="font-mono font-medium text-ink hover:text-accent">
-                        {r.asset.symbol}
+                      <Link href={ROUTES.investmentDetail(r.asset.id)} className={cn("font-medium text-ink hover:text-accent", r.asset.assetType !== "mutual_fund" && r.asset.assetType !== "mutual_fund_debt" && "font-mono")}>
+                        {getAssetDisplayLabel(r.asset).primary}
                       </Link>
                     ) : "—"}
                   </td>

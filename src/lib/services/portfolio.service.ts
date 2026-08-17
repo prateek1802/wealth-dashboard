@@ -10,6 +10,7 @@ import { calculateAllocation } from "@/lib/calculations/allocation";
 import { calculateXIRR } from "@/lib/calculations/returns";
 import { netCashFlow } from "@/lib/calculations/cashflow";
 import { todayISO } from "@/lib/utils/date";
+import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { periodToDays } from "@/constants/chart-periods";
 import type { ChartPeriod } from "@/constants/chart-periods";
 import type { AllocationCategory } from "@/constants/asset-types";
@@ -183,8 +184,8 @@ export const portfolioService = {
       return {
         id: t.id,
         kind: "transaction" as const,
-        label: `${t.transactionType} ${asset?.symbol ?? "—"}`,
-        detail: `${t.quantity} units @ ${t.price}`,
+        label: `${t.transactionType} ${asset ? getAssetDisplayLabel(asset).primary : "—"}`,
+        detail: `${t.quantity} units @ ${t.price.toFixed(2)}`,
         amount: t.quantity * t.price,
         date: t.transactionDate,
       };
