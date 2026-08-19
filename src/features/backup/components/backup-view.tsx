@@ -16,6 +16,7 @@ const ENTITY_LABELS: Record<keyof Omit<BackupImportSummary, "errors">, string> =
   npsContributions: "NPS Contributions",
   ppfAccounts: "PPF Accounts",
   bankAccounts: "Bank Accounts",
+  liabilities: "Liabilities",
   watchlistItems: "Watchlist Items",
 };
 

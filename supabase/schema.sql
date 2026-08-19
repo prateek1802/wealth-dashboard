@@ -233,6 +233,29 @@ create table price_history (
 create index price_history_asset_date_idx on price_history (asset_id, recorded_date);
 
 -- =========================================================================
+-- liabilities — credit card dues, loans, anything you owe. Subtracted from
+-- net worth in portfolio.service.ts. Deliberately simple — no
+-- amortization schedule or payment history, just a running amount owed
+-- you update by hand (same "Update balance" pattern as Bank Accounts).
+-- =========================================================================
+create table liabilities (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null,
+  liability_type text not null check (liability_type in ('credit_card', 'personal_loan', 'home_loan', 'vehicle_loan', 'other')),
+  amount_owed numeric(18,4) not null default 0,
+  interest_rate numeric(9,4),
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index liabilities_user_id_idx on liabilities (user_id);
+alter table liabilities enable row level security;
+create policy "owner_only" on liabilities for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop trigger if exists liabilities_set_updated_at on liabilities;
+create trigger liabilities_set_updated_at before update on liabilities for each row execute function set_updated_at();
+
+-- =========================================================================
 -- watchlist_items — reuses `assets`; a watched asset is NOT a holding.
 -- Holding status is derived from whether transactions exist, not stored.
 -- =========================================================================

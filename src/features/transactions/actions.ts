@@ -57,6 +57,21 @@ export async function addTransactionAction(input: unknown): Promise<ActionResult
   }
 }
 
+export async function editTransactionAction(id: string, assetId: string, input: unknown): Promise<ActionResult> {
+  const parsed = transactionSchema.omit({ assetId: true }).safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  try {
+    await transactionsService.editTransaction(id, assetId, parsed.data);
+    revalidatePath(ROUTES.dashboard);
+    revalidatePath(ROUTES.portfolio);
+    revalidatePath(ROUTES.transactions);
+    revalidatePath(ROUTES.investmentDetail(assetId));
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
 export async function deleteTransactionAction(id: string, assetId: string): Promise<ActionResult> {
   try {
     await transactionsService.deleteTransaction(id);

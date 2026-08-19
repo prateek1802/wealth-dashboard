@@ -68,6 +68,34 @@ export const fixedDepositsRepository = {
     return rowToFD(data as FixedDepositRow);
   },
 
+  /** Metadata-only edit — institution/principal/rate/dates/tenure/payout/notes. Never touches status/withdrawal fields; that's withdraw()'s job. */
+  async update(id: string, input: NewFixedDeposit): Promise<FixedDeposit> {
+    if (isDemoMode()) {
+      const fd = demoFixedDeposits.find((f) => f.id === id);
+      if (!fd) throw new Error("Fixed deposit not found");
+      Object.assign(fd, input, { updatedAt: new Date().toISOString() });
+      return fd;
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db
+      .from("fixed_deposits")
+      .update({
+        institution: input.institution,
+        principal: input.principal,
+        interest_rate: input.interestRate,
+        start_date: input.startDate,
+        maturity_date: input.maturityDate,
+        tenure_months: input.tenureMonths,
+        payout_type: input.payoutType,
+        notes: input.notes,
+      })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return rowToFD(data as FixedDepositRow);
+  },
+
   /** Marks the FD withdrawn (premature or at maturity) — soft-close, never deleted, so it stays visible as history. */
   async withdraw(id: string, withdrawalDate: string, withdrawalAmount: number): Promise<FixedDeposit> {
     if (isDemoMode()) {

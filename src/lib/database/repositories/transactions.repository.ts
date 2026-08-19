@@ -80,6 +80,34 @@ export const transactionsRepository = {
     return rowToTransaction(data as TransactionRow);
   },
 
+  /** Edits the transaction's own fields — never the assetId; changing which asset a transaction belongs to isn't supported (delete + re-add instead). */
+  async update(id: string, input: Omit<NewTransaction, "assetId">): Promise<Transaction> {
+    if (isDemoMode()) {
+      const txn = demoTransactions.find((t) => t.id === id);
+      if (!txn) throw new Error("Transaction not found");
+      Object.assign(txn, input, { updatedAt: new Date().toISOString() });
+      return txn;
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db
+      .from("transactions")
+      .update({
+        transaction_type: input.transactionType,
+        quantity: input.quantity,
+        price: input.price,
+        fees: input.fees,
+        taxes: input.taxes,
+        transaction_date: input.transactionDate,
+        broker: input.broker,
+        notes: input.notes,
+      })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return rowToTransaction(data as TransactionRow);
+  },
+
   async delete(id: string): Promise<void> {
     if (isDemoMode()) {
       const idx = demoTransactions.findIndex((t) => t.id === id);

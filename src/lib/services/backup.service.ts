@@ -5,6 +5,7 @@ import { fixedDepositsRepository } from "@/lib/database/repositories/fixed-depos
 import { npsRepository } from "@/lib/database/repositories/nps.repository";
 import { ppfRepository } from "@/lib/database/repositories/ppf.repository";
 import { bankAccountsRepository } from "@/lib/database/repositories/bank-accounts.repository";
+import { liabilitiesRepository } from "@/lib/database/repositories/liabilities.repository";
 import { watchlistRepository } from "@/lib/database/repositories/watchlist.repository";
 import type { Asset } from "@/types/domain/asset";
 import type { Transaction } from "@/types/domain/transaction";
@@ -13,6 +14,7 @@ import type { FixedDeposit } from "@/types/domain/fixed-deposit";
 import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
 import type { PPFAccount } from "@/types/domain/ppf";
 import type { BankAccount } from "@/types/domain/bank-account";
+import type { Liability } from "@/types/domain/liability";
 import type { WatchlistItem } from "@/types/domain/watchlist";
 
 export const BACKUP_FORMAT_VERSION = 1;
@@ -28,6 +30,7 @@ export interface WealthBackup {
   npsContributions: NPSContribution[];
   ppfAccounts: PPFAccount[];
   bankAccounts: BankAccount[];
+  liabilities: Liability[];
   watchlistItems: WatchlistItem[];
 }
 
@@ -40,6 +43,7 @@ export interface BackupImportSummary {
   npsContributions: number;
   ppfAccounts: number;
   bankAccounts: number;
+  liabilities: number;
   watchlistItems: number;
   errors: string[];
 }
@@ -63,13 +67,14 @@ export const backupService = {
     const npsAccounts = await npsRepository.findAll();
     const npsContributions = (await Promise.all(npsAccounts.map((a) => npsRepository.findContributions(a.id)))).flat();
 
-    const [assets, transactions, goals, fixedDeposits, ppfAccounts, bankAccounts, watchlistItems] = await Promise.all([
+    const [assets, transactions, goals, fixedDeposits, ppfAccounts, bankAccounts, liabilities, watchlistItems] = await Promise.all([
       assetsRepository.findAll(),
       transactionsRepository.findAll(),
       goalsRepository.findAll(),
       fixedDepositsRepository.findAll(),
       ppfRepository.findAll(),
       bankAccountsRepository.findAll(),
+      liabilitiesRepository.findAll(),
       watchlistRepository.findAll(),
     ]);
 
@@ -84,6 +89,7 @@ export const backupService = {
       npsContributions,
       ppfAccounts,
       bankAccounts,
+      liabilities,
       watchlistItems,
     };
   },
@@ -91,7 +97,7 @@ export const backupService = {
   async importAll(backup: WealthBackup): Promise<BackupImportSummary> {
     const summary: BackupImportSummary = {
       assets: 0, transactions: 0, goals: 0, fixedDeposits: 0,
-      npsAccounts: 0, npsContributions: 0, ppfAccounts: 0, bankAccounts: 0, watchlistItems: 0,
+      npsAccounts: 0, npsContributions: 0, ppfAccounts: 0, bankAccounts: 0, liabilities: 0, watchlistItems: 0,
       errors: [],
     };
 
@@ -218,6 +224,15 @@ export const backupService = {
         summary.bankAccounts += 1;
       } catch (err) {
         summary.errors.push(`Bank account ${bank.bankName}: ${err instanceof Error ? err.message : "failed"}`);
+      }
+    }
+
+    for (const liability of backup.liabilities ?? []) {
+      try {
+        await liabilitiesRepository.create({ name: liability.name, liabilityType: liability.liabilityType, amountOwed: liability.amountOwed, interestRate: liability.interestRate, notes: liability.notes });
+        summary.liabilities += 1;
+      } catch (err) {
+        summary.errors.push(`Liability ${liability.name}: ${err instanceof Error ? err.message : "failed"}`);
       }
     }
 

@@ -5,6 +5,7 @@ import { fdService } from "./fd.service";
 import { npsService } from "./nps.service";
 import { ppfService } from "./ppf.service";
 import { bankAccountsService } from "./bank-accounts.service";
+import { liabilitiesService } from "./liabilities.service";
 import { summarizeAssetPosition } from "@/lib/calculations/pnl";
 import { calculateAllocation } from "@/lib/calculations/allocation";
 import { calculateXIRR } from "@/lib/calculations/returns";
@@ -48,7 +49,12 @@ async function computeHoldings(): Promise<Holding[]> {
     const txns = allTransactions.filter((t) => t.assetId === asset.id);
     if (txns.length === 0) continue;
     const position = summarizeAssetPosition(txns, asset.currentPrice);
-    if (position.quantity <= 1e-9 && position.realizedPnl === 0) continue; // fully exited, nothing to show
+    // Zero-realizedPnl exits are dropped here (nothing useful to show or
+    // sum). Positions with realized P&L are KEPT in this shared list so
+    // getPortfolioSummary's realized-P&L total below stays accurate even
+    // after a full exit — getHoldings()/getTopHoldings()/getHoldingsWithXIRR()
+    // filter these out of what's actually DISPLAYED as a holding (see below).
+    if (position.quantity <= 1e-9 && position.realizedPnl === 0) continue;
     holdings.push({
       asset,
       quantity: position.quantity,
@@ -72,12 +78,13 @@ async function computeHoldings(): Promise<Holding[]> {
 
 export const portfolioService = {
   async getHoldings(): Promise<Holding[]> {
-    return computeHoldings();
+    const holdings = await computeHoldings();
+    return holdings.filter((h) => h.quantity > 1e-9);
   },
 
   async getTopHoldings(limit: number = 5): Promise<Holding[]> {
     const holdings = await computeHoldings();
-    return holdings.slice(0, limit);
+    return holdings.filter((h) => h.quantity > 1e-9).slice(0, limit);
   },
 
   /**
@@ -89,7 +96,8 @@ export const portfolioService = {
    * elapsed) is reported via CalcResult, not hidden or faked as 0%.
    */
   async getHoldingsWithXIRR(): Promise<HoldingWithXIRR[]> {
-    const [holdings, allTransactions] = await Promise.all([computeHoldings(), transactionsRepository.findAll()]);
+    const [allHoldings, allTransactions] = await Promise.all([computeHoldings(), transactionsRepository.findAll()]);
+    const holdings = allHoldings.filter((h) => h.quantity > 1e-9);
     const today = todayISO();
 
     return holdings.map((h) => {
@@ -103,12 +111,13 @@ export const portfolioService = {
   },
 
   async getPortfolioSummary(): Promise<PortfolioSummary> {
-    const [holdings, cashValue, fdValue, npsValue, ppfValue, snapshots] = await Promise.all([
+    const [holdings, cashValue, fdValue, npsValue, ppfValue, liabilitiesValue, snapshots] = await Promise.all([
       computeHoldings(),
       bankAccountsService.totalValue(),
       fdService.totalValue(),
       npsService.currentCorpus(),
       ppfService.totalValue(),
+      liabilitiesService.totalOwed(),
       snapshotsRepository.findAll(),
     ]);
 
@@ -117,7 +126,7 @@ export const portfolioService = {
     const realizedPnl = holdings.reduce((s, h) => s + h.realizedPnl, 0);
     const unrealizedPnl = currentValue - investedCapital;
     const unrealizedPnlPercent = investedCapital > 0 ? (unrealizedPnl / investedCapital) * 100 : 0;
-    const netWorth = currentValue + cashValue + fdValue + npsValue + ppfValue;
+    const netWorth = currentValue + cashValue + fdValue + npsValue + ppfValue - liabilitiesValue;
 
     const sorted = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
     const previous = sorted.length > 0 ? sorted[sorted.length - 1] : null;
@@ -135,6 +144,7 @@ export const portfolioService = {
       fdValue,
       npsValue,
       ppfValue,
+      liabilitiesValue,
       dayChange,
       dayChangePercent,
     };

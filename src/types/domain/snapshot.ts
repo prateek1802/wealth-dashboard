@@ -28,6 +28,7 @@ export interface PortfolioSummary {
   fdValue: number;
   npsValue: number;
   ppfValue: number;
+  liabilitiesValue: number;
   dayChange: number | null;
   dayChangePercent: number | null;
 }

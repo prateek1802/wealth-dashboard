@@ -5,6 +5,7 @@ import type { FixedDeposit } from "@/types/domain/fixed-deposit";
 import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
 import type { PPFAccount } from "@/types/domain/ppf";
 import type { BankAccount } from "@/types/domain/bank-account";
+import type { Liability } from "@/types/domain/liability";
 import type { WatchlistItem } from "@/types/domain/watchlist";
 import type { PortfolioSnapshot } from "@/types/domain/snapshot";
 
@@ -149,3 +150,7 @@ export const demoSnapshots: PortfolioSnapshot[] = Array.from({ length: 40 }, (_,
     createdAt: `${daysAgo(daysBack)}T00:00:00Z`,
   };
 });
+
+export const demoLiabilities: Liability[] = [
+  { id: "liability-1", name: "HDFC Credit Card", liabilityType: "credit_card", amountOwed: 22_000, interestRate: 42, notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+];

@@ -19,6 +19,7 @@ import {
   Bitcoin,
   FileText,
   Banknote,
+  AlertTriangle,
   PiggyBank,
   ShieldCheck,
   Landmark,
@@ -59,6 +60,7 @@ const SECURITY_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund
 /** Non-security asset classes always get their own dedicated page — they never share a route with anything else, unlike securities which all live under /portfolio filtered by ?type=. */
 const OTHER_HOLDINGS_ITEMS: NavItem[] = [
   { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+  { href: ROUTES.liabilities, label: "Liabilities", icon: AlertTriangle },
   { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
   { href: ROUTES.ppf, label: "PPF", icon: Landmark },

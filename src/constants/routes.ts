@@ -7,6 +7,7 @@ export const ROUTES = {
   analytics: "/analytics",
   goals: "/goals",
   bankAccounts: "/bank-accounts",
+  liabilities: "/liabilities",
   fixedDeposits: "/fixed-deposits",
   nps: "/nps",
   ppf: "/ppf",

@@ -26,6 +26,18 @@ export const transactionsService = {
     return transactionsRepository.delete(id);
   },
 
+  /** Edits an existing transaction's own fields (never which asset it belongs to). Re-validates the SELL-quantity guard against holdings AFTER excluding this transaction, so editing a SELL down/up is checked against what would actually be held. */
+  async editTransaction(id: string, assetId: string, input: Omit<NewTransaction, "assetId">): Promise<Transaction> {
+    if (input.transactionType === "SELL") {
+      const existing = (await transactionsRepository.findByAssetId(assetId)).filter((t) => t.id !== id);
+      const heldQty = existing.reduce((q, t) => (t.transactionType === "BUY" ? q + t.quantity : q - t.quantity), 0);
+      if (input.quantity > heldQty + 1e-9) {
+        throw new Error(`Cannot sell ${input.quantity} units — only ${heldQty} would be held.`);
+      }
+    }
+    return transactionsRepository.update(id, input);
+  },
+
   /** Full position summary for a single asset's detail page. */
   async getAssetPosition(assetId: string): Promise<Holding | null> {
     const asset = await assetsRepository.findById(assetId);

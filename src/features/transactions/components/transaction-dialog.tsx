@@ -10,8 +10,9 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { SymbolCombobox } from "./symbol-combobox";
 import { SECURITY_ASSET_TYPES, ASSET_TYPE_LABELS, TRANSACTION_TYPES } from "@/constants/asset-types";
 import { todayISO } from "@/lib/utils/date";
-import { addInvestmentAction, addTransactionAction } from "../actions";
+import { addInvestmentAction, addTransactionAction, editTransactionAction } from "../actions";
 import type { Asset } from "@/types/domain/asset";
+import type { Transaction } from "@/types/domain/transaction";
 import type { AssetType, TransactionType } from "@/constants/asset-types";
 import type { SymbolSearchResult } from "@/lib/market-data/symbol-search";
 
@@ -20,9 +21,11 @@ interface TransactionDialogProps {
   onOpenChange: (open: boolean) => void;
   /** When provided, the dialog only records a transaction against this existing asset. Otherwise it also collects new-asset metadata (the "Add Investment" flow). */
   asset?: Asset;
+  /** When provided (alongside `asset`), edits this transaction instead of creating a new one — asset can't be changed in edit mode. */
+  editingTransaction?: Transaction;
 }
 
-export function TransactionDialog({ open, onOpenChange, asset }: TransactionDialogProps) {
+export function TransactionDialog({ open, onOpenChange, asset, editingTransaction }: TransactionDialogProps) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -34,13 +37,13 @@ export function TransactionDialog({ open, onOpenChange, asset }: TransactionDial
   const [country, setCountry] = useState<string | null>(null);
   const [matchedLive, setMatchedLive] = useState(false);
 
-  const [transactionType, setTransactionType] = useState<TransactionType>("BUY");
-  const [quantity, setQuantity] = useState("");
-  const [price, setPrice] = useState("");
-  const [fees, setFees] = useState("0");
-  const [taxes, setTaxes] = useState("0");
-  const [transactionDate, setTransactionDate] = useState(todayISO());
-  const [broker, setBroker] = useState("");
+  const [transactionType, setTransactionType] = useState<TransactionType>(editingTransaction?.transactionType ?? "BUY");
+  const [quantity, setQuantity] = useState(editingTransaction?.quantity.toString() ?? "");
+  const [price, setPrice] = useState(editingTransaction?.price.toString() ?? "");
+  const [fees, setFees] = useState(editingTransaction?.fees.toString() ?? "0");
+  const [taxes, setTaxes] = useState(editingTransaction?.taxes.toString() ?? "0");
+  const [transactionDate, setTransactionDate] = useState(editingTransaction?.transactionDate ?? todayISO());
+  const [broker, setBroker] = useState(editingTransaction?.broker ?? "");
 
   function handleSelectResult(result: SymbolSearchResult) {
     setSymbol(result.symbol);
@@ -73,15 +76,17 @@ export function TransactionDialog({ open, onOpenChange, asset }: TransactionDial
         notes: null,
       };
 
-      const result = asset
-        ? await addTransactionAction({ ...transaction, assetId: asset.id })
-        : await addInvestmentAction({
-            asset: { symbol, name, assetType, currency, exchange, sector: null, country, isin: null, notes: null },
-            transaction,
-          });
+      const result = editingTransaction && asset
+        ? await editTransactionAction(editingTransaction.id, asset.id, transaction)
+        : asset
+          ? await addTransactionAction({ ...transaction, assetId: asset.id })
+          : await addInvestmentAction({
+              asset: { symbol, name, assetType, currency, exchange, sector: null, country, isin: null, notes: null },
+              transaction,
+            });
 
       if (result.ok) {
-        toast.success(asset ? "Transaction recorded" : "Investment added");
+        toast.success(editingTransaction ? "Transaction updated" : asset ? "Transaction recorded" : "Investment added");
         resetAndClose();
       } else {
         setError(result.error);
@@ -93,9 +98,9 @@ export function TransactionDialog({ open, onOpenChange, asset }: TransactionDial
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{asset ? `Add transaction — ${asset.symbol}` : "Add investment"}</DialogTitle>
+          <DialogTitle>{editingTransaction ? `Edit transaction — ${asset?.symbol}` : asset ? `Add transaction — ${asset.symbol}` : "Add investment"}</DialogTitle>
           <DialogDescription>
-            {asset ? "Record a BUY or SELL for this holding." : "Search for a stock, ETF, or crypto to auto-fill its details — or type a symbol manually (e.g. for mutual funds)."}
+            {editingTransaction ? "Update this BUY or SELL." : asset ? "Record a BUY or SELL for this holding." : "Search for a stock, ETF, or crypto to auto-fill its details — or type a symbol manually (e.g. for mutual funds)."}
           </DialogDescription>
         </DialogHeader>
 

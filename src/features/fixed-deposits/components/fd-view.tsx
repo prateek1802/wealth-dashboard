@@ -11,17 +11,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FDCard } from "@/components/shared/fd-card";
 import { EmptyState } from "@/components/shared/empty-state";
-import { addFixedDepositAction, deleteFixedDepositAction, withdrawFixedDepositAction } from "../actions";
+import { addFixedDepositAction, editFixedDepositAction, deleteFixedDepositAction, withdrawFixedDepositAction } from "../actions";
 import { FD_PAYOUT_TYPES } from "@/constants/asset-types";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { todayISO } from "@/lib/utils/date";
-import { PiggyBank, Plus, Trash2, Banknote } from "lucide-react";
+import { PiggyBank, Plus, Trash2, Banknote, Pencil } from "lucide-react";
 import type { FDWithProjection } from "@/lib/services/fd.service";
 import type { FDPayoutType } from "@/constants/asset-types";
 
 export function FDView({ fds }: { fds: FDWithProjection[] }) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<FDWithProjection | null>(null);
   const [withdrawTarget, setWithdrawTarget] = useState<FDWithProjection | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FDWithProjection | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -42,15 +43,29 @@ export function FDView({ fds }: { fds: FDWithProjection[] }) {
   const totalPrincipal = activeFds.reduce((s, f) => s + f.principal, 0);
   const totalMaturity = activeFds.reduce((s, f) => s + f.projectedMaturityAmount, 0);
 
+  function openAdd() {
+    setEditTarget(null);
+    setInstitution(""); setPrincipal(""); setInterestRate(""); setStartDate(""); setMaturityDate(""); setTenureMonths(""); setPayoutType("cumulative");
+    setDialogOpen(true);
+  }
+
+  function openEdit(fd: FDWithProjection) {
+    setEditTarget(fd);
+    setInstitution(fd.institution); setPrincipal(fd.principal.toString()); setInterestRate(fd.interestRate.toString());
+    setStartDate(fd.startDate); setMaturityDate(fd.maturityDate); setTenureMonths(fd.tenureMonths.toString()); setPayoutType(fd.payoutType);
+    setDialogOpen(true);
+  }
+
   function handleSubmit() {
     setError(null);
     startTransition(async () => {
-      const result = await addFixedDepositAction({
+      const payload = {
         institution, principal: Number(principal), interestRate: Number(interestRate),
         startDate, maturityDate, tenureMonths: Number(tenureMonths), payoutType, notes: null,
-      });
+      };
+      const result = editTarget ? await editFixedDepositAction(editTarget.id, payload) : await addFixedDepositAction(payload);
       if (result.ok) {
-        toast.success("Fixed deposit added");
+        toast.success(editTarget ? "Fixed deposit updated" : "Fixed deposit added");
         setInstitution(""); setPrincipal(""); setInterestRate(""); setStartDate(""); setMaturityDate(""); setTenureMonths("");
         setDialogOpen(false);
       } else setError(result.error);
@@ -86,11 +101,11 @@ export function FDView({ fds }: { fds: FDWithProjection[] }) {
           <span className="text-ink-muted">Active principal <span className="font-tabular text-ink">{formatCurrency(totalPrincipal)}</span></span>
           <span className="text-ink-muted">Projected maturity <span className="font-tabular text-gain">{formatCurrency(totalMaturity)}</span></span>
         </div>
-        <Button onClick={() => setDialogOpen(true)}><Plus className="size-4" /> Add Fixed Deposit</Button>
+        <Button onClick={openAdd}><Plus className="size-4" /> Add Fixed Deposit</Button>
       </div>
 
       {fds.length === 0 ? (
-        <EmptyState icon={PiggyBank} title="No fixed deposits tracked" description="Add an FD to track its maturity timeline and expected interest." action={<Button onClick={() => setDialogOpen(true)}><Plus className="size-4" /> Add Fixed Deposit</Button>} />
+        <EmptyState icon={PiggyBank} title="No fixed deposits tracked" description="Add an FD to track its maturity timeline and expected interest." action={<Button onClick={openAdd}><Plus className="size-4" /> Add Fixed Deposit</Button>} />
       ) : (
         <>
           {activeFds.length > 0 && (
@@ -101,6 +116,9 @@ export function FDView({ fds }: { fds: FDWithProjection[] }) {
                   fd={fd}
                   actions={
                     <>
+                      <button onClick={() => openEdit(fd)} className="text-ink-muted hover:text-accent" title="Edit">
+                        <Pencil className="size-4" />
+                      </button>
                       <button onClick={() => { setWithdrawTarget(fd); setWithdrawalAmount(fd.projectedMaturityAmount.toString()); }} className="text-ink-muted hover:text-accent" title="Withdraw">
                         <Banknote className="size-4" />
                       </button>
@@ -144,7 +162,7 @@ export function FDView({ fds }: { fds: FDWithProjection[] }) {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Add fixed deposit</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editTarget ? "Edit fixed deposit" : "Add fixed deposit"}</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="fd-institution">Institution</Label>

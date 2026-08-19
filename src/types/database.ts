@@ -149,3 +149,14 @@ export interface WatchlistItemRow {
   created_at: string;
   updated_at: string;
 }
+
+export interface LiabilityRow {
+  id: string;
+  name: string;
+  liability_type: string;
+  amount_owed: number;
+  interest_rate: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}

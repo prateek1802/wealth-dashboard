@@ -19,6 +19,7 @@ import {
   LineChart,
   Menu,
   Banknote,
+  AlertTriangle,
   PiggyBank,
   ShieldCheck,
   Landmark,
@@ -58,6 +59,7 @@ const SECURITY_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund
 /** Same set as the desktop sidebar's "Holdings" group, plus Backup — reachable via the "More" sheet since there's no room for this many items in the fixed bottom tab bar. */
 const OTHER_MORE_ITEMS: NavItem[] = [
   { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+  { href: ROUTES.liabilities, label: "Liabilities", icon: AlertTriangle },
   { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
   { href: ROUTES.ppf, label: "PPF", icon: Landmark },

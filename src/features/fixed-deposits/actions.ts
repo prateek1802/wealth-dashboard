@@ -18,6 +18,20 @@ export async function addFixedDepositAction(input: unknown): Promise<ActionResul
   }
 }
 
+export async function editFixedDepositAction(id: string, input: unknown): Promise<ActionResult> {
+  const parsed = fixedDepositSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  try {
+    const { fixedDepositsRepository } = await import("@/lib/database/repositories/fixed-deposits.repository");
+    await fixedDepositsRepository.update(id, { ...parsed.data, maturityAmount: null, notes: parsed.data.notes ?? null });
+    revalidatePath(ROUTES.fixedDeposits);
+    revalidatePath(ROUTES.dashboard);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
 export async function withdrawFixedDepositAction(id: string, input: unknown): Promise<ActionResult> {
   const parsed = withdrawFixedDepositSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };

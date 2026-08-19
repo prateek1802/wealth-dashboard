@@ -252,6 +252,27 @@ end $$;
 create index if not exists price_history_asset_date_idx on price_history (asset_id, recorded_date);
 create index if not exists price_history_user_id_idx on price_history (user_id);
 
+-- ---- liabilities ----
+create table if not exists liabilities (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table liabilities add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
+alter table liabilities add column if not exists name text not null default '';
+alter table liabilities add column if not exists liability_type text not null default 'other';
+alter table liabilities add column if not exists amount_owed numeric(18,4) not null default 0;
+alter table liabilities add column if not exists interest_rate numeric(9,4);
+alter table liabilities add column if not exists notes text;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'liabilities_liability_type_check') then
+    alter table liabilities add constraint liabilities_liability_type_check check (liability_type in ('credit_card', 'personal_loan', 'home_loan', 'vehicle_loan', 'other'));
+  end if;
+end $$;
+create index if not exists liabilities_user_id_idx on liabilities (user_id);
+drop trigger if exists liabilities_set_updated_at on liabilities;
+create trigger liabilities_set_updated_at before update on liabilities for each row execute function set_updated_at();
+
 -- ---- watchlist_items ----
 create table if not exists watchlist_items (
   id uuid primary key default gen_random_uuid(),
@@ -277,7 +298,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['assets','transactions','portfolio_snapshots','goals','fixed_deposits','nps_accounts','nps_contributions','bank_accounts','ppf_accounts','price_history','watchlist_items']
+  foreach t in array array['assets','transactions','portfolio_snapshots','goals','fixed_deposits','nps_accounts','nps_contributions','bank_accounts','ppf_accounts','price_history','watchlist_items','liabilities']
   loop
     execute format('alter table %I enable row level security', t);
     execute format('drop policy if exists "owner_only" on %I', t);
