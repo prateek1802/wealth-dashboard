@@ -98,7 +98,7 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
           </div>
         ) : (
           <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[800px] text-sm">
               <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
                 <tr>
                   <th className="px-4 py-3">Asset</th>

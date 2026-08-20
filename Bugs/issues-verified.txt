@@ -11,17 +11,6 @@ WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
    NEEDS: browser console error / network tab response / Vercel function logs when the
    page fails to load, to diagnose further.
 
-5. Edit option in recorded transactions.
-   STATUS: CONFIRMED — feature exists in the code but is NOT wired into the UI.
-   TransactionDialog (transaction-dialog.tsx) fully supports an `editingTransaction` prop,
-   and editTransactionAction (transactions/actions.ts) is implemented and functional.
-   BUT: the main Transactions table (transactions-view.tsx) has no edit button — only
-   delete (Trash2). No `editingTransaction` prop is ever passed anywhere. Checked
-   investment-detail.tsx too — same story, only "Add transaction" is wired, not edit.
-   So the edit capability is fully built but effectively dead/unreachable in the UI.
-   FIX: add an edit (pencil) button per row in transactions-view.tsx that opens
-   TransactionDialog with editingTransaction={row} and asset={row.asset}.
-
 6. Resizing window isn't responsive.
    STATUS: CONFIRMED, diagnosed earlier this session with screenshot (this is known
    issue #11 in PROJECT-STATUS.md). Root cause: table wrappers use `overflow-x-auto`

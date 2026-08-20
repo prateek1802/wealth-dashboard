@@ -73,7 +73,7 @@ export function GrowthProjection({
           <p className="text-sm text-ink-muted">Add holdings to see a per-asset breakdown here.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="border-b border-border-subtle text-left text-xs font-medium text-ink-muted">
                 <tr>
                   <th className="py-2 pr-4">Asset</th>

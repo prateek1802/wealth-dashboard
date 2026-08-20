@@ -78,7 +78,7 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
         <EmptyState icon={Receipt} title="No transactions yet" description="Every BUY and SELL you record will show up here." />
       ) : (
         <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[900px] text-sm">
             <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
               <tr>
                 <th className="px-4 py-3">Date</th>

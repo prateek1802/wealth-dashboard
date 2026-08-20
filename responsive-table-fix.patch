@@ -1,0 +1,39 @@
+diff --git a/src/features/analytics/components/growth-projection.tsx b/src/features/analytics/components/growth-projection.tsx
+index 6b623bf..4c702a1 100644
+--- a/src/features/analytics/components/growth-projection.tsx
++++ b/src/features/analytics/components/growth-projection.tsx
+@@ -73,7 +73,7 @@ export function GrowthProjection({
+           <p className="text-sm text-ink-muted">Add holdings to see a per-asset breakdown here.</p>
+         ) : (
+           <div className="overflow-x-auto">
+-            <table className="w-full text-sm">
++            <table className="w-full min-w-[640px] text-sm">
+               <thead className="border-b border-border-subtle text-left text-xs font-medium text-ink-muted">
+                 <tr>
+                   <th className="py-2 pr-4">Asset</th>
+diff --git a/src/features/portfolio/components/portfolio-view.tsx b/src/features/portfolio/components/portfolio-view.tsx
+index 0d6be8c..b8654a4 100644
+--- a/src/features/portfolio/components/portfolio-view.tsx
++++ b/src/features/portfolio/components/portfolio-view.tsx
+@@ -98,7 +98,7 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
+           </div>
+         ) : (
+           <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
+-            <table className="w-full text-sm">
++            <table className="w-full min-w-[800px] text-sm">
+               <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
+                 <tr>
+                   <th className="px-4 py-3">Asset</th>
+diff --git a/src/features/transactions/components/transactions-view.tsx b/src/features/transactions/components/transactions-view.tsx
+index e679962..a79dc6a 100644
+--- a/src/features/transactions/components/transactions-view.tsx
++++ b/src/features/transactions/components/transactions-view.tsx
+@@ -78,7 +78,7 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
+         <EmptyState icon={Receipt} title="No transactions yet" description="Every BUY and SELL you record will show up here." />
+       ) : (
+         <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
+-          <table className="w-full text-sm">
++          <table className="w-full min-w-[900px] text-sm">
+             <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
+               <tr>
+                 <th className="px-4 py-3">Date</th>
