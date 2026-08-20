@@ -76,10 +76,15 @@ export function BankAccountsView({ accounts }: { accounts: BankAccount[] }) {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {accounts.map((a) => (
-            <Card key={a.id} className="relative flex flex-col gap-3 p-5">
+            <Card key={a.id} className="flex flex-col gap-3 p-5">
               <div className="flex items-start justify-between gap-2">
                 <span className="font-medium text-ink">{a.bankName}</span>
-                <Badge>{BANK_ACCOUNT_TYPE_LABELS[a.accountType]}</Badge>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Badge>{BANK_ACCOUNT_TYPE_LABELS[a.accountType]}</Badge>
+                  <button onClick={() => setDeleteTarget(a)} className="text-ink-muted hover:text-loss" title="Delete">
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
               </div>
               <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(a.currentBalance)}</span>
               <div className="mt-auto flex gap-2">
@@ -87,9 +92,6 @@ export function BankAccountsView({ accounts }: { accounts: BankAccount[] }) {
                   <Pencil className="size-3.5" /> Update balance
                 </Button>
               </div>
-              <button onClick={() => setDeleteTarget(a)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
-                <Trash2 className="size-4" />
-              </button>
             </Card>
           ))}
         </div>

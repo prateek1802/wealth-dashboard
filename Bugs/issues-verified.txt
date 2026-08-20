@@ -1,13 +1,6 @@
 WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
 (checked against wealth-dashboard.zip source dump, same session)
 
-2b. Need per-asset and per-asset-class refresh buttons (not just refresh-all).
-    STATUS: CONFIRMED MISSING. Only one entry point exists: refreshLivePricesAction(),
-    which always refreshes every asset. No scoped/filtered variant exists anywhere in
-    src/features/portfolio/actions.ts or the UI.
-    FIX: needs a new server action accepting an assetId or assetType filter, plus UI
-    buttons on the relevant pages/cards.
-
 3. Bank Account cards — UI overlap (icon overlapping other elements).
    STATUS: CONFIRMED BUG, same root cause as the FD card bug already fixed elsewhere.
    src/features/bank-accounts/components/bank-accounts-view.tsx (~line 79-92) still uses

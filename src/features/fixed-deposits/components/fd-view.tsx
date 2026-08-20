@@ -137,21 +137,23 @@ export function FDView({ fds }: { fds: FDWithProjection[] }) {
               <h3 className="text-sm font-medium text-ink-muted">Withdrawn / Closed</h3>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {withdrawnFds.map((fd) => (
-                  <div key={fd.id} className="relative rounded-[var(--radius-card)] border border-border-subtle bg-surface-sunken p-5 opacity-80">
-                    <div className="flex items-start justify-between">
+                  <div key={fd.id} className="rounded-[var(--radius-card)] border border-border-subtle bg-surface-sunken p-5 opacity-80">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="flex flex-col">
                         <span className="font-medium text-ink">{fd.institution}</span>
                         <span className="text-xs text-ink-muted">Withdrawn {fd.withdrawalDate ? formatDate(fd.withdrawalDate) : ""}</span>
                       </div>
-                      <Badge>Closed</Badge>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Badge>Closed</Badge>
+                        <button onClick={() => setDeleteTarget(fd)} className="text-ink-muted hover:text-loss" title="Delete">
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-3 flex items-baseline justify-between">
                       <span className="text-xs text-ink-muted">Principal {formatCurrency(fd.principal)}</span>
                       <span className="font-tabular font-medium text-ink">{fd.withdrawalAmount ? formatCurrency(fd.withdrawalAmount) : "—"}</span>
                     </div>
-                    <button onClick={() => setDeleteTarget(fd)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
-                      <Trash2 className="size-4" />
-                    </button>
                   </div>
                 ))}
               </div>

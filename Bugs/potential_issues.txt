@@ -1,4 +1,3 @@
-1. Create refresh button for stock/MF wise so that time can be saved refreshing.
 2. Holdings like Bank account have UI error (screenshot attached), overlap over each other.
 3. Liabilites section not loading.
 4. edit option in recorded transactions.
