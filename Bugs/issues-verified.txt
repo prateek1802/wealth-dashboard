@@ -11,17 +11,10 @@ WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
    NEEDS: browser console error / network tab response / Vercel function logs when the
    page fails to load, to diagnose further.
 
-6. Resizing window isn't responsive.
-   STATUS: CONFIRMED, diagnosed earlier this session with screenshot (this is known
-   issue #11 in PROJECT-STATUS.md). Root cause: table wrappers use `overflow-x-auto`
-   but the <table> itself has no min-w-[...], so cells shrink/text wraps instead of the
-   wrapper's horizontal scroll engaging. Affects transactions-view.tsx, portfolio-view.tsx,
-   and growth-projection.tsx (analytics). Fix already specified in PROJECT-STATUS.md.
-
 7. Need holding-category-wise XIRR (not just per-asset).
    STATUS: Already tracked as known issue #12 in PROJECT-STATUS.md — not started.
 
-8. Table view of holdings should show XIRR instead of % Allocation.
+8. Table view of holdings should show relevant stats like most apps like Zerodha or ET Money instead of % Allocation.
    STATUS: Already tracked as known issue #14 in PROJECT-STATUS.md — not started (one
    false start this session, cleanly reverted).
 

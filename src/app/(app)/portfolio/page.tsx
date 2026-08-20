@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function PortfolioPage({ searchParams }: { searchParams: Promise<{ type?: string }> }) {
   const { type } = await searchParams;
-  const allHoldings = await portfolioService.getHoldings();
+  const allHoldings = await portfolioService.getHoldingsWithXIRR();
   const holdings = type ? allHoldings.filter((h) => h.asset.assetType === type) : allHoldings;
   const title = type ? ASSET_TYPE_LABELS[type as AssetType] ?? "Portfolio" : "Portfolio";
 
