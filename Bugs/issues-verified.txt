@@ -1,0 +1,137 @@
+WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
+(checked against wealth-dashboard.zip source dump, same session)
+
+1. FIFO Average issue.
+   STATUS: Investigated earlier this session — no asset-class-specific bug found.
+   matchFIFOLots() / calculateRealizedPnL() (lots.ts) and calculateWeightedAverageCost()
+   (holdings.ts) operate on generic Transaction[] with zero assetType branching.
+   portfolio.service.ts runs every non-cash asset (stock/ETF/MF/crypto/bonds) through the
+   same summarizeAssetPosition() path. If a specific FIFO discrepancy is still being seen,
+   need the exact numbers (asset, transactions, expected vs actual realized P&L) to trace
+   further — the generic logic itself looks correct.
+
+2a. Refresh also refreshes zero-holding (fully sold-out) assets — wasteful.
+    STATUS: CONFIRMED BUG. src/features/portfolio/actions.ts, refreshLivePricesAction()
+    (~line 74) calls assetsRepository.findAll() and loops over ALL assets with no
+    quantity filter. Zero-holding assets get a live quote fetched and written every
+    time, same as active holdings.
+    FIX: filter to holdings with quantity > 0 (or reuse portfolioService.getHoldings())
+    before the refresh loop.
+
+2b. Need per-asset and per-asset-class refresh buttons (not just refresh-all).
+    STATUS: CONFIRMED MISSING. Only one entry point exists: refreshLivePricesAction(),
+    which always refreshes every asset. No scoped/filtered variant exists anywhere in
+    src/features/portfolio/actions.ts or the UI.
+    FIX: needs a new server action accepting an assetId or assetType filter, plus UI
+    buttons on the relevant pages/cards.
+
+3. Bank Account cards — UI overlap (icon overlapping other elements).
+   STATUS: CONFIRMED BUG, same root cause as the FD card bug already fixed elsewhere.
+   src/features/bank-accounts/components/bank-accounts-view.tsx (~line 79-92) still uses
+   the OLD pattern: a Badge inside the card's top header row, PLUS a separately
+   absolute-positioned delete button (`absolute right-4 top-4`) layered on top — these
+   can visually collide.
+   The FD cards (src/features/fixed-deposits/components/fd-view.tsx, active FDs section)
+   were already fixed by moving the delete/edit icons INTO the header's flex row via an
+   `actions` prop instead of absolute positioning. That fix was never applied to bank
+   accounts.
+   NOTE: the FD "Withdrawn/Closed" card section (fd-view.tsx ~line 140-154) still has the
+   same old absolute-positioned pattern too — same latent risk, not yet a reported bug.
+   FIX: apply the same actions-in-header-row pattern used for active FD cards to
+   bank-accounts-view.tsx (and optionally the withdrawn-FD section).
+
+4. Liabilities section not loading.
+   STATUS: Source code checked (page, service, repository, view component, schema) —
+   nothing structurally wrong found. Query, RLS policy, and schema (liabilities table in
+   both schema.sql and sync-schema.sql) all look correctly matched to the repository code.
+   This is most likely a LIVE/DEPLOYMENT issue, not a code bug — e.g. sync-schema.sql not
+   yet run against the deployed Supabase DB, an RLS/auth session issue, or a transient
+   error. Can't confirm root cause from static source alone.
+   NEEDS: browser console error / network tab response / Vercel function logs when the
+   page fails to load, to diagnose further.
+
+5. Edit option in recorded transactions.
+   STATUS: CONFIRMED — feature exists in the code but is NOT wired into the UI.
+   TransactionDialog (transaction-dialog.tsx) fully supports an `editingTransaction` prop,
+   and editTransactionAction (transactions/actions.ts) is implemented and functional.
+   BUT: the main Transactions table (transactions-view.tsx) has no edit button — only
+   delete (Trash2). No `editingTransaction` prop is ever passed anywhere. Checked
+   investment-detail.tsx too — same story, only "Add transaction" is wired, not edit.
+   So the edit capability is fully built but effectively dead/unreachable in the UI.
+   FIX: add an edit (pencil) button per row in transactions-view.tsx that opens
+   TransactionDialog with editingTransaction={row} and asset={row.asset}.
+
+6. Resizing window isn't responsive.
+   STATUS: CONFIRMED, diagnosed earlier this session with screenshot (this is known
+   issue #11 in PROJECT-STATUS.md). Root cause: table wrappers use `overflow-x-auto`
+   but the <table> itself has no min-w-[...], so cells shrink/text wraps instead of the
+   wrapper's horizontal scroll engaging. Affects transactions-view.tsx, portfolio-view.tsx,
+   and growth-projection.tsx (analytics). Fix already specified in PROJECT-STATUS.md.
+
+7. Need holding-category-wise XIRR (not just per-asset).
+   STATUS: Already tracked as known issue #12 in PROJECT-STATUS.md — not started.
+
+8. Table view of holdings should show XIRR instead of % Allocation.
+   STATUS: Already tracked as known issue #14 in PROJECT-STATUS.md — not started (one
+   false start this session, cleanly reverted).
+
+9. MF Equity / MF Debt labels are too long/visually heavy in cards.
+   STATUS: CONFIRMED — source of the exact text. src/constants/asset-types.ts:
+     mutual_fund: "Mutual Fund (Equity)"
+     mutual_fund_debt: "Mutual Fund (Debt)"
+   These are used directly as Badge/label text wherever asset type is displayed, which
+   explains the crowding in cards/tables.
+   FIX: shorten labels (e.g. "MF · Equity" / "MF · Debt", or just "Equity MF" / "Debt MF")
+   in this one constants file — single source of truth, so the fix propagates everywhere
+   automatically.
+
+10. Enable Vercel Analytics and Speed Insights.
+    STATUS: CONFIRMED NOT INSTALLED. No @vercel/analytics or @vercel/speed-insights in
+    package.json; no <Analytics/> or <SpeedInsights/> component in src/app/layout.tsx.
+    FIX: straightforward — add both packages, drop <Analytics/> and <SpeedInsights/> into
+    the root layout. No architectural conflict with anything else in the app.
+
+11. Rewrite NPS — auto-populate fund manager/scheme type, log each contribution from
+    start, include NPS in overall XIRR.
+    STATUS: CONFIRMED — current NPS implementation is manual-entry only.
+    - pension_fund_manager and tier are free-text/manual fields in the schema
+      (supabase/schema.sql ~line 149-162) — no dropdown or auto-populate list exists
+      anywhere in the NPS code.
+    - currentCorpus is a manually-maintained running number on the account, not derived
+      by summing nps_contributions rows (nps.service.ts).
+    - Dashboard's overall XIRR calculation (dashboard/page.tsx) only feeds it cash flows
+      from the securities `transactions` table — NPS contributions are never included.
+    This matches the request precisely: it's a genuine gap, not a bug. This is the
+    largest item on the list — effectively a feature rewrite (schema + service + UI),
+    not a small patch.
+
+12. Replace current dropdown grouping with a clickable-card view (asset class → card
+    view → individual holdings).
+    STATUS: Requires live/visual confirmation — no "dropdown" component (Radix Dropdown,
+    Accordion, Collapsible) was found by name in portfolio-view.tsx or the sidebar layout
+    components, so the exact current interaction pattern needs to be pinned down (likely
+    the sidebar's per-asset-class links, per PROJECT-STATUS.md's "separate sidebar link
+    per class held"). This is a UI/IA redesign request, not a bug — worth a quick
+    screenshot or screen-recording before scoping the rebuild.
+
+13. Auto-refresh prices at market close daily, regardless of whether the app is open.
+    STATUS: CONFIRMED — genuinely not implemented, and not currently possible in the
+    architecture as-is. Confirmed no vercel.json, no GitHub Actions workflow, and
+    ARCHITECTURE.md explicitly documents "no cron/scheduler in V1" as a known trade-off.
+    Prices only ever refresh when a user opens the app (opportunistic refresh pattern,
+    same mechanism as the snapshot-writing bug in #6/known-issue-#15).
+    FIX: needs genuine new infrastructure — a Vercel Cron Job (vercel.json + a protected
+    API route) is the natural fit for this stack, scheduled for IST market close. This is
+    infra work, not a simple code patch.
+
+SUMMARY — ready to patch directly (small/contained):
+  #2a, #3, #5, #9, #6 (already specified)
+
+SUMMARY — needs live diagnosis before a fix can be written:
+  #4 (liabilities not loading), #12 (dropdown → card view, needs current-behavior confirm)
+
+SUMMARY — larger feature work (design + multi-file changes):
+  #2b (scoped refresh), #7, #8 (already tracked), #11 (NPS rewrite), #13 (cron infra)
+
+SUMMARY — needs more specifics from user:
+  #1 (FIFO — no bug found in generic logic; need concrete numbers if still occurring)
