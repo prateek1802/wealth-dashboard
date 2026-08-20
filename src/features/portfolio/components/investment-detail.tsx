@@ -24,6 +24,7 @@ import type { PriceHistoryPoint } from "@/types/domain/price-history";
 export function InvestmentDetail({ holding, transactions, priceHistory }: { holding: Holding; transactions: Transaction[]; priceHistory: PriceHistoryPoint[] }) {
   const [editOpen, setEditOpen] = useState(false);
   const [addTxnOpen, setAddTxnOpen] = useState(false);
+  const [editTxnTarget, setEditTxnTarget] = useState<Transaction | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
   const { asset } = holding;
   const isGain = holding.unrealizedPnl >= 0;
@@ -137,9 +138,14 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
                       {formatDate(t.transactionDate)} {t.broker && `· ${t.broker}`} {(t.fees > 0 || t.taxes > 0) && `· fees/taxes ${formatCurrency(t.fees + t.taxes, asset.currency)}`}
                     </span>
                   </div>
-                  <button onClick={() => setDeleteTarget(t)} className="text-ink-muted hover:text-loss">
-                    <Trash2 className="size-4" />
-                  </button>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <button onClick={() => setEditTxnTarget(t)} className="text-ink-muted hover:text-accent" title="Edit">
+                      <Pencil className="size-4" />
+                    </button>
+                    <button onClick={() => setDeleteTarget(t)} className="text-ink-muted hover:text-loss" title="Delete">
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -148,7 +154,18 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
       </Card>
 
       <EditAssetDialog open={editOpen} onOpenChange={setEditOpen} asset={asset} />
-      <TransactionDialog open={addTxnOpen} onOpenChange={setAddTxnOpen} asset={asset} />
+      <TransactionDialog
+        key={editTxnTarget?.id ?? "add"}
+        open={addTxnOpen || !!editTxnTarget}
+        onOpenChange={(o) => {
+          if (!o) {
+            setAddTxnOpen(false);
+            setEditTxnTarget(null);
+          }
+        }}
+        asset={asset}
+        editingTransaction={editTxnTarget ?? undefined}
+      />
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(o) => !o && setDeleteTarget(null)}

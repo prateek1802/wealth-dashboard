@@ -13,7 +13,7 @@ import { formatDate } from "@/lib/utils/date";
 import { toCSV, downloadCSV } from "@/lib/utils/csv-export";
 import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
-import { Receipt, Plus, Download, Upload, Trash2 } from "lucide-react";
+import { Receipt, Plus, Download, Upload, Trash2, Pencil } from "lucide-react";
 import Link from "next/link";
 import { ROUTES } from "@/constants/routes";
 import type { Transaction } from "@/types/domain/transaction";
@@ -26,6 +26,7 @@ interface Row extends Transaction {
 export function TransactionsView({ rows }: { rows: Row[] }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Row | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Row | null>(null);
 
   function handleExport() {
@@ -109,9 +110,16 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
                   <td className="px-4 py-3 text-right font-tabular text-ink-muted">{formatCurrency(r.fees + r.taxes, r.asset?.currency)}</td>
                   <td className="px-4 py-3 text-ink-muted">{r.broker ?? "—"}</td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => setDeleteTarget(r)} className="text-ink-muted hover:text-loss">
-                      <Trash2 className="size-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-3">
+                      {r.asset && (
+                        <button onClick={() => setEditTarget(r)} className="text-ink-muted hover:text-accent" title="Edit">
+                          <Pencil className="size-4" />
+                        </button>
+                      )}
+                      <button onClick={() => setDeleteTarget(r)} className="text-ink-muted hover:text-loss" title="Delete">
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -120,7 +128,18 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
         </div>
       )}
 
-      <TransactionDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <TransactionDialog
+        key={editTarget?.id ?? "add"}
+        open={dialogOpen || !!editTarget}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDialogOpen(false);
+            setEditTarget(null);
+          }
+        }}
+        asset={editTarget?.asset}
+        editingTransaction={editTarget ?? undefined}
+      />
       <ImportCSVDialog open={importOpen} onOpenChange={setImportOpen} />
       <ConfirmDialog
         open={!!deleteTarget}

@@ -1,21 +1,6 @@
 WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
 (checked against wealth-dashboard.zip source dump, same session)
 
-3. Bank Account cards — UI overlap (icon overlapping other elements).
-   STATUS: CONFIRMED BUG, same root cause as the FD card bug already fixed elsewhere.
-   src/features/bank-accounts/components/bank-accounts-view.tsx (~line 79-92) still uses
-   the OLD pattern: a Badge inside the card's top header row, PLUS a separately
-   absolute-positioned delete button (`absolute right-4 top-4`) layered on top — these
-   can visually collide.
-   The FD cards (src/features/fixed-deposits/components/fd-view.tsx, active FDs section)
-   were already fixed by moving the delete/edit icons INTO the header's flex row via an
-   `actions` prop instead of absolute positioning. That fix was never applied to bank
-   accounts.
-   NOTE: the FD "Withdrawn/Closed" card section (fd-view.tsx ~line 140-154) still has the
-   same old absolute-positioned pattern too — same latent risk, not yet a reported bug.
-   FIX: apply the same actions-in-header-row pattern used for active FD cards to
-   bank-accounts-view.tsx (and optionally the withdrawn-FD section).
-
 4. Liabilities section not loading.
    STATUS: Source code checked (page, service, repository, view component, schema) —
    nothing structurally wrong found. Query, RLS policy, and schema (liabilities table in
