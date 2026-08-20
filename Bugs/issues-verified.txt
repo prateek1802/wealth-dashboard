@@ -1,15 +1,6 @@
 WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
 (checked against wealth-dashboard.zip source dump, same session)
 
-1. FIFO Average issue.
-   STATUS: Investigated earlier this session — no asset-class-specific bug found.
-   matchFIFOLots() / calculateRealizedPnL() (lots.ts) and calculateWeightedAverageCost()
-   (holdings.ts) operate on generic Transaction[] with zero assetType branching.
-   portfolio.service.ts runs every non-cash asset (stock/ETF/MF/crypto/bonds) through the
-   same summarizeAssetPosition() path. If a specific FIFO discrepancy is still being seen,
-   need the exact numbers (asset, transactions, expected vs actual realized P&L) to trace
-   further — the generic logic itself looks correct.
-
 2a. Refresh also refreshes zero-holding (fully sold-out) assets — wasteful.
     STATUS: CONFIRMED BUG. src/features/portfolio/actions.ts, refreshLivePricesAction()
     (~line 74) calls assetsRepository.findAll() and loops over ALL assets with no
