@@ -1,5 +1,6 @@
 import type { Transaction } from "@/types/domain/transaction";
 import { netCashFlow } from "./cashflow";
+import { matchFIFOLots } from "./lots";
 
 /**
  * Net units currently held. SELLs reduce quantity; the caller is responsible
@@ -15,35 +16,26 @@ export function calculateHoldingQuantity(transactions: Transaction[]): number {
 /**
  * Weighted-average cost per unit of CURRENTLY HELD units, including buy-side
  * fees/taxes folded into cost basis. This answers "what am I holding it at,
- * on average" — it is NOT used for realized P&L (see lots.ts for that).
+ * on average".
  *
- * Implementation: walk transactions in date order maintaining a running
- * (quantity, totalCost) position. SELLs reduce quantity proportionally
- * without changing the average cost of what remains (standard weighted-
- * average accounting) — they do NOT trigger a FIFO lot lookup here, since
- * that lookup only matters for realized P&L, not for the displayed average.
+ * Implementation: derived from the same FIFO lot matching used for realized
+ * P&L (see lots.ts) — each SELL consumes the oldest open lot(s) first, and
+ * the average is the size-weighted average cost of whatever lots remain
+ * open. This replaces a prior single-blended-pool implementation where a
+ * SELL was priced off the running average at that instant, which meant a
+ * same-day offsetting BUY+SELL (net quantity unchanged) could still shift
+ * the displayed average cost — since the SELL was blending in the new BUY's
+ * price rather than being matched against a specific lot. FIFO matching
+ * fixes that: the average only moves when a specific lot is actually
+ * consumed or added.
  */
 export function calculateWeightedAverageCost(transactions: Transaction[]): number {
-  const ordered = [...transactions].sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
+  const openLots = matchFIFOLots(transactions);
 
-  let quantity = 0;
-  let totalCost = 0;
-
-  for (const t of ordered) {
-    if (t.transactionType === "BUY") {
-      const buyCost = t.quantity * t.price + t.fees + t.taxes;
-      totalCost += buyCost;
-      quantity += t.quantity;
-    } else {
-      if (quantity <= 0) continue;
-      const avgCostBefore = totalCost / quantity;
-      const costRemoved = avgCostBefore * t.quantity;
-      totalCost -= costRemoved;
-      quantity -= t.quantity;
-    }
-  }
-
+  const quantity = openLots.reduce((sum, lot) => sum + lot.quantity, 0);
   if (quantity <= 0) return 0;
+
+  const totalCost = openLots.reduce((sum, lot) => sum + lot.quantity * lot.costBasisPerUnit, 0);
   return totalCost / quantity;
 }
 
