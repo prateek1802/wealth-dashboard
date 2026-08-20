@@ -3,6 +3,7 @@ import { useState, useTransition, type MouseEvent } from "react";
 import { toast } from "sonner";
 import { InvestmentCard } from "@/components/shared/investment-card";
 import { EmptyState } from "@/components/shared/empty-state";
+import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
@@ -106,16 +107,18 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
                   <th className="px-4 py-3 text-right">Value</th>
                   <th className="px-4 py-3 text-right">P&amp;L</th>
                   <th className="px-4 py-3 text-right">Allocation</th>
+                  <th className="px-4 py-3 w-10" aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
                 {holdings.map((h) => {
                   const isGain = h.unrealizedPnl >= 0;
+                  const label = getAssetDisplayLabel(h.asset).primary;
                   return (
                     <tr key={h.asset.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
                       <td className="px-4 py-3">
                         <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex flex-col">
-                          <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(h.asset).primary}</span>
+                          <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{label}</span>
                           <span className={cn("text-xs text-ink-muted", (h.asset.assetType === "mutual_fund" || h.asset.assetType === "mutual_fund_debt") && "font-mono")}>{getAssetDisplayLabel(h.asset).secondary}</span>
                         </Link>
                       </td>
@@ -126,6 +129,9 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
                         {formatSignedCurrency(h.unrealizedPnl, h.asset.currency)} ({formatPercent(h.unrealizedPnlPercent)})
                       </td>
                       <td className="px-4 py-3 text-right font-tabular text-ink-muted">{h.allocationPercent.toFixed(1)}%</td>
+                      <td className="px-4 py-3 text-right">
+                        <AssetRefreshButton assetId={h.asset.id} assetLabel={label} />
+                      </td>
                     </tr>
                   );
                 })}

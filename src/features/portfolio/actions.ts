@@ -96,6 +96,9 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
         await assetsRepository.updatePrice(asset.id, quote.price);
         await priceHistoryService.record(asset.id, quote.price);
         updated += 1;
+        // Covers the per-asset refresh button on the investment detail page
+        // — dashboard/portfolio revalidation below doesn't touch this route.
+        revalidatePath(ROUTES.investmentDetail(asset.id));
       } else {
         skipped.push(asset.symbol);
       }

@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
 import { formatCurrency, formatSignedCurrency, formatPercent } from "@/lib/utils/currency";
 import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
@@ -21,7 +22,10 @@ export function InvestmentCard({ holding }: { holding: Holding }) {
             <span className={cn("truncate text-sm font-medium text-ink", holding.asset.assetType !== "mutual_fund" && holding.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{primary}</span>
             <span className={cn("truncate text-xs text-ink-muted", (holding.asset.assetType === "mutual_fund" || holding.asset.assetType === "mutual_fund_debt") && "font-mono")}>{secondary}</span>
           </div>
-          <Badge>{ASSET_TYPE_LABELS[holding.asset.assetType]}</Badge>
+          <div className="flex items-center gap-1">
+            <Badge>{ASSET_TYPE_LABELS[holding.asset.assetType]}</Badge>
+            <AssetRefreshButton assetId={holding.asset.id} assetLabel={primary} />
+          </div>
         </div>
 
         <div className="flex flex-col gap-1">

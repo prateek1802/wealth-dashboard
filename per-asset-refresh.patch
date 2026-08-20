@@ -1,0 +1,166 @@
+diff --git a/src/components/shared/asset-refresh-button.tsx b/src/components/shared/asset-refresh-button.tsx
+new file mode 100644
+index 0000000..be28cf3
+--- /dev/null
++++ b/src/components/shared/asset-refresh-button.tsx
+@@ -0,0 +1,60 @@
++"use client";
++import { useTransition, type MouseEvent } from "react";
++import { toast } from "sonner";
++import { RefreshCw } from "lucide-react";
++import { Button } from "@/components/ui/button";
++import { refreshLivePricesAction } from "@/features/portfolio/actions";
++import { cn } from "@/lib/utils/cn";
++
++/**
++ * Refreshes the live price for a SINGLE asset. Wraps the same
++ * refreshLivePricesAction used for the group/portfolio-wide refresh
++ * buttons, just scoped to one asset id, so all three refresh levels
++ * (single asset, asset-class group, whole portfolio) share one code path.
++ *
++ * Safe to place inside a <Link> card (e.g. InvestmentCard): stops
++ * propagation and prevents navigation on click.
++ */
++export function AssetRefreshButton({
++  assetId,
++  assetLabel,
++  iconClassName = "size-3.5",
++  className,
++}: {
++  assetId: string;
++  assetLabel: string;
++  iconClassName?: string;
++  className?: string;
++}) {
++  const [isRefreshing, startRefresh] = useTransition();
++
++  function handleClick(e: MouseEvent) {
++    e.preventDefault();
++    e.stopPropagation();
++    startRefresh(async () => {
++      const result = await refreshLivePricesAction([assetId]);
++      if ("error" in result) {
++        toast.error(result.error);
++        return;
++      }
++      if (result.updated === 0) {
++        toast.info(`No live price source for ${assetLabel}.`);
++      } else {
++        toast.success(`${assetLabel} price updated`);
++      }
++    });
++  }
++
++  return (
++    <Button
++      variant="ghost"
++      size="icon"
++      onClick={handleClick}
++      disabled={isRefreshing}
++      title={`Refresh price for ${assetLabel}`}
++      className={cn("h-7 w-7 text-ink-muted hover:text-ink", className)}
++    >
++      <RefreshCw className={cn(iconClassName, isRefreshing && "animate-spin")} />
++    </Button>
++  );
++}
+diff --git a/src/components/shared/investment-card.tsx b/src/components/shared/investment-card.tsx
+index c67bb63..37b9095 100644
+--- a/src/components/shared/investment-card.tsx
++++ b/src/components/shared/investment-card.tsx
+@@ -2,6 +2,7 @@
+ import Link from "next/link";
+ import { Card } from "@/components/ui/card";
+ import { Badge } from "@/components/ui/badge";
++import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
+ import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
+ import { formatCurrency, formatSignedCurrency, formatPercent } from "@/lib/utils/currency";
+ import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
+@@ -21,7 +22,10 @@ export function InvestmentCard({ holding }: { holding: Holding }) {
+             <span className={cn("truncate text-sm font-medium text-ink", holding.asset.assetType !== "mutual_fund" && holding.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{primary}</span>
+             <span className={cn("truncate text-xs text-ink-muted", (holding.asset.assetType === "mutual_fund" || holding.asset.assetType === "mutual_fund_debt") && "font-mono")}>{secondary}</span>
+           </div>
+-          <Badge>{ASSET_TYPE_LABELS[holding.asset.assetType]}</Badge>
++          <div className="flex items-center gap-1">
++            <Badge>{ASSET_TYPE_LABELS[holding.asset.assetType]}</Badge>
++            <AssetRefreshButton assetId={holding.asset.id} assetLabel={primary} />
++          </div>
+         </div>
+ 
+         <div className="flex flex-col gap-1">
+diff --git a/src/features/portfolio/actions.ts b/src/features/portfolio/actions.ts
+index 1e292a8..418d83e 100644
+--- a/src/features/portfolio/actions.ts
++++ b/src/features/portfolio/actions.ts
+@@ -96,6 +96,9 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
+         await assetsRepository.updatePrice(asset.id, quote.price);
+         await priceHistoryService.record(asset.id, quote.price);
+         updated += 1;
++        // Covers the per-asset refresh button on the investment detail page
++        // — dashboard/portfolio revalidation below doesn't touch this route.
++        revalidatePath(ROUTES.investmentDetail(asset.id));
+       } else {
+         skipped.push(asset.symbol);
+       }
+diff --git a/src/features/portfolio/components/investment-detail.tsx b/src/features/portfolio/components/investment-detail.tsx
+index 6977a73..0a5b711 100644
+--- a/src/features/portfolio/components/investment-detail.tsx
++++ b/src/features/portfolio/components/investment-detail.tsx
+@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/shared/empty-state";
+ import { PerformanceLineChart } from "@/components/charts/performance-line-chart";
+ import { EditAssetDialog } from "./edit-asset-dialog";
+ import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
++import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
+ import { deleteTransactionAction } from "@/features/transactions/actions";
+ import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
+ import { formatDate } from "@/lib/utils/date";
+@@ -45,6 +46,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
+           <p className="text-sm text-ink-muted">{getAssetDisplayLabel(asset).secondary}</p>
+         </div>
+         <div className="flex gap-2">
++          <AssetRefreshButton assetId={asset.id} assetLabel={getAssetDisplayLabel(asset).primary} className="h-10 w-10" iconClassName="size-4" />
+           <Button variant="outline" onClick={() => setEditOpen(true)}>
+             <Pencil className="size-4" /> Edit Asset
+           </Button>
+diff --git a/src/features/portfolio/components/portfolio-view.tsx b/src/features/portfolio/components/portfolio-view.tsx
+index e655289..0d6be8c 100644
+--- a/src/features/portfolio/components/portfolio-view.tsx
++++ b/src/features/portfolio/components/portfolio-view.tsx
+@@ -3,6 +3,7 @@ import { useState, useTransition, type MouseEvent } from "react";
+ import { toast } from "sonner";
+ import { InvestmentCard } from "@/components/shared/investment-card";
+ import { EmptyState } from "@/components/shared/empty-state";
++import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
+ import { Button } from "@/components/ui/button";
+ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+ import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
+@@ -106,16 +107,18 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
+                   <th className="px-4 py-3 text-right">Value</th>
+                   <th className="px-4 py-3 text-right">P&amp;L</th>
+                   <th className="px-4 py-3 text-right">Allocation</th>
++                  <th className="px-4 py-3 w-10" aria-label="Actions" />
+                 </tr>
+               </thead>
+               <tbody>
+                 {holdings.map((h) => {
+                   const isGain = h.unrealizedPnl >= 0;
++                  const label = getAssetDisplayLabel(h.asset).primary;
+                   return (
+                     <tr key={h.asset.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
+                       <td className="px-4 py-3">
+                         <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex flex-col">
+-                          <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(h.asset).primary}</span>
++                          <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{label}</span>
+                           <span className={cn("text-xs text-ink-muted", (h.asset.assetType === "mutual_fund" || h.asset.assetType === "mutual_fund_debt") && "font-mono")}>{getAssetDisplayLabel(h.asset).secondary}</span>
+                         </Link>
+                       </td>
+@@ -126,6 +129,9 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
+                         {formatSignedCurrency(h.unrealizedPnl, h.asset.currency)} ({formatPercent(h.unrealizedPnlPercent)})
+                       </td>
+                       <td className="px-4 py-3 text-right font-tabular text-ink-muted">{h.allocationPercent.toFixed(1)}%</td>
++                      <td className="px-4 py-3 text-right">
++                        <AssetRefreshButton assetId={h.asset.id} assetLabel={label} />
++                      </td>
+                     </tr>
+                   );
+                 })}

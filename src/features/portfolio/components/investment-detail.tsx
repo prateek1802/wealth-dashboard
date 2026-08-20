@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { PerformanceLineChart } from "@/components/charts/performance-line-chart";
 import { EditAssetDialog } from "./edit-asset-dialog";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
+import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { deleteTransactionAction } from "@/features/transactions/actions";
 import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
@@ -45,6 +46,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
           <p className="text-sm text-ink-muted">{getAssetDisplayLabel(asset).secondary}</p>
         </div>
         <div className="flex gap-2">
+          <AssetRefreshButton assetId={asset.id} assetLabel={getAssetDisplayLabel(asset).primary} className="h-10 w-10" iconClassName="size-4" />
           <Button variant="outline" onClick={() => setEditOpen(true)}>
             <Pencil className="size-4" /> Edit Asset
           </Button>
