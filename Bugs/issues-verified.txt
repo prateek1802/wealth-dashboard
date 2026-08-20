@@ -1,14 +1,6 @@
 WEALTH DASHBOARD — ISSUE LIST, VERIFIED AGAINST SOURCE
 (checked against wealth-dashboard.zip source dump, same session)
 
-2a. Refresh also refreshes zero-holding (fully sold-out) assets — wasteful.
-    STATUS: CONFIRMED BUG. src/features/portfolio/actions.ts, refreshLivePricesAction()
-    (~line 74) calls assetsRepository.findAll() and loops over ALL assets with no
-    quantity filter. Zero-holding assets get a live quote fetched and written every
-    time, same as active holdings.
-    FIX: filter to holdings with quantity > 0 (or reuse portfolioService.getHoldings())
-    before the refresh loop.
-
 2b. Need per-asset and per-asset-class refresh buttons (not just refresh-all).
     STATUS: CONFIRMED MISSING. Only one entry point exists: refreshLivePricesAction(),
     which always refreshes every asset. No scoped/filtered variant exists anywhere in
