@@ -1,6 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { assetsRepository } from "@/lib/database/repositories/assets.repository";
+import { portfolioService } from "@/lib/services/portfolio.service";
 import { assetSchema, assetPriceUpdateSchema } from "@/lib/validation/asset.schema";
 import { ROUTES } from "@/constants/routes";
 import type { ActionResult } from "@/features/transactions/actions";
@@ -61,21 +62,35 @@ export interface RefreshPricesResult {
 }
 
 /**
- * Fetches a live quote for every active security via the free CoinGecko
- * (crypto) / Yahoo Finance (equities) sources in lib/market-data/live-provider.ts,
- * and writes whatever it successfully got back via the same updatePrice()
- * path Edit Asset uses. Best-effort per asset — one failed quote never
- * blocks the others. Cash, FD, NPS, and PPF have no market quote by design.
+ * Fetches a live quote for every CURRENTLY HELD security (quantity > 0) via
+ * the free CoinGecko (crypto) / Yahoo Finance (equities) / mfapi.in (Indian
+ * MF) sources in lib/market-data/live-provider.ts, and writes whatever it
+ * successfully got back via the same updatePrice() path Edit Asset uses.
+ * Best-effort per asset — one failed quote never blocks the others. Cash,
+ * FD, NPS, and PPF have no market quote by design.
+ *
+ * Scoped to `portfolioService.getHoldings()` (quantity > 0), NOT
+ * `assetsRepository.findAll()` — a fully-sold-out (zero-holding) asset is
+ * kept around for its realized P&L history but has nothing live to refresh,
+ * so refreshing it every time was pure wasted API calls.
+ *
+ * @param assetIds Optional subset to refresh — e.g. just one asset-class
+ * group's holdings (Stocks, Mutual Funds, ...) from the portfolio page, so
+ * the user isn't stuck re-fetching everything to update one section.
+ * Omit to refresh all current holdings.
  */
-export async function refreshLivePricesAction(): Promise<RefreshPricesResult | { ok: false; error: string }> {
+export async function refreshLivePricesAction(assetIds?: string[]): Promise<RefreshPricesResult | { ok: false; error: string }> {
   try {
     const { getLiveQuoteForAsset } = await import("@/lib/market-data/live-provider");
     const { priceHistoryService } = await import("@/lib/services/price-history.service");
-    const assets = await assetsRepository.findAll();
+    const holdings = await portfolioService.getHoldings();
+    const idFilter = assetIds ? new Set(assetIds) : null;
+    const targets = idFilter ? holdings.filter((h) => idFilter.has(h.asset.id)) : holdings;
+
     let updated = 0;
     const skipped: string[] = [];
 
-    for (const asset of assets) {
+    for (const { asset } of targets) {
       const quote = await getLiveQuoteForAsset(asset);
       if (quote) {
         await assetsRepository.updatePrice(asset.id, quote.price);

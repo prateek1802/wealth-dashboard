@@ -10,3 +10,5 @@
 10. Rewrite NPS. Fund manager and type of scheme like lc 50 should auto-populate. Then allow to log each transaction contribution from start, also include nps transaction in overall xirr calculations.
 11. Instead of drop down when clicked on holdings, make it a clickable button which opens a cardview page showing all assets which when clicked shows individuals holdings under that asset.
 12. Auto refresh at end of market close whether app opened or not daily to get better wealth growth idea.
+13. Need details like avg nav present nav units hold in Mutual funds instead of same format like stocks.
+14. view more button in transaction history if it gets too long.

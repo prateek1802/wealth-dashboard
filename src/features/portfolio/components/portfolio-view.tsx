@@ -1,5 +1,5 @@
 "use client";
-import { useState, useTransition } from "react";
+import { useState, useTransition, type MouseEvent } from "react";
 import { toast } from "sonner";
 import { InvestmentCard } from "@/components/shared/investment-card";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -48,19 +48,46 @@ function groupHoldings(holdings: Holding[]) {
 
 function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: string; holdings: Holding[]; view: "cards" | "table"; hideHeader?: boolean }) {
   const [open, setOpen] = useState(true);
+  const [isRefreshing, startRefresh] = useTransition();
   const total = holdings.reduce((s, h) => s + h.currentValue, 0);
+
+  function handleGroupRefresh(e: MouseEvent) {
+    e.stopPropagation(); // don't also toggle the collapse
+    startRefresh(async () => {
+      const result = await refreshLivePricesAction(holdings.map((h) => h.asset.id));
+      if ("error" in result) {
+        toast.error(result.error);
+        return;
+      }
+      if (result.updated === 0) {
+        toast.info(`No live prices available for ${label || "this group"}.`);
+      } else {
+        toast.success(`Updated ${result.updated} price${result.updated === 1 ? "" : "s"}${result.skipped.length ? ` · ${result.skipped.length} skipped` : ""}`);
+      }
+    });
+  }
 
   return (
     <div className="flex flex-col gap-3">
       {!hideHeader && (
-        <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1 text-left">
-          <div className="flex items-center gap-2">
+        <div className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-1 py-1">
+          <button onClick={() => setOpen((o) => !o)} className="flex flex-1 items-center gap-2 text-left">
             <ChevronDown className={cn("size-4 text-ink-muted transition-transform", !open && "-rotate-90")} />
             <span className="text-sm font-medium text-ink">{label}</span>
             <span className="text-xs text-ink-muted">({holdings.length})</span>
+          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleGroupRefresh}
+              disabled={isRefreshing}
+              title={`Refresh prices for ${label}`}
+              className="rounded-[var(--radius-control)] p-1 text-ink-muted hover:bg-surface-sunken hover:text-ink disabled:opacity-50"
+            >
+              <RefreshCw className={cn("size-3.5", isRefreshing && "animate-spin")} />
+            </button>
+            <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
           </div>
-          <span className="font-tabular text-sm text-ink-muted">{formatCurrency(total)}</span>
-        </button>
+        </div>
       )}
 
       {(open || hideHeader) && (
@@ -119,7 +146,7 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
 
   function handleRefresh() {
     startRefresh(async () => {
-      const result = await refreshLivePricesAction();
+      const result = await refreshLivePricesAction(holdings.map((h) => h.asset.id));
       if ("error" in result) {
         toast.error(result.error);
         return;
