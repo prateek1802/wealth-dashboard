@@ -168,6 +168,7 @@ create table if not exists nps_accounts (
 alter table nps_accounts add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
 alter table nps_accounts add column if not exists tier text not null default 'Tier I';
 alter table nps_accounts add column if not exists pension_fund_manager text;
+alter table nps_accounts add column if not exists scheme_preference text;
 alter table nps_accounts add column if not exists pran text;
 alter table nps_accounts add column if not exists current_corpus numeric(18,4) not null default 0;
 alter table nps_accounts add column if not exists expected_annual_return numeric(9,4);

@@ -1,6 +1,5 @@
 3. Liabilites section not loading.
 6. Also need holding category wise XIRR too.
-7. Table form of asset must be more detailed, should have xirr or stuff rather than % allocation.
 8. MF Equity and debt holdings have large written texts like MF Equity and Debt (make it clean). [screenshot attached]
 9. enable vercel analytics and speed insights.
 10. Rewrite NPS. Fund manager and type of scheme like lc 50 should auto-populate. Then allow to log each transaction contribution from start, also include nps transaction in overall xirr calculations.

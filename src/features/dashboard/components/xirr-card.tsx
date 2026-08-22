@@ -11,6 +11,7 @@ export function XIRRCard({ xirr }: { xirr: CalcResult<number> }) {
       ) : (
         <span className="text-sm text-ink-muted">{xirr.reason}</span>
       )}
+      <span className="text-xs text-ink-muted">Securities + NPS · excludes FD, PPF, cash</span>
     </Card>
   );
 }

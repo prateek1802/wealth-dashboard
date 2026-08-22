@@ -1,6 +1,8 @@
 import { npsRepository } from "@/lib/database/repositories/nps.repository";
-import { projectNPSCorpus } from "@/lib/calculations/nps";
+import { projectNPSCorpus, buildNPSCashflows } from "@/lib/calculations/nps";
+import { todayISO } from "@/lib/utils/date";
 import type { NPSProjectionPoint, NewNPSContribution, NewNPSAccount } from "@/types/domain/nps";
+import type { Cashflow } from "@/lib/calculations/returns";
 
 export const npsService = {
   async listAccounts() {
@@ -52,5 +54,15 @@ export const npsService = {
   async currentCorpus(): Promise<number> {
     const accounts = await npsRepository.findAll();
     return accounts.reduce((sum, a) => sum + a.currentCorpus, 0);
+  },
+
+  /**
+   * Cash flows for the portfolio-wide XIRR — see buildNPSCashflows() in
+   * calculations/nps.ts for the modeling details (untracked pre-logging
+   * corpus, terminal value, etc.).
+   */
+  async getCashflows(): Promise<Cashflow[]> {
+    const [accounts, contributions] = await Promise.all([npsRepository.findAll(), npsRepository.findAllContributions()]);
+    return buildNPSCashflows(accounts, contributions, todayISO());
   },
 };

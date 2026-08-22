@@ -1,4 +1,5 @@
-import type { NPSProjectionPoint } from "@/types/domain/nps";
+import type { NPSProjectionPoint, NPSAccount, NPSContribution } from "@/types/domain/nps";
+import type { Cashflow } from "./returns";
 
 /**
  * Year-by-year NPS corpus projection. Clearly an ESTIMATE — the UI is
@@ -30,4 +31,41 @@ export function projectNPSCorpus(params: {
   }
 
   return points;
+}
+
+/**
+ * Cash flows for the portfolio-wide XIRR: every logged contribution is an
+ * outflow on its own date, plus one lump-sum terminal inflow (`today`) per
+ * account for its current corpus.
+ *
+ * Contribution logging is a newer feature, so for each account there's
+ * usually a gap between `currentCorpus` and the sum of its logged
+ * contributions — money contributed before logging started, or before the
+ * account existed in this app at all. That gap is modeled as a single
+ * outflow on the account's `createdAt` date, so the XIRR isn't skewed by
+ * treating untracked historical corpus as if it appeared for free. If a
+ * withdrawal has pushed logged contributions above the current corpus,
+ * there's nothing sensible to back out, so that account contributes no
+ * synthetic entry for the gap (withdrawals aren't dated cash-flow events
+ * here — npsRepository.withdraw() just reduces the corpus in place).
+ */
+export function buildNPSCashflows(accounts: NPSAccount[], contributions: NPSContribution[], today: string): Cashflow[] {
+  const flows: Cashflow[] = [];
+
+  for (const account of accounts) {
+    const own = contributions.filter((c) => c.npsAccountId === account.id);
+    const loggedTotal = own.reduce((sum, c) => sum + c.employeeAmount + c.employerAmount, 0);
+    const untracked = account.currentCorpus - loggedTotal;
+    if (untracked > 0) {
+      flows.push({ date: account.createdAt.slice(0, 10), amount: -untracked });
+    }
+    for (const c of own) {
+      flows.push({ date: c.contributionDate, amount: -(c.employeeAmount + c.employerAmount) });
+    }
+    if (account.currentCorpus > 0) {
+      flows.push({ date: today, amount: account.currentCorpus });
+    }
+  }
+
+  return flows;
 }

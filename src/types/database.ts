@@ -88,6 +88,7 @@ export interface NPSAccountRow {
   id: string;
   tier: string;
   pension_fund_manager: string | null;
+  scheme_preference: string | null;
   pran: string | null;
   current_corpus: number;
   expected_annual_return: number | null;

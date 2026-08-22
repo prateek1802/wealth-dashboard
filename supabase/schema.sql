@@ -151,6 +151,7 @@ create table nps_accounts (
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   tier text not null default 'Tier I' check (tier in ('Tier I', 'Tier II')),
   pension_fund_manager text,
+  scheme_preference text,
   pran text,
   current_corpus numeric(18,4) not null default 0,
   expected_annual_return numeric(9,4),

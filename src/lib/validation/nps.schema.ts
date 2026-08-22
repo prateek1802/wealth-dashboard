@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { NPS_TIERS } from "@/constants/nps";
+import { NPS_TIERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
 
 export const npsAccountSchema = z.object({
   tier: z.enum(NPS_TIERS),
   pensionFundManager: z.string().trim().max(200).nullable().default(null),
+  schemePreference: z.enum(NPS_SCHEME_PREFERENCES).nullable().default(null),
   pran: z.string().trim().max(20).nullable().default(null),
   currentCorpus: z.coerce.number().nonnegative().default(0),
   expectedAnnualReturn: z.coerce.number().positive().max(30).nullable().default(null),

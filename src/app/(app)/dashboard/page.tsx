@@ -2,6 +2,7 @@ import { TopBar } from "@/components/layout/top-bar";
 import { portfolioService } from "@/lib/services/portfolio.service";
 import { snapshotService } from "@/lib/services/snapshot.service";
 import { fdService } from "@/lib/services/fd.service";
+import { npsService } from "@/lib/services/nps.service";
 import { goalsRepository } from "@/lib/database/repositories/goals.repository";
 import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { calculateXIRR } from "@/lib/calculations/returns";
@@ -25,7 +26,7 @@ export default async function DashboardPage() {
   // Opportunistic snapshot write — see ARCHITECTURE.md trade-off #2 (no cron in V1).
   await snapshotService.recordTodaysSnapshot().catch(() => {});
 
-  const [summary, allocation, topHoldings, activity, goals, fds, performance, transactions, breakdown] = await Promise.all([
+  const [summary, allocation, topHoldings, activity, goals, fds, performance, transactions, breakdown, npsCashflows] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     portfolioService.getTopHoldings(5),
@@ -35,13 +36,17 @@ export default async function DashboardPage() {
     portfolioService.getPortfolioPerformance("3M"),
     transactionsRepository.findAll(),
     portfolioService.getSegregatedBreakdown(),
+    npsService.getCashflows(),
   ]);
 
-  const cashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
-  if (cashflows.length > 0) {
-    cashflows.push({ date: todayISO(), amount: summary.currentValue });
+  const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+  if (securitiesCashflows.length > 0) {
+    securitiesCashflows.push({ date: todayISO(), amount: summary.currentValue });
   }
-  const xirr = calculateXIRR(cashflows);
+  // Securities + NPS pooled into one portfolio-wide XIRR. FD, PPF, and bank
+  // cash aren't included yet — those don't have per-transaction cash flows
+  // logged the way securities and NPS contributions do.
+  const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
 
   return (
     <div>

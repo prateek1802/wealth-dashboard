@@ -171,7 +171,7 @@ export const backupService = {
     for (const account of backup.npsAccounts ?? []) {
       try {
         const created = await npsRepository.create({
-          tier: account.tier, pensionFundManager: account.pensionFundManager, pran: account.pran,
+          tier: account.tier, pensionFundManager: account.pensionFundManager, schemePreference: account.schemePreference, pran: account.pran,
           currentCorpus: account.currentCorpus, expectedAnnualReturn: account.expectedAnnualReturn,
           monthlyContribution: account.monthlyContribution, annualContributionIncrease: account.annualContributionIncrease,
           retirementYear: account.retirementYear,

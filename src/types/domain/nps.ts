@@ -1,9 +1,10 @@
-import type { NPSTier } from "@/constants/nps";
+import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
 
 export interface NPSAccount {
   id: string;
   tier: NPSTier;
   pensionFundManager: string | null;
+  schemePreference: NPSSchemePreference | null;
   pran: string | null;
   currentCorpus: number;
   expectedAnnualReturn: number | null;

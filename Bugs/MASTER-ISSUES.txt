@@ -1,0 +1,157 @@
+WEALTH DASHBOARD — CONSOLIDATED ISSUE LIST (master, de-duplicated)
+Verified against source (wealth-dashboard.zip, latest upload). Supersedes
+issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
+
+====================================================================
+✅ CONFIRMED FIXED (verified in latest source — nothing to do)
+====================================================================
+- Refresh no longer touches zero-holding (fully sold-out) assets — scoped to
+  portfolioService.getHoldings() (quantity > 0) instead of assetsRepository.findAll().
+- Per-asset-class / per-asset scoped refresh buttons — refreshLivePricesAction() now
+  accepts an optional assetIds filter; AssetRefreshButton wired on portfolio/detail pages.
+- Bank Account card icon overlap — delete icon moved into the header flex row
+  (same fix pattern as the earlier FD card fix), no longer absolutely positioned.
+- Transaction edit — Pencil button + editingTransaction now wired into
+  transactions-view.tsx; previously the dialog supported it but nothing triggered it.
+- Window resize / responsive tables — all three tables (transactions, portfolio,
+  growth-projection) now have min-w-[...] on the <table>, so overflow-x-auto correctly
+  engages horizontal scroll instead of cells shrinking and text wrapping.
+- Table view now shows XIRR as a column (portfolio-view.tsx).
+- FIFO average-cost logic — investigated, no asset-class-specific bug found;
+  matchFIFOLots()/calculateWeightedAverageCost() are generic across stocks, ETFs, MF,
+  crypto, bonds. If a discrepancy is still seen, needs concrete numbers to trace further.
+
+====================================================================
+🔴 OPEN — ready to patch directly (small, contained)
+====================================================================
+1. Dashboard "Day Change" always shows ~₹0.
+   CAUSE: dashboard/page.tsx calls snapshotService.recordTodaysSnapshot() first (which
+   upserts today's snapshot), then calls getPortfolioSummary() again to render the page.
+   Inside getPortfolioSummary() (~line 132), "previous" for dayChange is just the
+   chronologically-last snapshot — but today's just-written row is now that last one,
+   so it diffs net worth against itself.
+   FIX: filter to snapshotDate < today before picking "previous".
+
+2. MF Equity / MF Debt labels too long/visually heavy in cards.
+   CAUSE: src/constants/asset-types.ts — "Mutual Fund (Equity)" / "Mutual Fund (Debt)",
+   single source of truth used everywhere.
+   FIX: shorten in this one file (e.g. "Equity MF" / "Debt MF").
+
+3. Vercel Analytics and Speed Insights not enabled.
+   CONFIRMED: no @vercel/analytics / @vercel/speed-insights in package.json, no
+   <Analytics/>/<SpeedInsights/> in src/app/layout.tsx.
+   FIX: install both packages, add both components to root layout.
+
+4. Transaction history has no "View more" / pagination — renders unbounded (267+ rows
+   seen in one screenshot).
+   FIX: cap initial render (e.g. 25-50 rows) with a "View more" button, or real pagination.
+
+5. Goals — same icon-overlap bug as the already-fixed Bank Account/FD cards.
+   CAUSE: goals-view.tsx wraps GoalCard in a relative div with an absolutely-positioned
+   delete button; GoalCard's own header can render a "by {targetDate}" label in that same
+   top-right spot, so they can collide.
+   FIX: same pattern already used for FD/bank account cards — move delete into the card's
+   own header flex row instead of absolute positioning.
+
+6. Watchlist shows no current price, despite the data already existing.
+   CAUSE: Asset already has currentPrice/currentPriceUpdatedAt; WatchlistItem includes
+   the full asset — it's just never rendered on the watchlist card. Only target
+   price/stop-loss are shown, with nothing to compare them against.
+   FIX: display item.asset.currentPrice + currentPriceUpdatedAt on each card.
+
+====================================================================
+🟡 OPEN — needs a small amount of new logic (still contained)
+====================================================================
+7. Goals have no edit capability, only add/delete.
+   No updateGoalAction exists anywhere. To change targetAmount/currentAmount/targetDate,
+   the only option is delete-and-recreate. Same class of gap "transaction edit" was
+   before it got fixed — mirror that pattern.
+
+8. Watchlist prices are never refreshed even after #6 is fixed.
+   No refresh mechanism reaches watchlist assets — refreshLivePricesAction is scoped to
+   actual holdings (quantity > 0) only, no AssetRefreshButton anywhere in the watchlist
+   feature.
+   FIX: add a per-item or page-level refresh button calling refreshLivePricesAction()
+   scoped to the watchlist's asset IDs.
+
+9. Refresh-all button — placement question.
+   A page-level "Refresh Prices" button already exists on the Portfolio page and refreshes
+   all currently-displayed holdings. But the request ("page with cumulative XIRR, has a
+   lot of empty space") sounds like the Dashboard's XIRRCard — confirmed genuinely sparse
+   (just a label + number, generous padding, no action).
+   NEEDS: confirm whether the Portfolio-page button already satisfies this, or whether a
+   refresh control specifically belongs on/near the Dashboard's XIRRCard.
+
+====================================================================
+🟠 OPEN — needs live diagnosis or a decision before scoping
+====================================================================
+10. Liabilities section not loading.
+    Checked page, service, repository, schema (both schema.sql and sync-schema.sql), RLS
+    policy, and view component — everything is internally consistent in source. Likely a
+    live/deployment issue (schema drift not yet synced, an RLS/auth session issue, or a
+    transient error), not a code bug visible from static source.
+    NEEDS: browser console error, network tab response, or Vercel function logs from an
+    actual failed load.
+
+11. Sharpe/Sortino ratios likely distorted.
+    risk.ts hardcodes Math.sqrt(252) (correct only for daily return series), but snapshots
+    are written opportunistically (whenever the dashboard loads), not daily — so real
+    intervals are irregular and usually longer than a day. Numbers on Analytics page are
+    probably inflated/wrong relative to what they claim to represent.
+    NEEDS A DECISION: derive the annualization factor from actual average snapshot
+    interval, or just label these as unreliable until snapshot cadence improves.
+
+12. Backup/Restore silently excludes 2 of 11 data tables — price history and portfolio
+    snapshots.
+    Checked backup.service.ts's ENTITY_LABELS against all 11 repositories —
+    price-history.repository.ts and snapshots.repository.ts are never referenced in
+    backup export/import. A "full" restore on a new device would silently lose the entire
+    price chart history (documented elsewhere as never re-fabricated once lost) and the
+    snapshot history that Day Change, the performance graph, and Sharpe/Sortino all
+    depend on.
+    NEEDS A DECISION: add both tables to backup/restore, or explicitly document this as a
+    known limitation so a "full backup" claim isn't misleading.
+
+13. Dropdown → clickable-card view for holdings (asset class → card view → individual
+    holdings on click).
+    No dropdown component (Radix Dropdown/Accordion/Collapsible) found by name in
+    portfolio-view.tsx or sidebar layout — likely refers to the sidebar's per-asset-class
+    links per PROJECT-STATUS.md. UI/IA redesign, not a bug.
+    NEEDS: a screenshot or screen-recording of the current interaction before scoping
+    the rebuild.
+
+====================================================================
+🔵 OPEN — larger feature work (design + multi-file changes)
+====================================================================
+14. Category-wise XIRR (group by asset class, not just per-asset).
+    Not implemented. The grouping key it needs (ASSET_TYPE_GROUP) already exists in
+    constants/asset-types.ts — needs an aggregation function built on top of it.
+
+15. MF-specific detail fields — avg NAV, present NAV, units held — instead of reusing
+    the stock-style "Qty / Avg. Cost / Current Price" format.
+    Confirmed gap in both the card (investment-card.tsx — no qty/price fields shown at
+    all, any asset type) and table (portfolio-view.tsx — generic "Qty"/"Avg. Cost"
+    headers regardless of type). Needs conditional labels/formatting based on assetType,
+    likely also a new MF-specific section on the investment-detail page.
+
+16. Rewrite NPS — auto-populate fund manager/scheme type, log each contribution from
+    start, include NPS in overall XIRR.
+    pension_fund_manager/tier are free-text with no dropdown/auto-populate list;
+    currentCorpus is a manually-maintained number rather than derived from
+    nps_contributions; NPS cash flows are never included in the dashboard's overall
+    XIRR. Largest item on the list — schema + service + UI rewrite, not a small patch.
+
+17. Auto-refresh prices at market close daily, whether app is open or not.
+    Confirmed no vercel.json, no scheduled workflow anywhere. Currently only refreshes
+    opportunistically when someone opens the app (documented V1 trade-off in
+    ARCHITECTURE.md). Needs genuine new infra — a Vercel Cron Job (vercel.json + a
+    protected API route) scheduled for IST market close — not a code-only patch.
+
+====================================================================
+QUICK REFERENCE — patch order suggestion
+====================================================================
+Fastest wins first: #1 (Day Change), #2 (MF labels), #3 (Vercel Analytics), #5 (Goals
+overlap), #6 (Watchlist price display) — all small, independent, no design decisions needed.
+Then: #4 (pagination), #7 (goal edit), #8 (watchlist refresh).
+Then resolve the three decisions (#9, #11, #12) so #10 and #13 can be diagnosed live.
+Save #14-17 for dedicated sessions — each is multi-file feature work.

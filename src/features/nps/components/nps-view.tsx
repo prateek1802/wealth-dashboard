@@ -15,10 +15,10 @@ import { NPSProjectionChart } from "./nps-projection-chart";
 import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
-import { NPS_TIERS } from "@/constants/nps";
+import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
 import { ShieldCheck, Settings, Plus, Trash2, Banknote } from "lucide-react";
 import type { NPSAccount, NPSContribution, NPSProjectionPoint } from "@/types/domain/nps";
-import type { NPSTier } from "@/constants/nps";
+import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
 
 interface NPSViewProps {
   accounts: NPSAccount[];
@@ -39,6 +39,8 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
 
   const [tier, setTier] = useState<NPSTier>("Tier I");
   const [pfm, setPfm] = useState("");
+  const [pfmCustom, setPfmCustom] = useState(false);
+  const [schemePreference, setSchemePreference] = useState<NPSSchemePreference | "">("");
   const [currentCorpus, setCurrentCorpus] = useState("");
   const [expectedReturn, setExpectedReturn] = useState("10");
   const [monthlyContribution, setMonthlyContribution] = useState("");
@@ -57,6 +59,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
       const result = await addNPSAccountAction({
         tier,
         pensionFundManager: pfm || null,
+        schemePreference: schemePreference || null,
         pran: null,
         currentCorpus: Number(currentCorpus || 0),
         expectedAnnualReturn: Number(expectedReturn),
@@ -66,7 +69,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
       });
       if (result.ok) {
         toast.success("NPS account added");
-        setPfm(""); setCurrentCorpus(""); setMonthlyContribution(""); setRetirementYear("");
+        setPfm(""); setPfmCustom(false); setSchemePreference(""); setCurrentCorpus(""); setMonthlyContribution(""); setRetirementYear("");
         setAddAccountOpen(false);
       } else setError(result.error);
     });
@@ -79,6 +82,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
       const result = await updateNPSAssumptionsAction(assumptionsTarget.id, {
         tier: assumptionsTarget.tier,
         pensionFundManager: assumptionsTarget.pensionFundManager,
+        schemePreference: assumptionsTarget.schemePreference,
         pran: assumptionsTarget.pran,
         currentCorpus: assumptionsTarget.currentCorpus,
         expectedAnnualReturn: Number(expectedReturn),
@@ -162,8 +166,33 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="nps-pfm">Pension fund manager</Label>
-                <Input id="nps-pfm" value={pfm} onChange={(e) => setPfm(e.target.value)} placeholder="HDFC Pension Fund" />
+                <Select
+                  value={pfmCustom ? "__other__" : pfm || undefined}
+                  onValueChange={(v) => {
+                    if (v === "__other__") { setPfmCustom(true); setPfm(""); }
+                    else { setPfmCustom(false); setPfm(v); }
+                  }}
+                >
+                  <SelectTrigger id="nps-pfm"><SelectValue placeholder="Select fund manager" /></SelectTrigger>
+                  <SelectContent>
+                    {PENSION_FUND_MANAGERS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    <SelectItem value="__other__">Other…</SelectItem>
+                  </SelectContent>
+                </Select>
+                {pfmCustom && (
+                  <Input className="mt-1.5" value={pfm} onChange={(e) => setPfm(e.target.value)} placeholder="Enter fund manager name" />
+                )}
               </div>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nps-scheme">Scheme preference</Label>
+              <Select value={schemePreference || "__none__"} onValueChange={(v) => setSchemePreference(v === "__none__" ? "" : (v as NPSSchemePreference))}>
+                <SelectTrigger id="nps-scheme"><SelectValue placeholder="Scheme preference" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Not set</SelectItem>
+                  {NPS_SCHEME_PREFERENCES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="nps-corpus">Current corpus</Label>
@@ -212,7 +241,10 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
             <div className="flex items-start justify-between gap-2">
               <div className="flex flex-col">
                 <span className="font-medium text-ink">{a.tier}</span>
-                <span className="text-xs text-ink-muted">{a.pensionFundManager ?? "Pension fund manager not set"}</span>
+                <span className="text-xs text-ink-muted">
+                  {a.pensionFundManager ?? "Pension fund manager not set"}
+                  {a.schemePreference && ` · ${a.schemePreference}`}
+                </span>
               </div>
               <Badge>{a.expectedAnnualReturn ? `${a.expectedAnnualReturn}% p.a.` : "—"}</Badge>
             </div>

@@ -1,0 +1,527 @@
+diff --git a/src/app/(app)/dashboard/page.tsx b/src/app/(app)/dashboard/page.tsx
+index b812f29..eb26428 100644
+--- a/src/app/(app)/dashboard/page.tsx
++++ b/src/app/(app)/dashboard/page.tsx
+@@ -2,6 +2,7 @@ import { TopBar } from "@/components/layout/top-bar";
+ import { portfolioService } from "@/lib/services/portfolio.service";
+ import { snapshotService } from "@/lib/services/snapshot.service";
+ import { fdService } from "@/lib/services/fd.service";
++import { npsService } from "@/lib/services/nps.service";
+ import { goalsRepository } from "@/lib/database/repositories/goals.repository";
+ import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
+ import { calculateXIRR } from "@/lib/calculations/returns";
+@@ -25,7 +26,7 @@ export default async function DashboardPage() {
+   // Opportunistic snapshot write — see ARCHITECTURE.md trade-off #2 (no cron in V1).
+   await snapshotService.recordTodaysSnapshot().catch(() => {});
+ 
+-  const [summary, allocation, topHoldings, activity, goals, fds, performance, transactions, breakdown] = await Promise.all([
++  const [summary, allocation, topHoldings, activity, goals, fds, performance, transactions, breakdown, npsCashflows] = await Promise.all([
+     portfolioService.getPortfolioSummary(),
+     portfolioService.getAssetAllocation(),
+     portfolioService.getTopHoldings(5),
+@@ -35,13 +36,17 @@ export default async function DashboardPage() {
+     portfolioService.getPortfolioPerformance("3M"),
+     transactionsRepository.findAll(),
+     portfolioService.getSegregatedBreakdown(),
++    npsService.getCashflows(),
+   ]);
+ 
+-  const cashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+-  if (cashflows.length > 0) {
+-    cashflows.push({ date: todayISO(), amount: summary.currentValue });
++  const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
++  if (securitiesCashflows.length > 0) {
++    securitiesCashflows.push({ date: todayISO(), amount: summary.currentValue });
+   }
+-  const xirr = calculateXIRR(cashflows);
++  // Securities + NPS pooled into one portfolio-wide XIRR. FD, PPF, and bank
++  // cash aren't included yet — those don't have per-transaction cash flows
++  // logged the way securities and NPS contributions do.
++  const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
+ 
+   return (
+     <div>
+diff --git a/src/constants/nps.ts b/src/constants/nps.ts
+index 1240698..e1c1e25 100644
+--- a/src/constants/nps.ts
++++ b/src/constants/nps.ts
+@@ -1,2 +1,32 @@
+ export const NPS_TIERS = ["Tier I", "Tier II"] as const;
+ export type NPSTier = (typeof NPS_TIERS)[number];
++
++/** The 10 PFRDA-registered Pension Fund Managers (pfrda.org.in) as of the app's last check. */
++export const PENSION_FUND_MANAGERS = [
++  "SBI Pension Fund",
++  "LIC Pension Fund",
++  "UTI Retirement Solutions",
++  "HDFC Pension Fund",
++  "ICICI Prudential Pension Fund",
++  "Kotak Mahindra Pension Fund",
++  "Aditya Birla Sun Life Pension Management",
++  "Tata Pension Management",
++  "Axis Pension Fund Management",
++  "Max Life Pension Fund Management",
++] as const;
++export type PensionFundManager = (typeof PENSION_FUND_MANAGERS)[number];
++
++/**
++ * Scheme preference under NPS: Active Choice lets the subscriber set their
++ * own E/C/G/A split; Auto Choice glides the mix by age via a lifecycle fund
++ * (Aggressive/Moderate/Conservative = LC75/LC50/LC25). PFRDA has since
++ * folded these into a broader "Common Schemes" framework, but this is
++ * still the terminology on most subscribers' own PRAN statements.
++ */
++export const NPS_SCHEME_PREFERENCES = [
++  "Active Choice",
++  "Auto Choice — Aggressive (LC75)",
++  "Auto Choice — Moderate (LC50)",
++  "Auto Choice — Conservative (LC25)",
++] as const;
++export type NPSSchemePreference = (typeof NPS_SCHEME_PREFERENCES)[number];
+diff --git a/src/features/dashboard/components/xirr-card.tsx b/src/features/dashboard/components/xirr-card.tsx
+index 9833e36..f7e8b79 100644
+--- a/src/features/dashboard/components/xirr-card.tsx
++++ b/src/features/dashboard/components/xirr-card.tsx
+@@ -11,6 +11,7 @@ export function XIRRCard({ xirr }: { xirr: CalcResult<number> }) {
+       ) : (
+         <span className="text-sm text-ink-muted">{xirr.reason}</span>
+       )}
++      <span className="text-xs text-ink-muted">Securities + NPS · excludes FD, PPF, cash</span>
+     </Card>
+   );
+ }
+diff --git a/src/features/nps/components/nps-view.tsx b/src/features/nps/components/nps-view.tsx
+index f15a217..aea96c9 100644
+--- a/src/features/nps/components/nps-view.tsx
++++ b/src/features/nps/components/nps-view.tsx
+@@ -15,10 +15,10 @@ import { NPSProjectionChart } from "./nps-projection-chart";
+ import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
+ import { formatCurrency } from "@/lib/utils/currency";
+ import { formatDate } from "@/lib/utils/date";
+-import { NPS_TIERS } from "@/constants/nps";
++import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
+ import { ShieldCheck, Settings, Plus, Trash2, Banknote } from "lucide-react";
+ import type { NPSAccount, NPSContribution, NPSProjectionPoint } from "@/types/domain/nps";
+-import type { NPSTier } from "@/constants/nps";
++import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
+ 
+ interface NPSViewProps {
+   accounts: NPSAccount[];
+@@ -39,6 +39,8 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+ 
+   const [tier, setTier] = useState<NPSTier>("Tier I");
+   const [pfm, setPfm] = useState("");
++  const [pfmCustom, setPfmCustom] = useState(false);
++  const [schemePreference, setSchemePreference] = useState<NPSSchemePreference | "">("");
+   const [currentCorpus, setCurrentCorpus] = useState("");
+   const [expectedReturn, setExpectedReturn] = useState("10");
+   const [monthlyContribution, setMonthlyContribution] = useState("");
+@@ -57,6 +59,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+       const result = await addNPSAccountAction({
+         tier,
+         pensionFundManager: pfm || null,
++        schemePreference: schemePreference || null,
+         pran: null,
+         currentCorpus: Number(currentCorpus || 0),
+         expectedAnnualReturn: Number(expectedReturn),
+@@ -66,7 +69,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+       });
+       if (result.ok) {
+         toast.success("NPS account added");
+-        setPfm(""); setCurrentCorpus(""); setMonthlyContribution(""); setRetirementYear("");
++        setPfm(""); setPfmCustom(false); setSchemePreference(""); setCurrentCorpus(""); setMonthlyContribution(""); setRetirementYear("");
+         setAddAccountOpen(false);
+       } else setError(result.error);
+     });
+@@ -79,6 +82,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+       const result = await updateNPSAssumptionsAction(assumptionsTarget.id, {
+         tier: assumptionsTarget.tier,
+         pensionFundManager: assumptionsTarget.pensionFundManager,
++        schemePreference: assumptionsTarget.schemePreference,
+         pran: assumptionsTarget.pran,
+         currentCorpus: assumptionsTarget.currentCorpus,
+         expectedAnnualReturn: Number(expectedReturn),
+@@ -162,9 +166,34 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+               </div>
+               <div className="flex flex-col gap-1.5">
+                 <Label htmlFor="nps-pfm">Pension fund manager</Label>
+-                <Input id="nps-pfm" value={pfm} onChange={(e) => setPfm(e.target.value)} placeholder="HDFC Pension Fund" />
++                <Select
++                  value={pfmCustom ? "__other__" : pfm || undefined}
++                  onValueChange={(v) => {
++                    if (v === "__other__") { setPfmCustom(true); setPfm(""); }
++                    else { setPfmCustom(false); setPfm(v); }
++                  }}
++                >
++                  <SelectTrigger id="nps-pfm"><SelectValue placeholder="Select fund manager" /></SelectTrigger>
++                  <SelectContent>
++                    {PENSION_FUND_MANAGERS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
++                    <SelectItem value="__other__">Other…</SelectItem>
++                  </SelectContent>
++                </Select>
++                {pfmCustom && (
++                  <Input className="mt-1.5" value={pfm} onChange={(e) => setPfm(e.target.value)} placeholder="Enter fund manager name" />
++                )}
+               </div>
+             </div>
++            <div className="flex flex-col gap-1.5">
++              <Label htmlFor="nps-scheme">Scheme preference</Label>
++              <Select value={schemePreference || "__none__"} onValueChange={(v) => setSchemePreference(v === "__none__" ? "" : (v as NPSSchemePreference))}>
++                <SelectTrigger id="nps-scheme"><SelectValue placeholder="Scheme preference" /></SelectTrigger>
++                <SelectContent>
++                  <SelectItem value="__none__">Not set</SelectItem>
++                  {NPS_SCHEME_PREFERENCES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
++                </SelectContent>
++              </Select>
++            </div>
+             <div className="flex flex-col gap-1.5">
+               <Label htmlFor="nps-corpus">Current corpus</Label>
+               <CurrencyInput id="nps-corpus" value={currentCorpus} onChange={(e) => setCurrentCorpus(e.target.value)} />
+@@ -212,7 +241,10 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+             <div className="flex items-start justify-between gap-2">
+               <div className="flex flex-col">
+                 <span className="font-medium text-ink">{a.tier}</span>
+-                <span className="text-xs text-ink-muted">{a.pensionFundManager ?? "Pension fund manager not set"}</span>
++                <span className="text-xs text-ink-muted">
++                  {a.pensionFundManager ?? "Pension fund manager not set"}
++                  {a.schemePreference && ` · ${a.schemePreference}`}
++                </span>
+               </div>
+               <Badge>{a.expectedAnnualReturn ? `${a.expectedAnnualReturn}% p.a.` : "—"}</Badge>
+             </div>
+diff --git a/src/lib/calculations/nps.ts b/src/lib/calculations/nps.ts
+index 7f37797..ebf8289 100644
+--- a/src/lib/calculations/nps.ts
++++ b/src/lib/calculations/nps.ts
+@@ -1,4 +1,5 @@
+-import type { NPSProjectionPoint } from "@/types/domain/nps";
++import type { NPSProjectionPoint, NPSAccount, NPSContribution } from "@/types/domain/nps";
++import type { Cashflow } from "./returns";
+ 
+ /**
+  * Year-by-year NPS corpus projection. Clearly an ESTIMATE — the UI is
+@@ -31,3 +32,40 @@ export function projectNPSCorpus(params: {
+ 
+   return points;
+ }
++
++/**
++ * Cash flows for the portfolio-wide XIRR: every logged contribution is an
++ * outflow on its own date, plus one lump-sum terminal inflow (`today`) per
++ * account for its current corpus.
++ *
++ * Contribution logging is a newer feature, so for each account there's
++ * usually a gap between `currentCorpus` and the sum of its logged
++ * contributions — money contributed before logging started, or before the
++ * account existed in this app at all. That gap is modeled as a single
++ * outflow on the account's `createdAt` date, so the XIRR isn't skewed by
++ * treating untracked historical corpus as if it appeared for free. If a
++ * withdrawal has pushed logged contributions above the current corpus,
++ * there's nothing sensible to back out, so that account contributes no
++ * synthetic entry for the gap (withdrawals aren't dated cash-flow events
++ * here — npsRepository.withdraw() just reduces the corpus in place).
++ */
++export function buildNPSCashflows(accounts: NPSAccount[], contributions: NPSContribution[], today: string): Cashflow[] {
++  const flows: Cashflow[] = [];
++
++  for (const account of accounts) {
++    const own = contributions.filter((c) => c.npsAccountId === account.id);
++    const loggedTotal = own.reduce((sum, c) => sum + c.employeeAmount + c.employerAmount, 0);
++    const untracked = account.currentCorpus - loggedTotal;
++    if (untracked > 0) {
++      flows.push({ date: account.createdAt.slice(0, 10), amount: -untracked });
++    }
++    for (const c of own) {
++      flows.push({ date: c.contributionDate, amount: -(c.employeeAmount + c.employerAmount) });
++    }
++    if (account.currentCorpus > 0) {
++      flows.push({ date: today, amount: account.currentCorpus });
++    }
++  }
++
++  return flows;
++}
+diff --git a/src/lib/database/demo-data.ts b/src/lib/database/demo-data.ts
+index 3d54576..c712020 100644
+--- a/src/lib/database/demo-data.ts
++++ b/src/lib/database/demo-data.ts
+@@ -79,6 +79,7 @@ export const demoNPSAccounts: NPSAccount[] = [
+     id: "nps-1",
+     tier: "Tier I",
+     pensionFundManager: "HDFC Pension Fund",
++    schemePreference: "Auto Choice — Moderate (LC50)",
+     pran: null,
+     currentCorpus: 480_000,
+     expectedAnnualReturn: 10,
+@@ -92,6 +93,7 @@ export const demoNPSAccounts: NPSAccount[] = [
+     id: "nps-2",
+     tier: "Tier II",
+     pensionFundManager: "HDFC Pension Fund",
++    schemePreference: "Active Choice",
+     pran: null,
+     currentCorpus: 60_000,
+     expectedAnnualReturn: 9,
+diff --git a/src/lib/database/repositories/nps.repository.ts b/src/lib/database/repositories/nps.repository.ts
+index 448d546..9c1bf08 100644
+--- a/src/lib/database/repositories/nps.repository.ts
++++ b/src/lib/database/repositories/nps.repository.ts
+@@ -3,13 +3,14 @@ import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoNPSAccounts, demoNPSContributions, nextId } from "@/lib/database/demo-data";
+ import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution } from "@/types/domain/nps";
+ import type { NPSAccountRow, NPSContributionRow } from "@/types/database";
+-import type { NPSTier } from "@/constants/nps";
++import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
+ 
+ function rowToAccount(row: NPSAccountRow): NPSAccount {
+   return {
+     id: row.id,
+     tier: row.tier as NPSTier,
+     pensionFundManager: row.pension_fund_manager,
++    schemePreference: row.scheme_preference as NPSSchemePreference | null,
+     pran: row.pran,
+     currentCorpus: row.current_corpus,
+     expectedAnnualReturn: row.expected_annual_return,
+@@ -60,6 +61,7 @@ export const npsRepository = {
+       .insert({
+         tier: input.tier,
+         pension_fund_manager: input.pensionFundManager,
++        scheme_preference: input.schemePreference,
+         pran: input.pran,
+         current_corpus: input.currentCorpus,
+         expected_annual_return: input.expectedAnnualReturn,
+@@ -84,6 +86,7 @@ export const npsRepository = {
+     const row: Record<string, unknown> = {};
+     if (update.tier !== undefined) row.tier = update.tier;
+     if (update.pensionFundManager !== undefined) row.pension_fund_manager = update.pensionFundManager;
++    if (update.schemePreference !== undefined) row.scheme_preference = update.schemePreference;
+     if (update.pran !== undefined) row.pran = update.pran;
+     if (update.currentCorpus !== undefined) row.current_corpus = update.currentCorpus;
+     if (update.expectedAnnualReturn !== undefined) row.expected_annual_return = update.expectedAnnualReturn;
+@@ -146,6 +149,22 @@ export const npsRepository = {
+     return (data as NPSContributionRow[]).map(rowToContribution);
+   },
+ 
++  /**
++   * Every contribution across every NPS account the user holds (Tier I and
++   * Tier II both), unfiltered by account. Used to build cash flows for the
++   * portfolio-wide XIRR — Row Level Security already scopes this to the
++   * current user same as any other query here.
++   */
++  async findAllContributions(): Promise<NPSContribution[]> {
++    if (isDemoMode()) {
++      return [...demoNPSContributions].sort((a, b) => a.contributionDate.localeCompare(b.contributionDate));
++    }
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db.from("nps_contributions").select("*").order("contribution_date", { ascending: true });
++    if (error) throw error;
++    return (data as NPSContributionRow[]).map(rowToContribution);
++  },
++
+   async addContribution(input: NewNPSContribution): Promise<NPSContribution> {
+     if (isDemoMode()) {
+       const contribution: NPSContribution = { ...input, id: nextId("npsc"), createdAt: new Date().toISOString() };
+diff --git a/src/lib/services/backup.service.ts b/src/lib/services/backup.service.ts
+index 2472d46..64cb5b9 100644
+--- a/src/lib/services/backup.service.ts
++++ b/src/lib/services/backup.service.ts
+@@ -171,7 +171,7 @@ export const backupService = {
+     for (const account of backup.npsAccounts ?? []) {
+       try {
+         const created = await npsRepository.create({
+-          tier: account.tier, pensionFundManager: account.pensionFundManager, pran: account.pran,
++          tier: account.tier, pensionFundManager: account.pensionFundManager, schemePreference: account.schemePreference, pran: account.pran,
+           currentCorpus: account.currentCorpus, expectedAnnualReturn: account.expectedAnnualReturn,
+           monthlyContribution: account.monthlyContribution, annualContributionIncrease: account.annualContributionIncrease,
+           retirementYear: account.retirementYear,
+diff --git a/src/lib/services/nps.service.ts b/src/lib/services/nps.service.ts
+index cf1c790..105ae2b 100644
+--- a/src/lib/services/nps.service.ts
++++ b/src/lib/services/nps.service.ts
+@@ -1,6 +1,8 @@
+ import { npsRepository } from "@/lib/database/repositories/nps.repository";
+-import { projectNPSCorpus } from "@/lib/calculations/nps";
++import { projectNPSCorpus, buildNPSCashflows } from "@/lib/calculations/nps";
++import { todayISO } from "@/lib/utils/date";
+ import type { NPSProjectionPoint, NewNPSContribution, NewNPSAccount } from "@/types/domain/nps";
++import type { Cashflow } from "@/lib/calculations/returns";
+ 
+ export const npsService = {
+   async listAccounts() {
+@@ -53,4 +55,14 @@ export const npsService = {
+     const accounts = await npsRepository.findAll();
+     return accounts.reduce((sum, a) => sum + a.currentCorpus, 0);
+   },
++
++  /**
++   * Cash flows for the portfolio-wide XIRR — see buildNPSCashflows() in
++   * calculations/nps.ts for the modeling details (untracked pre-logging
++   * corpus, terminal value, etc.).
++   */
++  async getCashflows(): Promise<Cashflow[]> {
++    const [accounts, contributions] = await Promise.all([npsRepository.findAll(), npsRepository.findAllContributions()]);
++    return buildNPSCashflows(accounts, contributions, todayISO());
++  },
+ };
+diff --git a/src/lib/validation/nps.schema.ts b/src/lib/validation/nps.schema.ts
+index ccdbaed..da69e8d 100644
+--- a/src/lib/validation/nps.schema.ts
++++ b/src/lib/validation/nps.schema.ts
+@@ -1,9 +1,10 @@
+ import { z } from "zod";
+-import { NPS_TIERS } from "@/constants/nps";
++import { NPS_TIERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
+ 
+ export const npsAccountSchema = z.object({
+   tier: z.enum(NPS_TIERS),
+   pensionFundManager: z.string().trim().max(200).nullable().default(null),
++  schemePreference: z.enum(NPS_SCHEME_PREFERENCES).nullable().default(null),
+   pran: z.string().trim().max(20).nullable().default(null),
+   currentCorpus: z.coerce.number().nonnegative().default(0),
+   expectedAnnualReturn: z.coerce.number().positive().max(30).nullable().default(null),
+diff --git a/src/types/database.ts b/src/types/database.ts
+index b08c4fd..1faee01 100644
+--- a/src/types/database.ts
++++ b/src/types/database.ts
+@@ -88,6 +88,7 @@ export interface NPSAccountRow {
+   id: string;
+   tier: string;
+   pension_fund_manager: string | null;
++  scheme_preference: string | null;
+   pran: string | null;
+   current_corpus: number;
+   expected_annual_return: number | null;
+diff --git a/src/types/domain/nps.ts b/src/types/domain/nps.ts
+index 4eda3b8..0606045 100644
+--- a/src/types/domain/nps.ts
++++ b/src/types/domain/nps.ts
+@@ -1,9 +1,10 @@
+-import type { NPSTier } from "@/constants/nps";
++import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
+ 
+ export interface NPSAccount {
+   id: string;
+   tier: NPSTier;
+   pensionFundManager: string | null;
++  schemePreference: NPSSchemePreference | null;
+   pran: string | null;
+   currentCorpus: number;
+   expectedAnnualReturn: number | null;
+diff --git a/supabase/schema.sql b/supabase/schema.sql
+index 4bacf53..14e4234 100644
+--- a/supabase/schema.sql
++++ b/supabase/schema.sql
+@@ -151,6 +151,7 @@ create table nps_accounts (
+   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+   tier text not null default 'Tier I' check (tier in ('Tier I', 'Tier II')),
+   pension_fund_manager text,
++  scheme_preference text,
+   pran text,
+   current_corpus numeric(18,4) not null default 0,
+   expected_annual_return numeric(9,4),
+diff --git a/supabase/sync-schema.sql b/supabase/sync-schema.sql
+index 1be90a1..43f026a 100644
+--- a/supabase/sync-schema.sql
++++ b/supabase/sync-schema.sql
+@@ -168,6 +168,7 @@ create table if not exists nps_accounts (
+ alter table nps_accounts add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
+ alter table nps_accounts add column if not exists tier text not null default 'Tier I';
+ alter table nps_accounts add column if not exists pension_fund_manager text;
++alter table nps_accounts add column if not exists scheme_preference text;
+ alter table nps_accounts add column if not exists pran text;
+ alter table nps_accounts add column if not exists current_corpus numeric(18,4) not null default 0;
+ alter table nps_accounts add column if not exists expected_annual_return numeric(9,4);
+diff --git a/test/nps-cashflows.test.ts b/test/nps-cashflows.test.ts
+new file mode 100644
+index 0000000..253fca4
+--- /dev/null
++++ b/test/nps-cashflows.test.ts
+@@ -0,0 +1,89 @@
++import { describe, it, expect } from "vitest";
++import { buildNPSCashflows } from "@/lib/calculations/nps";
++import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
++
++function account(overrides: Partial<NPSAccount> = {}): NPSAccount {
++  return {
++    id: "nps-1",
++    tier: "Tier I",
++    pensionFundManager: null,
++    schemePreference: null,
++    pran: null,
++    currentCorpus: 0,
++    expectedAnnualReturn: null,
++    monthlyContribution: null,
++    annualContributionIncrease: null,
++    retirementYear: null,
++    createdAt: "2024-01-01T00:00:00.000Z",
++    updatedAt: "2024-01-01T00:00:00.000Z",
++    ...overrides,
++  };
++}
++
++function contribution(overrides: Partial<NPSContribution> = {}): NPSContribution {
++  return {
++    id: "npsc-1",
++    npsAccountId: "nps-1",
++    contributionDate: "2024-06-01",
++    employeeAmount: 0,
++    employerAmount: 0,
++    notes: null,
++    createdAt: "2024-06-01T00:00:00.000Z",
++    ...overrides,
++  };
++}
++
++describe("buildNPSCashflows", () => {
++  it("treats the untracked gap between corpus and logged contributions as an outflow on account creation", () => {
++    // Account opened with an existing 100k corpus (pre-dates logging), then
++    // one logged contribution of 10k. Corpus today is 110k.
++    const accounts = [account({ createdAt: "2023-01-01T00:00:00.000Z", currentCorpus: 110_000 })];
++    const contributions = [contribution({ contributionDate: "2024-06-01", employeeAmount: 5000, employerAmount: 5000 })];
++
++    const flows = buildNPSCashflows(accounts, contributions, "2025-01-01");
++
++    expect(flows).toEqual([
++      { date: "2023-01-01", amount: -100_000 }, // untracked opening corpus
++      { date: "2024-06-01", amount: -10_000 }, // logged contribution
++      { date: "2025-01-01", amount: 110_000 }, // terminal value
++    ]);
++  });
++
++  it("omits the untracked-gap entry when logged contributions already cover the corpus", () => {
++    // No pre-existing corpus — everything is logged (e.g. account created and
++    // fully tracked from day one).
++    const accounts = [account({ createdAt: "2024-01-01T00:00:00.000Z", currentCorpus: 20_000 })];
++    const contributions = [contribution({ contributionDate: "2024-06-01", employeeAmount: 10_000, employerAmount: 10_000 })];
++
++    const flows = buildNPSCashflows(accounts, contributions, "2025-01-01");
++
++    expect(flows).toEqual([
++      { date: "2024-06-01", amount: -20_000 },
++      { date: "2025-01-01", amount: 20_000 },
++    ]);
++  });
++
++  it("skips accounts with zero corpus and produces no terminal entry", () => {
++    const accounts = [account({ currentCorpus: 0 })];
++    const flows = buildNPSCashflows(accounts, [], "2025-01-01");
++    expect(flows).toEqual([]);
++  });
++
++  it("keeps multiple accounts' cash flows independent", () => {
++    const accounts = [
++      account({ id: "nps-1", createdAt: "2023-01-01T00:00:00.000Z", currentCorpus: 50_000 }),
++      account({ id: "nps-2", createdAt: "2023-06-01T00:00:00.000Z", currentCorpus: 30_000 }),
++    ];
++    const contributions = [contribution({ npsAccountId: "nps-1", contributionDate: "2024-01-01", employeeAmount: 5000, employerAmount: 5000 })];
++
++    const flows = buildNPSCashflows(accounts, contributions, "2025-01-01");
++
++    expect(flows).toEqual([
++      { date: "2023-01-01", amount: -40_000 },
++      { date: "2024-01-01", amount: -10_000 },
++      { date: "2025-01-01", amount: 50_000 },
++      { date: "2023-06-01", amount: -30_000 },
++      { date: "2025-01-01", amount: 30_000 },
++    ]);
++  });
++});

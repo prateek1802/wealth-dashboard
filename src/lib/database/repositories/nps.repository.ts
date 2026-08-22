@@ -3,13 +3,14 @@ import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoNPSAccounts, demoNPSContributions, nextId } from "@/lib/database/demo-data";
 import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution } from "@/types/domain/nps";
 import type { NPSAccountRow, NPSContributionRow } from "@/types/database";
-import type { NPSTier } from "@/constants/nps";
+import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
 
 function rowToAccount(row: NPSAccountRow): NPSAccount {
   return {
     id: row.id,
     tier: row.tier as NPSTier,
     pensionFundManager: row.pension_fund_manager,
+    schemePreference: row.scheme_preference as NPSSchemePreference | null,
     pran: row.pran,
     currentCorpus: row.current_corpus,
     expectedAnnualReturn: row.expected_annual_return,
@@ -60,6 +61,7 @@ export const npsRepository = {
       .insert({
         tier: input.tier,
         pension_fund_manager: input.pensionFundManager,
+        scheme_preference: input.schemePreference,
         pran: input.pran,
         current_corpus: input.currentCorpus,
         expected_annual_return: input.expectedAnnualReturn,
@@ -84,6 +86,7 @@ export const npsRepository = {
     const row: Record<string, unknown> = {};
     if (update.tier !== undefined) row.tier = update.tier;
     if (update.pensionFundManager !== undefined) row.pension_fund_manager = update.pensionFundManager;
+    if (update.schemePreference !== undefined) row.scheme_preference = update.schemePreference;
     if (update.pran !== undefined) row.pran = update.pran;
     if (update.currentCorpus !== undefined) row.current_corpus = update.currentCorpus;
     if (update.expectedAnnualReturn !== undefined) row.expected_annual_return = update.expectedAnnualReturn;
@@ -142,6 +145,22 @@ export const npsRepository = {
       .select("*")
       .eq("nps_account_id", npsAccountId)
       .order("contribution_date", { ascending: false });
+    if (error) throw error;
+    return (data as NPSContributionRow[]).map(rowToContribution);
+  },
+
+  /**
+   * Every contribution across every NPS account the user holds (Tier I and
+   * Tier II both), unfiltered by account. Used to build cash flows for the
+   * portfolio-wide XIRR — Row Level Security already scopes this to the
+   * current user same as any other query here.
+   */
+  async findAllContributions(): Promise<NPSContribution[]> {
+    if (isDemoMode()) {
+      return [...demoNPSContributions].sort((a, b) => a.contributionDate.localeCompare(b.contributionDate));
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db.from("nps_contributions").select("*").order("contribution_date", { ascending: true });
     if (error) throw error;
     return (data as NPSContributionRow[]).map(rowToContribution);
   },
