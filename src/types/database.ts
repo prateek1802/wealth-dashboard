@@ -109,6 +109,33 @@ export interface NPSContributionRow {
   created_at: string;
 }
 
+export interface NPSSchemeHoldingRow {
+  id: string;
+  nps_account_id: string;
+  scheme: string;
+  units_held: number;
+  last_nav: number | null;
+  last_nav_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NPSSchemeTransactionRow {
+  id: string;
+  nps_account_id: string;
+  scheme: string;
+  transaction_date: string;
+  transaction_type: string;
+  amount: number;
+  nav: number;
+  units: number;
+  employee_amount: number | null;
+  employer_amount: number | null;
+  linked_transaction_id: string | null;
+  description: string | null;
+  created_at: string;
+}
+
 export interface PPFAccountRow {
   id: string;
   account_number: string | null;

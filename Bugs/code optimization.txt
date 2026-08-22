@@ -1,0 +1,130 @@
+PERFORMANCE AUDIT — IS THE CODE OPTIMIZED?
+(checked against latest wealth-dashboard.zip — every finding below is from actual
+source inspection, not assumption)
+
+SHORT ANSWER: Mostly yes at the database layer (indexes, RLS, batched fetches within
+a single function are all done correctly), but there's one clear, fixable inefficiency
+at the service layer — the same base data gets fetched from the database multiple
+times per page load — plus a couple of smaller frontend opportunities. Nothing here
+is "broken" or user-visibly slow yet at your current data volume, but the dashboard
+redundancy is worth fixing before transaction/holding counts grow much further.
+
+====================================================================
+✅ GENUINELY WELL OPTIMIZED
+====================================================================
+
+1. Database indexes are thorough and well-targeted.
+   18 indexes total. Every single RLS-filtered user_id column has its own index
+   (critical — RLS applies a WHERE user_id = auth.uid() to every query, so without
+   these indexes every query would silently degrade to a full table scan as data
+   grows). Plus sensible composite indexes matching actual query patterns:
+   transactions (asset_id, transaction_date), price_history (asset_id, recorded_date),
+   nps_contributions (nps_account_id, contribution_date). This is genuinely
+   well-designed, not just "indexes exist."
+
+2. computeHoldings() itself is correctly batched, not N+1.
+   Fetches assets and transactions in one Promise.all (2 queries total), then filters
+   in JS — this is the right pattern. The problem (see below) isn't this function
+   itself, it's that multiple OTHER functions each call it independently instead of
+   sharing one result.
+
+3. Price refresh avoids bursting external rate-limited APIs.
+   Sequential (not parallel) fetches against Yahoo/CoinGecko/mfapi.in, with per-asset
+   failure isolation. Slower per-refresh, but correctly prioritizes not getting
+   rate-limited/IP-banned by a free API over raw speed. Reasonable trade-off for how
+   this is actually used (manually triggered, not high-frequency).
+
+4. Server Components used correctly for initial data fetching.
+   All 15 page.tsx files are async Server Components fetching data server-side before
+   render (not client-side useEffect fetching, which would mean an extra
+   loading-spinner round-trip on every navigation). This is the correct Next.js
+   pattern and it's followed consistently.
+
+====================================================================
+🔴 THE MAIN FINDING: redundant data fetching on the Dashboard
+====================================================================
+dashboard/page.tsx fetches 10 things via one outer Promise.all — good instinct
+(parallel, not sequential). But several of those 10 independently re-fetch the SAME
+underlying tables instead of sharing one result:
+
+   getPortfolioSummary()      -> computeHoldings() -> assets.findAll() + transactions.findAll()
+   getAssetAllocation()       -> computeHoldings() -> assets.findAll() + transactions.findAll()  [duplicate]
+   getTopHoldings(5)          -> computeHoldings() -> assets.findAll() + transactions.findAll()  [duplicate]
+   getSegregatedBreakdown()   -> computeHoldings() -> assets.findAll() + transactions.findAll()  [duplicate]
+   getRecentActivity(6)       -> assets.findAll() + transactions.findRecent()                    [duplicate assets fetch]
+   transactionsRepository.findAll()  <- called directly again in the same Promise.all              [duplicate]
+
+Net effect: one Dashboard page load fires assets.findAll() 5 times and
+transactions.findAll() (or equivalent) 5 times. Because they're all inside one outer
+Promise.all, these execute CONCURRENTLY, not one-after-another — so this isn't
+multiplying your page load TIME the way a truly sequential N+1 would (Supabase
+handles concurrent requests fine at this scale), but it is:
+  - 10 real round-trips to Supabase instead of 2, for data that doesn't change
+    between those calls within the same request
+  - Real, unnecessary data transfer — the full assets and transactions tables get
+    serialized and sent over the wire 5 times each, not once
+  - A cost/scale concern more than a current-latency concern: this gets meaningfully
+    worse as your transaction count grows (267+ already, per an earlier screenshot),
+    and worse again if Supabase billing is ever usage-metered on read volume
+
+FIX: refactor portfolioService so the individual functions (getAssetAllocation,
+getTopHoldings, getSegregatedBreakdown, getPortfolioSummary) accept an already-computed
+Holding[] as a parameter instead of each calling computeHoldings() internally. Add one
+new exported function — e.g. getDashboardData() — that fetches assets+transactions
+ONCE, computes holdings ONCE, and derives all the individual pieces (summary,
+allocation, top holdings, breakdown) from that single shared result. dashboard/page.tsx
+then calls this one function instead of 4-5 separate portfolioService methods. Other
+pages (Portfolio, Analytics) that only need one or two of these can keep calling the
+individual functions as-is — this fix specifically targets the case where MULTIPLE
+derived views are needed in the same request, which today only really happens on the
+Dashboard.
+
+====================================================================
+🟡 SMALLER OPPORTUNITIES
+====================================================================
+
+5. recharts is not code-split.
+   No next/dynamic usage found anywhere in the app. recharts (used in
+   allocation-donut.tsx, sparkline.tsx, performance-line-chart.tsx,
+   nps-projection-chart.tsx) is a genuinely heavy library, and it's currently bundled
+   directly into whatever client component imports it — shipped in the initial JS
+   bundle for every page that includes a chart, rather than lazy-loaded only when
+   that chart actually needs to render.
+   FIX: wrap chart components in next/dynamic(() => import(...), { ssr: false })
+   (charts need browser APIs anyway, so ssr:false is appropriate, not a compromise).
+   Straightforward, low-risk change, meaningfully reduces initial JS payload on pages
+   with charts (Dashboard, Analytics, NPS).
+
+6. No memoization in the two largest table components.
+   transactions-view.tsx (up to 267+ rows currently) and portfolio-view.tsx do
+   grouping/sorting work with zero useMemo. At current data volume this is very
+   unlikely to cause any noticeable jank — a few hundred rows of array grouping is
+   fast even unmemoized — but worth knowing as a "if it ever starts to feel slow, this
+   is the first place to look" note rather than something to fix preemptively right
+   now. Low priority.
+
+====================================================================
+✅ CHECKED, NOT AN ISSUE
+====================================================================
+
+- No literal N+1 query loops found anywhere (i.e. no `for (const x of items) { await db.query(...) }`
+  pattern issuing one DB call per row). The redundancy above is duplicate BULK fetches,
+  not per-row queries — a meaningfully different (and less severe) category of problem.
+- revalidatePath usage in Server Actions looked appropriately scoped, not blanket
+  revalidating the whole app on every mutation.
+
+====================================================================
+BOTTOM LINE
+====================================================================
+Nothing here is currently causing a noticeably slow app — Supabase and Next.js are both
+forgiving enough at your current data volume (a few hundred transactions, a personal
+single-user app) that none of this shows up as a real symptom yet. But #4 (the
+Dashboard's redundant fetching) is worth fixing sooner rather than later specifically
+because it compounds with data growth over time, which — given this is a long-term
+wealth tracker you'll keep adding years of transactions to — is exactly the trajectory
+this app is on. It's also a genuinely clean refactor (one new shared function, a few
+call-site changes), not a risky rewrite.
+
+PRIORITY: #4 (dashboard redundant fetch) first — real and growing. #5 (chart
+code-splitting) second — cheap, safe, immediate bundle-size win. #6 (table
+memoization) — not worth doing until it's actually noticed as slow.

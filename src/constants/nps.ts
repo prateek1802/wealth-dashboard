@@ -30,3 +30,13 @@ export const NPS_SCHEME_PREFERENCES = [
   "Auto Choice — Conservative (LC25)",
 ] as const;
 export type NPSSchemePreference = (typeof NPS_SCHEME_PREFERENCES)[number];
+
+/** The (up to) four NPS sub-fund asset classes a subscriber's corpus is split across. */
+export const NPS_SCHEMES = ["E", "C", "G", "A"] as const;
+export type NPSScheme = (typeof NPS_SCHEMES)[number];
+export const NPS_SCHEME_LABELS: Record<NPSScheme, string> = {
+  E: "Equity",
+  C: "Corporate Bonds",
+  G: "Government Securities",
+  A: "Alternative Assets",
+};

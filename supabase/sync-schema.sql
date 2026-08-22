@@ -197,6 +197,50 @@ alter table nps_contributions add column if not exists notes text;
 create index if not exists nps_contributions_account_date_idx on nps_contributions (nps_account_id, contribution_date);
 create index if not exists nps_contributions_user_id_idx on nps_contributions (user_id);
 
+-- ---- nps_scheme_holdings / nps_scheme_transactions ----
+create table if not exists nps_scheme_holdings (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table nps_scheme_holdings add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
+alter table nps_scheme_holdings add column if not exists nps_account_id uuid references nps_accounts(id) on delete cascade;
+alter table nps_scheme_holdings add column if not exists scheme text;
+alter table nps_scheme_holdings add column if not exists units_held numeric(18,4) not null default 0;
+alter table nps_scheme_holdings add column if not exists last_nav numeric(12,4);
+alter table nps_scheme_holdings add column if not exists last_nav_date date;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'nps_scheme_holdings_account_scheme_key') then
+    alter table nps_scheme_holdings add constraint nps_scheme_holdings_account_scheme_key unique (nps_account_id, scheme);
+  end if;
+end $$;
+drop trigger if exists nps_scheme_holdings_set_updated_at on nps_scheme_holdings;
+create trigger nps_scheme_holdings_set_updated_at before update on nps_scheme_holdings
+  for each row execute function set_updated_at();
+
+create table if not exists nps_scheme_transactions (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now()
+);
+alter table nps_scheme_transactions add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
+alter table nps_scheme_transactions add column if not exists nps_account_id uuid references nps_accounts(id) on delete cascade;
+alter table nps_scheme_transactions add column if not exists scheme text;
+alter table nps_scheme_transactions add column if not exists transaction_date date;
+alter table nps_scheme_transactions add column if not exists transaction_type text;
+alter table nps_scheme_transactions add column if not exists amount numeric(18,4);
+alter table nps_scheme_transactions add column if not exists nav numeric(12,4);
+alter table nps_scheme_transactions add column if not exists units numeric(18,4);
+alter table nps_scheme_transactions add column if not exists employee_amount numeric(18,4);
+alter table nps_scheme_transactions add column if not exists employer_amount numeric(18,4);
+alter table nps_scheme_transactions add column if not exists linked_transaction_id uuid references nps_scheme_transactions(id);
+alter table nps_scheme_transactions add column if not exists description text;
+create index if not exists nps_scheme_transactions_account_date_idx
+  on nps_scheme_transactions (nps_account_id, transaction_date);
+create index if not exists nps_scheme_transactions_user_id_idx on nps_scheme_transactions (user_id);
+-- Idempotent-import dedup key (see Part 8 of the NPS rewrite spec).
+create unique index if not exists nps_scheme_transactions_dedup_idx
+  on nps_scheme_transactions (nps_account_id, scheme, transaction_date, description, units);
+
 -- ---- bank_accounts ----
 create table if not exists bank_accounts (
   id uuid primary key default gen_random_uuid(),
@@ -299,7 +343,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['assets','transactions','portfolio_snapshots','goals','fixed_deposits','nps_accounts','nps_contributions','bank_accounts','ppf_accounts','price_history','watchlist_items','liabilities']
+  foreach t in array array['assets','transactions','portfolio_snapshots','goals','fixed_deposits','nps_accounts','nps_contributions','nps_scheme_holdings','nps_scheme_transactions','bank_accounts','ppf_accounts','price_history','watchlist_items','liabilities']
   loop
     execute format('alter table %I enable row level security', t);
     execute format('drop policy if exists "owner_only" on %I', t);

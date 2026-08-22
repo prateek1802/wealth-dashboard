@@ -176,6 +176,54 @@ create table nps_contributions (
 );
 create index nps_contributions_account_date_idx on nps_contributions (nps_account_id, contribution_date);
 
+-- nps_scheme_holdings / nps_scheme_transactions -- real NPS is 3-4 separate
+-- sub-funds (E/C/G/A), each with its own unit balance and NAV, not a single
+-- lump sum. Built from importing a real NSDL/Protean statement (see
+-- src/lib/calculations/nps-classification.ts). nps_accounts.current_corpus
+-- stays as a fallback for accounts that have not been migrated to
+-- scheme-level tracking -- see buildDerivedCorpus() in calculations/nps.ts.
+create table nps_scheme_holdings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  nps_account_id uuid not null references nps_accounts(id) on delete cascade,
+  scheme text not null check (scheme in ('E', 'C', 'G', 'A')),
+  units_held numeric(18,4) not null default 0,
+  last_nav numeric(12,4),
+  last_nav_date date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (nps_account_id, scheme)
+);
+create trigger nps_scheme_holdings_set_updated_at before update on nps_scheme_holdings
+  for each row execute function set_updated_at();
+
+create table nps_scheme_transactions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  nps_account_id uuid not null references nps_accounts(id) on delete cascade,
+  scheme text not null check (scheme in ('E', 'C', 'G', 'A')),
+  transaction_date date not null,
+  transaction_type text not null check (transaction_type in
+    ('contribution', 'switch_in', 'switch_out', 'fee', 'withdrawal')),
+  -- NOTE: a 1:1 unit-reissuance event (e.g. "Credit of units due to
+  -- implementation of Multiple NAV Framework") is NOT a real transaction and
+  -- is never stored as a row here -- see classifyStatementRow(), which skips
+  -- it entirely.
+  amount numeric(18,4) not null,       -- signed: + contribution/switch_in, - switch_out/fee/withdrawal
+  nav numeric(12,4) not null,
+  units numeric(18,4) not null,        -- signed, same convention as amount
+  employee_amount numeric(18,4),       -- only meaningful for transaction_type='contribution'; null otherwise
+  employer_amount numeric(18,4),       -- only meaningful for transaction_type='contribution'; null otherwise
+  linked_transaction_id uuid references nps_scheme_transactions(id), -- pairs a switch_out with its switch_in
+  description text,                    -- raw description from the statement, kept for reference/debugging
+  created_at timestamptz not null default now()
+);
+create index nps_scheme_transactions_account_date_idx
+  on nps_scheme_transactions (nps_account_id, transaction_date);
+-- Idempotent-import dedup key (see Part 8 of the NPS rewrite spec).
+create unique index nps_scheme_transactions_dedup_idx
+  on nps_scheme_transactions (nps_account_id, scheme, transaction_date, description, units);
+
 -- =========================================================================
 -- bank_accounts — cash, tracked as savings/current/salary accounts rather
 -- than as a security. Feeds cash_value in portfolio_snapshots and the
@@ -305,6 +353,8 @@ alter table goals enable row level security;
 alter table fixed_deposits enable row level security;
 alter table nps_accounts enable row level security;
 alter table nps_contributions enable row level security;
+alter table nps_scheme_holdings enable row level security;
+alter table nps_scheme_transactions enable row level security;
 alter table bank_accounts enable row level security;
 alter table ppf_accounts enable row level security;
 alter table price_history enable row level security;
@@ -317,6 +367,8 @@ create policy "owner_only" on goals for all using (auth.uid() = user_id) with ch
 create policy "owner_only" on fixed_deposits for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on nps_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on nps_contributions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on nps_scheme_holdings for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on nps_scheme_transactions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on bank_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on ppf_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on price_history for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

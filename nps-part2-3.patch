@@ -1,0 +1,1905 @@
+diff --git a/src/constants/nps.ts b/src/constants/nps.ts
+index 897994a..5ba3108 100644
+--- a/src/constants/nps.ts
++++ b/src/constants/nps.ts
+@@ -30,3 +30,13 @@ export const NPS_SCHEME_PREFERENCES = [
+   "Auto Choice — Conservative (LC25)",
+ ] as const;
+ export type NPSSchemePreference = (typeof NPS_SCHEME_PREFERENCES)[number];
++
++/** The (up to) four NPS sub-fund asset classes a subscriber's corpus is split across. */
++export const NPS_SCHEMES = ["E", "C", "G", "A"] as const;
++export type NPSScheme = (typeof NPS_SCHEMES)[number];
++export const NPS_SCHEME_LABELS: Record<NPSScheme, string> = {
++  E: "Equity",
++  C: "Corporate Bonds",
++  G: "Government Securities",
++  A: "Alternative Assets",
++};
+diff --git a/src/lib/calculations/nps-classification.ts b/src/lib/calculations/nps-classification.ts
+new file mode 100644
+index 0000000..ec1921c
+--- /dev/null
++++ b/src/lib/calculations/nps-classification.ts
+@@ -0,0 +1,129 @@
++import type { NPSSchemeTransactionType } from "@/types/domain/nps";
++
++export interface RawStatementRow {
++  date: string; // ISO yyyy-mm-dd
++  description: string;
++  amount: number;
++  nav: number;
++  units: number;
++}
++
++export type ClassifiedStatementRow =
++  | {
++      kind: "transaction";
++      transactionType: NPSSchemeTransactionType;
++      date: string;
++      amount: number;
++      nav: number;
++      units: number;
++      description: string;
++    }
++  | { kind: "skip"; reason: string; description: string }
++  | { kind: "unknown"; description: string; row: RawStatementRow };
++
++// Real statements report units to 4 decimal places, so treat anything this
++// close as an exact match rather than requiring bit-for-bit equality.
++const UNITS_EPSILON = 0.001;
++
++function isReissuanceRow(row: RawStatementRow, runningUnitsBeforeThisRow: number): boolean {
++  return runningUnitsBeforeThisRow > 0 && Math.abs(row.units - runningUnitsBeforeThisRow) < UNITS_EPSILON;
++}
++
++/**
++ * Classifies one raw row of a real NPS statement (NSDL/Protean, one scheme
++ * at a time) into a scheme transaction, or flags it to be skipped or
++ * reviewed. Pure function, no I/O — fully unit-testable, including against
++ * a real statement (see test/nps-classification.test.ts, which runs this
++ * over an actual subscriber's 193-row, 3-scheme consolidated statement and
++ * checks the totals it produces against that subscriber's independently
++ * verified invested amount and corpus).
++ *
++ * `runningUnitsBeforeThisRow` is the running unit total for this scheme
++ * immediately BEFORE this row — needed to detect a reissuance event like
++ * PFRDA's 2026 Multiple NAV Framework rollout, which credited every
++ * subscriber's full existing unit balance back to them as a single row
++ * under a new NAV scale. That row carries no new money and changes no unit
++ * count (its `units` value exactly equals what was already held), so it
++ * must never be treated as a contribution or added to the running total a
++ * second time.
++ */
++export function classifyStatementRow(row: RawStatementRow, runningUnitsBeforeThisRow: number): ClassifiedStatementRow {
++  const description = row.description.trim();
++  const d = description.toLowerCase();
++
++  if (d.includes("opening balance") || d.includes("closing balance")) {
++    return { kind: "skip", reason: "informational balance row, not a transaction", description };
++  }
++
++  if (d.includes("switch in")) {
++    return { kind: "transaction", transactionType: "switch_in", date: row.date, amount: row.amount, nav: row.nav, units: row.units, description };
++  }
++  if (d.includes("switch out")) {
++    return { kind: "transaction", transactionType: "switch_out", date: row.date, amount: row.amount, nav: row.nav, units: row.units, description };
++  }
++  if (d.includes("billing")) {
++    return { kind: "transaction", transactionType: "fee", date: row.date, amount: row.amount, nav: row.nav, units: row.units, description };
++  }
++  if (d.includes("withdrawal")) {
++    return { kind: "transaction", transactionType: "withdrawal", date: row.date, amount: row.amount, nav: row.nav, units: row.units, description };
++  }
++  if (d.includes("contribution") || d.includes("arrear")) {
++    return { kind: "transaction", transactionType: "contribution", date: row.date, amount: row.amount, nav: row.nav, units: row.units, description };
++  }
++
++  // Unrecognized wording. Before giving up, check for a reissuance
++  // signature: units exactly matching the running total means no real
++  // units were added or removed, which is the one pattern real statements
++  // use for "restated under a new framework" events — regardless of
++  // whatever exact phrase PFRDA uses for the next one of these.
++  if (isReissuanceRow(row, runningUnitsBeforeThisRow)) {
++    return {
++      kind: "skip",
++      reason: "unit count matches the prior running total — treated as a restatement/reissuance, not a real transaction",
++      description,
++    };
++  }
++
++  return { kind: "unknown", description, row };
++}
++
++export interface ClassifiedSchemeStatement {
++  transactions: Extract<ClassifiedStatementRow, { kind: "transaction" }>[];
++  skipped: Extract<ClassifiedStatementRow, { kind: "skip" }>[];
++  unknown: Extract<ClassifiedStatementRow, { kind: "unknown" }>[];
++  /** Running unit total after processing every row — this scheme's final unit balance. */
++  finalUnits: number;
++}
++
++/**
++ * Runs classifyStatementRow() over one scheme's statement rows IN ORDER,
++ * tracking the running unit total as it goes (required for reissuance
++ * detection). Returns the transactions to persist, anything skipped (for
++ * an import summary), and anything unrecognized — an unrecognized row is
++ * never silently classified either way, so the importer can surface it for
++ * a human to look at before committing anything.
++ */
++export function classifySchemeStatement(rows: RawStatementRow[]): ClassifiedSchemeStatement {
++  const transactions: ClassifiedSchemeStatement["transactions"] = [];
++  const skipped: ClassifiedSchemeStatement["skipped"] = [];
++  const unknown: ClassifiedSchemeStatement["unknown"] = [];
++
++  let runningUnits = 0;
++  for (const row of rows) {
++    const classified = classifyStatementRow(row, runningUnits);
++    if (classified.kind === "transaction") {
++      transactions.push(classified);
++      runningUnits += classified.units;
++    } else if (classified.kind === "skip") {
++      skipped.push(classified);
++      // Running total intentionally left unchanged — a skip is either
++      // purely informational (opening/closing balance) or a reissuance
++      // whose units already equal the running total, so leaving it as-is
++      // is correct either way.
++    } else {
++      unknown.push(classified);
++    }
++  }
++
++  return { transactions, skipped, unknown, finalUnits: runningUnits };
++}
+diff --git a/src/types/database.ts b/src/types/database.ts
+index f39f61e..010bc46 100644
+--- a/src/types/database.ts
++++ b/src/types/database.ts
+@@ -109,6 +109,33 @@ export interface NPSContributionRow {
+   created_at: string;
+ }
+ 
++export interface NPSSchemeHoldingRow {
++  id: string;
++  nps_account_id: string;
++  scheme: string;
++  units_held: number;
++  last_nav: number | null;
++  last_nav_date: string | null;
++  created_at: string;
++  updated_at: string;
++}
++
++export interface NPSSchemeTransactionRow {
++  id: string;
++  nps_account_id: string;
++  scheme: string;
++  transaction_date: string;
++  transaction_type: string;
++  amount: number;
++  nav: number;
++  units: number;
++  employee_amount: number | null;
++  employer_amount: number | null;
++  linked_transaction_id: string | null;
++  description: string | null;
++  created_at: string;
++}
++
+ export interface PPFAccountRow {
+   id: string;
+   account_number: string | null;
+diff --git a/src/types/domain/nps.ts b/src/types/domain/nps.ts
+index db9f93d..3ea8a87 100644
+--- a/src/types/domain/nps.ts
++++ b/src/types/domain/nps.ts
+@@ -1,4 +1,4 @@
+-import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
++import type { NPSTier, NPSSchemePreference, NPSScheme } from "@/constants/nps";
+ 
+ export interface NPSAccount {
+   id: string;
+@@ -33,3 +33,46 @@ export interface NPSProjectionPoint {
+   year: number;
+   corpus: number;
+ }
++
++/**
++ * One scheme's (E/C/G/A) unit holding within an NPS account. currentCorpus on
++ * NPSAccount is derived from sum(unitsHeld * lastNav) across these when they
++ * exist for an account — see buildDerivedCorpus() in calculations/nps.ts.
++ */
++export interface NPSSchemeHolding {
++  id: string;
++  npsAccountId: string;
++  scheme: NPSScheme;
++  unitsHeld: number;
++  lastNav: number | null;
++  lastNavDate: string | null;
++  createdAt: string;
++  updatedAt: string;
++}
++
++export type NewNPSSchemeHolding = Omit<NPSSchemeHolding, "id" | "createdAt" | "updatedAt">;
++
++export type NPSSchemeTransactionType = "contribution" | "switch_in" | "switch_out" | "fee" | "withdrawal";
++
++/**
++ * One row of a real NPS statement (NSDL/Protean), post-classification. See
++ * classifyStatementRow() in calculations/nps-classification.ts for how a raw
++ * statement line becomes one of these (or gets skipped entirely).
++ */
++export interface NPSSchemeTransaction {
++  id: string;
++  npsAccountId: string;
++  scheme: NPSScheme;
++  transactionDate: string;
++  transactionType: NPSSchemeTransactionType;
++  amount: number; // signed: + contribution/switch_in, - switch_out/fee/withdrawal
++  nav: number;
++  units: number; // signed, same convention as amount
++  employeeAmount: number | null; // only meaningful for 'contribution'; often unknown per-scheme (see classifier)
++  employerAmount: number | null;
++  linkedTransactionId: string | null; // pairs a switch_out with its switch_in
++  description: string | null; // raw statement text, kept for reference/debugging
++  createdAt: string;
++}
++
++export type NewNPSSchemeTransaction = Omit<NPSSchemeTransaction, "id" | "createdAt">;
+diff --git a/supabase/schema.sql b/supabase/schema.sql
+index d9291a9..3f6f702 100644
+--- a/supabase/schema.sql
++++ b/supabase/schema.sql
+@@ -176,6 +176,54 @@ create table nps_contributions (
+ );
+ create index nps_contributions_account_date_idx on nps_contributions (nps_account_id, contribution_date);
+ 
++-- nps_scheme_holdings / nps_scheme_transactions -- real NPS is 3-4 separate
++-- sub-funds (E/C/G/A), each with its own unit balance and NAV, not a single
++-- lump sum. Built from importing a real NSDL/Protean statement (see
++-- src/lib/calculations/nps-classification.ts). nps_accounts.current_corpus
++-- stays as a fallback for accounts that have not been migrated to
++-- scheme-level tracking -- see buildDerivedCorpus() in calculations/nps.ts.
++create table nps_scheme_holdings (
++  id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
++  nps_account_id uuid not null references nps_accounts(id) on delete cascade,
++  scheme text not null check (scheme in ('E', 'C', 'G', 'A')),
++  units_held numeric(18,4) not null default 0,
++  last_nav numeric(12,4),
++  last_nav_date date,
++  created_at timestamptz not null default now(),
++  updated_at timestamptz not null default now(),
++  unique (nps_account_id, scheme)
++);
++create trigger nps_scheme_holdings_set_updated_at before update on nps_scheme_holdings
++  for each row execute function set_updated_at();
++
++create table nps_scheme_transactions (
++  id uuid primary key default gen_random_uuid(),
++  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
++  nps_account_id uuid not null references nps_accounts(id) on delete cascade,
++  scheme text not null check (scheme in ('E', 'C', 'G', 'A')),
++  transaction_date date not null,
++  transaction_type text not null check (transaction_type in
++    ('contribution', 'switch_in', 'switch_out', 'fee', 'withdrawal')),
++  -- NOTE: a 1:1 unit-reissuance event (e.g. "Credit of units due to
++  -- implementation of Multiple NAV Framework") is NOT a real transaction and
++  -- is never stored as a row here -- see classifyStatementRow(), which skips
++  -- it entirely.
++  amount numeric(18,4) not null,       -- signed: + contribution/switch_in, - switch_out/fee/withdrawal
++  nav numeric(12,4) not null,
++  units numeric(18,4) not null,        -- signed, same convention as amount
++  employee_amount numeric(18,4),       -- only meaningful for transaction_type='contribution'; null otherwise
++  employer_amount numeric(18,4),       -- only meaningful for transaction_type='contribution'; null otherwise
++  linked_transaction_id uuid references nps_scheme_transactions(id), -- pairs a switch_out with its switch_in
++  description text,                    -- raw description from the statement, kept for reference/debugging
++  created_at timestamptz not null default now()
++);
++create index nps_scheme_transactions_account_date_idx
++  on nps_scheme_transactions (nps_account_id, transaction_date);
++-- Idempotent-import dedup key (see Part 8 of the NPS rewrite spec).
++create unique index nps_scheme_transactions_dedup_idx
++  on nps_scheme_transactions (nps_account_id, scheme, transaction_date, description, units);
++
+ -- =========================================================================
+ -- bank_accounts — cash, tracked as savings/current/salary accounts rather
+ -- than as a security. Feeds cash_value in portfolio_snapshots and the
+@@ -305,6 +353,8 @@ alter table goals enable row level security;
+ alter table fixed_deposits enable row level security;
+ alter table nps_accounts enable row level security;
+ alter table nps_contributions enable row level security;
++alter table nps_scheme_holdings enable row level security;
++alter table nps_scheme_transactions enable row level security;
+ alter table bank_accounts enable row level security;
+ alter table ppf_accounts enable row level security;
+ alter table price_history enable row level security;
+@@ -317,6 +367,8 @@ create policy "owner_only" on goals for all using (auth.uid() = user_id) with ch
+ create policy "owner_only" on fixed_deposits for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+ create policy "owner_only" on nps_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+ create policy "owner_only" on nps_contributions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on nps_scheme_holdings for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
++create policy "owner_only" on nps_scheme_transactions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+ create policy "owner_only" on bank_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+ create policy "owner_only" on ppf_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+ create policy "owner_only" on price_history for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+diff --git a/supabase/sync-schema.sql b/supabase/sync-schema.sql
+index 07af54d..63bb72a 100644
+--- a/supabase/sync-schema.sql
++++ b/supabase/sync-schema.sql
+@@ -197,6 +197,50 @@ alter table nps_contributions add column if not exists notes text;
+ create index if not exists nps_contributions_account_date_idx on nps_contributions (nps_account_id, contribution_date);
+ create index if not exists nps_contributions_user_id_idx on nps_contributions (user_id);
+ 
++-- ---- nps_scheme_holdings / nps_scheme_transactions ----
++create table if not exists nps_scheme_holdings (
++  id uuid primary key default gen_random_uuid(),
++  created_at timestamptz not null default now(),
++  updated_at timestamptz not null default now()
++);
++alter table nps_scheme_holdings add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
++alter table nps_scheme_holdings add column if not exists nps_account_id uuid references nps_accounts(id) on delete cascade;
++alter table nps_scheme_holdings add column if not exists scheme text;
++alter table nps_scheme_holdings add column if not exists units_held numeric(18,4) not null default 0;
++alter table nps_scheme_holdings add column if not exists last_nav numeric(12,4);
++alter table nps_scheme_holdings add column if not exists last_nav_date date;
++do $$ begin
++  if not exists (select 1 from pg_constraint where conname = 'nps_scheme_holdings_account_scheme_key') then
++    alter table nps_scheme_holdings add constraint nps_scheme_holdings_account_scheme_key unique (nps_account_id, scheme);
++  end if;
++end $$;
++drop trigger if exists nps_scheme_holdings_set_updated_at on nps_scheme_holdings;
++create trigger nps_scheme_holdings_set_updated_at before update on nps_scheme_holdings
++  for each row execute function set_updated_at();
++
++create table if not exists nps_scheme_transactions (
++  id uuid primary key default gen_random_uuid(),
++  created_at timestamptz not null default now()
++);
++alter table nps_scheme_transactions add column if not exists user_id uuid not null default auth.uid() references auth.users(id) on delete cascade;
++alter table nps_scheme_transactions add column if not exists nps_account_id uuid references nps_accounts(id) on delete cascade;
++alter table nps_scheme_transactions add column if not exists scheme text;
++alter table nps_scheme_transactions add column if not exists transaction_date date;
++alter table nps_scheme_transactions add column if not exists transaction_type text;
++alter table nps_scheme_transactions add column if not exists amount numeric(18,4);
++alter table nps_scheme_transactions add column if not exists nav numeric(12,4);
++alter table nps_scheme_transactions add column if not exists units numeric(18,4);
++alter table nps_scheme_transactions add column if not exists employee_amount numeric(18,4);
++alter table nps_scheme_transactions add column if not exists employer_amount numeric(18,4);
++alter table nps_scheme_transactions add column if not exists linked_transaction_id uuid references nps_scheme_transactions(id);
++alter table nps_scheme_transactions add column if not exists description text;
++create index if not exists nps_scheme_transactions_account_date_idx
++  on nps_scheme_transactions (nps_account_id, transaction_date);
++create index if not exists nps_scheme_transactions_user_id_idx on nps_scheme_transactions (user_id);
++-- Idempotent-import dedup key (see Part 8 of the NPS rewrite spec).
++create unique index if not exists nps_scheme_transactions_dedup_idx
++  on nps_scheme_transactions (nps_account_id, scheme, transaction_date, description, units);
++
+ -- ---- bank_accounts ----
+ create table if not exists bank_accounts (
+   id uuid primary key default gen_random_uuid(),
+@@ -299,7 +343,7 @@ do $$
+ declare
+   t text;
+ begin
+-  foreach t in array array['assets','transactions','portfolio_snapshots','goals','fixed_deposits','nps_accounts','nps_contributions','bank_accounts','ppf_accounts','price_history','watchlist_items','liabilities']
++  foreach t in array array['assets','transactions','portfolio_snapshots','goals','fixed_deposits','nps_accounts','nps_contributions','nps_scheme_holdings','nps_scheme_transactions','bank_accounts','ppf_accounts','price_history','watchlist_items','liabilities']
+   loop
+     execute format('alter table %I enable row level security', t);
+     execute format('drop policy if exists "owner_only" on %I', t);
+diff --git a/test/fixtures/nps-consolidated-sample.json b/test/fixtures/nps-consolidated-sample.json
+new file mode 100644
+index 0000000..75d4cc0
+--- /dev/null
++++ b/test/fixtures/nps-consolidated-sample.json
+@@ -0,0 +1,1359 @@
++{
++  "E": [
++    {
++      "date": "2022-12-01",
++      "description": "By Contribution for November2022",
++      "amount": 5948.5,
++      "nav": 37.4758,
++      "units": 158.729
++    },
++    {
++      "date": "2023-01-02",
++      "description": "By Contribution for December2022",
++      "amount": 7436,
++      "nav": 36.3626,
++      "units": 204.4958
++    },
++    {
++      "date": "2023-02-02",
++      "description": "By Contribution for January2023",
++      "amount": 7436,
++      "nav": 35.4237,
++      "units": 209.9159
++    },
++    {
++      "date": "2023-02-22",
++      "description": "By Switch In From HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME C - TIER I(CORPORATE BONDS) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 81.8,
++      "nav": 35.3402,
++      "units": 2.3146
++    },
++    {
++      "date": "2023-02-22",
++      "description": "By Switch In From HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME G - TIER I(GOVERNMENT SECURITIES) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 55.99,
++      "nav": 35.3402,
++      "units": 1.5843
++    },
++    {
++      "date": "2023-03-01",
++      "description": "By Contribution for February2023",
++      "amount": 7436,
++      "nav": 35.1853,
++      "units": 211.3382
++    },
++    {
++      "date": "2023-04-06",
++      "description": "Billing for Q4 2022-2023",
++      "amount": -2.18,
++      "nav": 35.4604,
++      "units": -0.0614
++    },
++    {
++      "date": "2023-04-13",
++      "description": "By Contribution for March2023",
++      "amount": 7436,
++      "nav": 35.8214,
++      "units": 207.5854
++    },
++    {
++      "date": "2023-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 648,
++      "nav": 36.4534,
++      "units": 17.7761
++    },
++    {
++      "date": "2023-05-02",
++      "description": "By Contribution for April2023",
++      "amount": 7651.5,
++      "nav": 36.4534,
++      "units": 209.8981
++    },
++    {
++      "date": "2023-06-01",
++      "description": "By Contribution for May2023",
++      "amount": 7651.5,
++      "nav": 37.4311,
++      "units": 204.4155
++    },
++    {
++      "date": "2023-07-03",
++      "description": "By Contribution for June2023",
++      "amount": 7651.5,
++      "nav": 39.0979,
++      "units": 195.701
++    },
++    {
++      "date": "2023-08-07",
++      "description": "By Contribution for July2023",
++      "amount": 7873,
++      "nav": 39.8079,
++      "units": 197.7748
++    },
++    {
++      "date": "2023-09-01",
++      "description": "By Contribution for August2023",
++      "amount": 7873,
++      "nav": 39.8571,
++      "units": 197.5306
++    },
++    {
++      "date": "2023-10-03",
++      "description": "By Contribution for September2023",
++      "amount": 7873,
++      "nav": 40.09,
++      "units": 196.3831
++    },
++    {
++      "date": "2023-11-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 666,
++      "nav": 39.3142,
++      "units": 16.9404
++    },
++    {
++      "date": "2023-11-02",
++      "description": "By Contribution for October2023",
++      "amount": 8095,
++      "nav": 39.3142,
++      "units": 205.9052
++    },
++    {
++      "date": "2023-12-01",
++      "description": "By Contribution for November2023",
++      "amount": 8095,
++      "nav": 41.8156,
++      "units": 193.588
++    },
++    {
++      "date": "2024-01-01",
++      "description": "By Contribution for December2023",
++      "amount": 8095,
++      "nav": 44.6892,
++      "units": 181.1399
++    },
++    {
++      "date": "2024-02-01",
++      "description": "By Contribution for January2024",
++      "amount": 8095,
++      "nav": 44.9366,
++      "units": 180.1426
++    },
++    {
++      "date": "2024-02-20",
++      "description": "To Switch out to HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME G - TIER I(GOVERNMENT SECURITIES) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -2798.78,
++      "nav": 46.3202,
++      "units": -60.4226
++    },
++    {
++      "date": "2024-02-20",
++      "description": "To Switch out to HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME C - TIER I(CORPORATE BONDS) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -5192.84,
++      "nav": 46.3202,
++      "units": -112.1075
++    },
++    {
++      "date": "2024-03-01",
++      "description": "By Contribution for February2024",
++      "amount": 8095,
++      "nav": 46.8076,
++      "units": 172.942
++    },
++    {
++      "date": "2024-04-06",
++      "description": "Billing for Q4 2023-2024",
++      "amount": -2.22,
++      "nav": 47.4077,
++      "units": -0.0468
++    },
++    {
++      "date": "2024-04-10",
++      "description": "By Contribution for March2024",
++      "amount": 8316,
++      "nav": 47.9217,
++      "units": 173.533
++    },
++    {
++      "date": "2024-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 444,
++      "nav": 48.1665,
++      "units": 9.218
++    },
++    {
++      "date": "2024-05-02",
++      "description": "By Contribution for April2024",
++      "amount": 8316,
++      "nav": 48.1665,
++      "units": 172.6511
++    },
++    {
++      "date": "2024-06-03",
++      "description": "By Contribution for May2024",
++      "amount": 8316,
++      "nav": 50.1922,
++      "units": 165.6831
++    },
++    {
++      "date": "2024-07-01",
++      "description": "By Contribution for June2024",
++      "amount": 8316,
++      "nav": 51.9337,
++      "units": 160.1272
++    },
++    {
++      "date": "2024-08-01",
++      "description": "By Contribution for July2024",
++      "amount": 8568,
++      "nav": 53.8166,
++      "units": 159.2073
++    },
++    {
++      "date": "2024-09-02",
++      "description": "By Contribution for August2024",
++      "amount": 8568,
++      "nav": 54.4779,
++      "units": 157.2747
++    },
++    {
++      "date": "2024-10-01",
++      "description": "By Contribution for September2024",
++      "amount": 8568,
++      "nav": 55.7015,
++      "units": 153.8199
++    },
++    {
++      "date": "2024-10-31",
++      "description": "By Contribution for October2024",
++      "amount": 8568,
++      "nav": 52.1025,
++      "units": 164.445
++    },
++    {
++      "date": "2024-12-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 686,
++      "nav": 52.4641,
++      "units": 13.0756
++    },
++    {
++      "date": "2024-12-02",
++      "description": "By Contribution for November2024",
++      "amount": 8739.5,
++      "nav": 52.4641,
++      "units": 166.5805
++    },
++    {
++      "date": "2025-01-01",
++      "description": "By Contribution for December2024",
++      "amount": 8739.5,
++      "nav": 51.3353,
++      "units": 170.2434
++    },
++    {
++      "date": "2025-01-11",
++      "description": "Billing for Q3 2024-2025",
++      "amount": -0.86,
++      "nav": 51.891,
++      "units": -0.0165
++    },
++    {
++      "date": "2025-01-31",
++      "description": "By Contribution for January2025",
++      "amount": 8739.5,
++      "nav": 50.2133,
++      "units": 174.0475
++    },
++    {
++      "date": "2025-02-21",
++      "description": "By Switch In From NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME C - TIER I(CORPORATE BONDS) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 4349.85,
++      "nav": 48.4425,
++      "units": 89.794
++    },
++    {
++      "date": "2025-02-21",
++      "description": "By Switch In From NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME G - TIER I(GOVERNMENT SECURITIES) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 2476.94,
++      "nav": 48.4425,
++      "units": 51.1315
++    },
++    {
++      "date": "2025-03-03",
++      "description": "By Contribution for February2025",
++      "amount": 8739.5,
++      "nav": 47.0325,
++      "units": 185.8183
++    },
++    {
++      "date": "2025-04-05",
++      "description": "Billing for Q4 2024-2025",
++      "amount": -2.18,
++      "nav": 48.7856,
++      "units": -0.0446
++    },
++    {
++      "date": "2025-04-07",
++      "description": "By Contribution for March2025",
++      "amount": 8739.5,
++      "nav": 47.3739,
++      "units": 184.4792
++    },
++    {
++      "date": "2025-05-02",
++      "description": "By Contribution for April2025",
++      "amount": 8854,
++      "nav": 51.706,
++      "units": 171.2373
++    },
++    {
++      "date": "2025-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 345,
++      "nav": 51.706,
++      "units": 6.6723
++    },
++    {
++      "date": "2025-06-02",
++      "description": "By Contribution for May2025",
++      "amount": 8854,
++      "nav": 53.0462,
++      "units": 166.9111
++    },
++    {
++      "date": "2025-07-02",
++      "description": "By Contribution for June2025",
++      "amount": 6493,
++      "nav": 54.4623,
++      "units": 119.22
++    },
++    {
++      "date": "2025-08-04",
++      "description": "By Arrear - PAY DIFFERENCE",
++      "amount": 2361.5,
++      "nav": 53.1202,
++      "units": 44.4557
++    },
++    {
++      "date": "2025-08-04",
++      "description": "By Contribution for July2025",
++      "amount": 9114,
++      "nav": 53.1202,
++      "units": 171.5731
++    },
++    {
++      "date": "2025-09-01",
++      "description": "By Contribution for August2025",
++      "amount": 9114,
++      "nav": 53.2483,
++      "units": 171.1603
++    },
++    {
++      "date": "2025-10-03",
++      "description": "By Contribution for September2025",
++      "amount": 9114,
++      "nav": 53.885,
++      "units": 169.1379
++    },
++    {
++      "date": "2025-10-31",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 529.5,
++      "nav": 55.7697,
++      "units": 9.4944
++    },
++    {
++      "date": "2025-11-03",
++      "description": "By Contribution for October2025",
++      "amount": 9290.5,
++      "nav": 55.9924,
++      "units": 165.9243
++    },
++    {
++      "date": "2025-12-01",
++      "description": "By Contribution for November2025",
++      "amount": 9290.5,
++      "nav": 56.6768,
++      "units": 163.9206
++    },
++    {
++      "date": "2026-01-02",
++      "description": "By Contribution for December2025",
++      "amount": 9290.5,
++      "nav": 57.1316,
++      "units": 162.6157
++    },
++    {
++      "date": "2026-02-02",
++      "description": "By Contribution for January2026",
++      "amount": 9290.5,
++      "nav": 54.7568,
++      "units": 169.6684
++    },
++    {
++      "date": "2026-02-18",
++      "description": "To Switch out to NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME C - TIER I(CORPORATE BONDS) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -5308.02,
++      "nav": 56.7598,
++      "units": -93.5173
++    },
++    {
++      "date": "2026-02-18",
++      "description": "To Switch out to NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME G - TIER I(GOVERNMENT SECURITIES) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -9303.16,
++      "nav": 56.7598,
++      "units": -163.9042
++    },
++    {
++      "date": "2026-03-04",
++      "description": "By Contribution for February2026",
++      "amount": 9290.5,
++      "nav": 54.1191,
++      "units": 171.6676
++    },
++    {
++      "date": "2026-04-01",
++      "description": "Credit of units due to implementation of Multiple NAV Framework",
++      "amount": 344504.36,
++      "nav": 49.5635,
++      "units": 6950.7676
++    },
++    {
++      "date": "2026-04-15",
++      "description": "By Contribution for March2026",
++      "amount": 9290.5,
++      "nav": 53.8524,
++      "units": 172.5178
++    },
++    {
++      "date": "2026-05-04",
++      "description": "By Contribution for April2026",
++      "amount": 9290.5,
++      "nav": 53.5551,
++      "units": 173.4755
++    },
++    {
++      "date": "2026-05-04",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 354,
++      "nav": 53.5551,
++      "units": 6.61
++    },
++    {
++      "date": "2026-06-01",
++      "description": "By Contribution for May2026",
++      "amount": 9408,
++      "nav": 52.0888,
++      "units": 180.6146
++    },
++    {
++      "date": "2026-07-02",
++      "description": "By Contribution for June2026",
++      "amount": 9408,
++      "nav": 54.2491,
++      "units": 173.4222
++    },
++    {
++      "date": "2026-07-02",
++      "description": "By Arrear - PAY DIFFERENCE",
++      "amount": 118,
++      "nav": 54.2491,
++      "units": 2.1751
++    },
++    {
++      "date": "2026-07-31",
++      "description": "By Contribution for July2026",
++      "amount": 9696,
++      "nav": 54.9443,
++      "units": 176.4696
++    }
++  ],
++  "C": [
++    {
++      "date": "2022-12-01",
++      "description": "By Contribution for November2022",
++      "amount": 3569.1,
++      "nav": 23.2801,
++      "units": 153.3111
++    },
++    {
++      "date": "2023-01-02",
++      "description": "By Contribution for December2022",
++      "amount": 4461.6,
++      "nav": 23.4021,
++      "units": 190.6495
++    },
++    {
++      "date": "2023-02-02",
++      "description": "By Contribution for January2023",
++      "amount": 4461.6,
++      "nav": 23.5414,
++      "units": 189.5214
++    },
++    {
++      "date": "2023-02-20",
++      "description": "To Switch out to HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -81.8,
++      "nav": 23.5261,
++      "units": -3.4771
++    },
++    {
++      "date": "2023-03-01",
++      "description": "By Contribution for February2023",
++      "amount": 4461.6,
++      "nav": 23.5475,
++      "units": 189.4723
++    },
++    {
++      "date": "2023-04-06",
++      "description": "Billing for Q4 2022-2023",
++      "amount": -1.33,
++      "nav": 23.8465,
++      "units": -0.0557
++    },
++    {
++      "date": "2023-04-13",
++      "description": "By Contribution for March2023",
++      "amount": 4461.6,
++      "nav": 23.8809,
++      "units": 186.8271
++    },
++    {
++      "date": "2023-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 388.8,
++      "nav": 24.0489,
++      "units": 16.167
++    },
++    {
++      "date": "2023-05-02",
++      "description": "By Contribution for April2023",
++      "amount": 4590.9,
++      "nav": 24.0489,
++      "units": 190.8985
++    },
++    {
++      "date": "2023-06-01",
++      "description": "By Contribution for May2023",
++      "amount": 4590.9,
++      "nav": 24.2891,
++      "units": 189.0107
++    },
++    {
++      "date": "2023-07-03",
++      "description": "By Contribution for June2023",
++      "amount": 4590.9,
++      "nav": 24.3455,
++      "units": 188.5728
++    },
++    {
++      "date": "2023-08-07",
++      "description": "By Contribution for July2023",
++      "amount": 4723.8,
++      "nav": 24.4884,
++      "units": 192.8994
++    },
++    {
++      "date": "2023-09-01",
++      "description": "By Contribution for August2023",
++      "amount": 4723.8,
++      "nav": 24.6194,
++      "units": 191.873
++    },
++    {
++      "date": "2023-10-03",
++      "description": "By Contribution for September2023",
++      "amount": 4723.8,
++      "nav": 24.7707,
++      "units": 190.7011
++    },
++    {
++      "date": "2023-11-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 399.6,
++      "nav": 24.8132,
++      "units": 16.1043
++    },
++    {
++      "date": "2023-11-02",
++      "description": "By Contribution for October2023",
++      "amount": 4857,
++      "nav": 24.8132,
++      "units": 195.7425
++    },
++    {
++      "date": "2023-12-01",
++      "description": "By Contribution for November2023",
++      "amount": 4857,
++      "nav": 24.9407,
++      "units": 194.7419
++    },
++    {
++      "date": "2024-01-01",
++      "description": "By Contribution for December2023",
++      "amount": 4857,
++      "nav": 25.1483,
++      "units": 193.1343
++    },
++    {
++      "date": "2024-02-01",
++      "description": "By Contribution for January2024",
++      "amount": 4857,
++      "nav": 25.3527,
++      "units": 191.5772
++    },
++    {
++      "date": "2024-02-22",
++      "description": "By Switch In From HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 5192.84,
++      "nav": 25.5235,
++      "units": 203.4532
++    },
++    {
++      "date": "2024-03-01",
++      "description": "By Contribution for February2024",
++      "amount": 4857,
++      "nav": 25.5774,
++      "units": 189.8942
++    },
++    {
++      "date": "2024-04-06",
++      "description": "Billing for Q4 2023-2024",
++      "amount": -1.31,
++      "nav": 25.815,
++      "units": -0.0507
++    },
++    {
++      "date": "2024-04-10",
++      "description": "By Contribution for March2024",
++      "amount": 4989.6,
++      "nav": 25.84,
++      "units": 193.0959
++    },
++    {
++      "date": "2024-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 266.4,
++      "nav": 25.8716,
++      "units": 10.297
++    },
++    {
++      "date": "2024-05-02",
++      "description": "By Contribution for April2024",
++      "amount": 4989.6,
++      "nav": 25.8716,
++      "units": 192.8601
++    },
++    {
++      "date": "2024-06-03",
++      "description": "By Contribution for May2024",
++      "amount": 4989.6,
++      "nav": 26.1377,
++      "units": 190.8966
++    },
++    {
++      "date": "2024-07-01",
++      "description": "By Contribution for June2024",
++      "amount": 4989.6,
++      "nav": 26.2925,
++      "units": 189.7727
++    },
++    {
++      "date": "2024-08-01",
++      "description": "By Contribution for July2024",
++      "amount": 5140.8,
++      "nav": 26.5253,
++      "units": 193.8074
++    },
++    {
++      "date": "2024-09-02",
++      "description": "By Contribution for August2024",
++      "amount": 5140.8,
++      "nav": 26.7329,
++      "units": 192.3023
++    },
++    {
++      "date": "2024-10-01",
++      "description": "By Contribution for September2024",
++      "amount": 5140.8,
++      "nav": 27.087,
++      "units": 189.7884
++    },
++    {
++      "date": "2024-10-31",
++      "description": "By Contribution for October2024",
++      "amount": 5140.8,
++      "nav": 27.2713,
++      "units": 188.5058
++    },
++    {
++      "date": "2024-12-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 411.6,
++      "nav": 27.4881,
++      "units": 14.9737
++    },
++    {
++      "date": "2024-12-02",
++      "description": "By Contribution for November2024",
++      "amount": 5243.7,
++      "nav": 27.4881,
++      "units": 190.7625
++    },
++    {
++      "date": "2025-01-01",
++      "description": "By Contribution for December2024",
++      "amount": 5243.7,
++      "nav": 27.6158,
++      "units": 189.8804
++    },
++    {
++      "date": "2025-01-11",
++      "description": "Billing for Q3 2024-2025",
++      "amount": -0.51,
++      "nav": 27.6256,
++      "units": -0.0184
++    },
++    {
++      "date": "2025-01-31",
++      "description": "By Contribution for January2025",
++      "amount": 5243.7,
++      "nav": 27.7814,
++      "units": 188.7485
++    },
++    {
++      "date": "2025-02-18",
++      "description": "To Switch out to NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -4349.85,
++      "nav": 27.8301,
++      "units": -156.3005
++    },
++    {
++      "date": "2025-03-03",
++      "description": "By Contribution for February2025",
++      "amount": 5243.7,
++      "nav": 27.8134,
++      "units": 188.5314
++    },
++    {
++      "date": "2025-04-05",
++      "description": "Billing for Q4 2024-2025",
++      "amount": -1.33,
++      "nav": 28.4372,
++      "units": -0.0467
++    },
++    {
++      "date": "2025-04-07",
++      "description": "By Contribution for March2025",
++      "amount": 5243.7,
++      "nav": 28.4527,
++      "units": 184.2953
++    },
++    {
++      "date": "2025-05-02",
++      "description": "By Contribution for April2025",
++      "amount": 5312.4,
++      "nav": 28.6951,
++      "units": 185.1326
++    },
++    {
++      "date": "2025-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 207,
++      "nav": 28.6951,
++      "units": 7.2137
++    },
++    {
++      "date": "2025-06-02",
++      "description": "By Contribution for May2025",
++      "amount": 5312.4,
++      "nav": 29.0793,
++      "units": 182.6866
++    },
++    {
++      "date": "2025-07-02",
++      "description": "By Contribution for June2025",
++      "amount": 3895.8,
++      "nav": 29.103,
++      "units": 133.8624
++    },
++    {
++      "date": "2025-08-04",
++      "description": "By Arrear - PAY DIFFERENCE",
++      "amount": 1416.9,
++      "nav": 29.3452,
++      "units": 48.2838
++    },
++    {
++      "date": "2025-08-04",
++      "description": "By Contribution for July2025",
++      "amount": 5468.4,
++      "nav": 29.3452,
++      "units": 186.3473
++    },
++    {
++      "date": "2025-09-01",
++      "description": "By Contribution for August2025",
++      "amount": 5468.4,
++      "nav": 29.2493,
++      "units": 186.9583
++    },
++    {
++      "date": "2025-10-03",
++      "description": "By Contribution for September2025",
++      "amount": 5468.4,
++      "nav": 29.4256,
++      "units": 185.8381
++    },
++    {
++      "date": "2025-10-31",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 317.7,
++      "nav": 29.7327,
++      "units": 10.6852
++    },
++    {
++      "date": "2025-11-03",
++      "description": "By Contribution for October2025",
++      "amount": 5574.3,
++      "nav": 29.7498,
++      "units": 187.3726
++    },
++    {
++      "date": "2025-12-01",
++      "description": "By Contribution for November2025",
++      "amount": 5574.3,
++      "nav": 29.9417,
++      "units": 186.1717
++    },
++    {
++      "date": "2026-01-02",
++      "description": "By Contribution for December2025",
++      "amount": 5574.3,
++      "nav": 29.9646,
++      "units": 186.0295
++    },
++    {
++      "date": "2026-02-02",
++      "description": "By Contribution for January2026",
++      "amount": 5574.3,
++      "nav": 29.9171,
++      "units": 186.3248
++    },
++    {
++      "date": "2026-02-23",
++      "description": "By Switch In From NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 5308.02,
++      "nav": 30.1331,
++      "units": 176.1524
++    },
++    {
++      "date": "2026-03-04",
++      "description": "By Contribution for February2026",
++      "amount": 5574.3,
++      "nav": 30.153,
++      "units": 184.8671
++    },
++    {
++      "date": "2026-04-01",
++      "description": "Credit of units due to implementation of Multiple NAV Framework",
++      "amount": 234340.98,
++      "nav": 29.9399,
++      "units": 7827.0465
++    },
++    {
++      "date": "2026-04-15",
++      "description": "By Contribution for March2026",
++      "amount": 5574.3,
++      "nav": 30.171,
++      "units": 184.7568
++    },
++    {
++      "date": "2026-05-04",
++      "description": "By Contribution for April2026",
++      "amount": 5574.3,
++      "nav": 30.1019,
++      "units": 185.181
++    },
++    {
++      "date": "2026-05-04",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 212.4,
++      "nav": 30.1019,
++      "units": 7.056
++    },
++    {
++      "date": "2026-06-01",
++      "description": "By Contribution for May2026",
++      "amount": 5644.8,
++      "nav": 30.1166,
++      "units": 187.4315
++    },
++    {
++      "date": "2026-07-02",
++      "description": "By Contribution for June2026",
++      "amount": 5644.8,
++      "nav": 30.8853,
++      "units": 182.7665
++    },
++    {
++      "date": "2026-07-02",
++      "description": "By Arrear - PAY DIFFERENCE",
++      "amount": 70.8,
++      "nav": 30.8853,
++      "units": 2.2923
++    },
++    {
++      "date": "2026-07-31",
++      "description": "By Contribution for July2026",
++      "amount": 5817.6,
++      "nav": 30.9334,
++      "units": 188.0685
++    }
++  ],
++  "G": [
++    {
++      "date": "2022-12-01",
++      "description": "By Contribution for November2022",
++      "amount": 2379.4,
++      "nav": 22.5726,
++      "units": 105.4109
++    },
++    {
++      "date": "2023-01-02",
++      "description": "By Contribution for December2022",
++      "amount": 2974.4,
++      "nav": 22.5816,
++      "units": 131.7178
++    },
++    {
++      "date": "2023-02-02",
++      "description": "By Contribution for January2023",
++      "amount": 2974.4,
++      "nav": 22.8058,
++      "units": 130.4229
++    },
++    {
++      "date": "2023-02-20",
++      "description": "To Switch out to HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -55.99,
++      "nav": 22.7819,
++      "units": -2.4577
++    },
++    {
++      "date": "2023-03-01",
++      "description": "By Contribution for February2023",
++      "amount": 2974.4,
++      "nav": 22.7408,
++      "units": 130.7957
++    },
++    {
++      "date": "2023-04-06",
++      "description": "Billing for Q4 2022-2023",
++      "amount": -0.91,
++      "nav": 23.2153,
++      "units": -0.0391
++    },
++    {
++      "date": "2023-04-13",
++      "description": "By Contribution for March2023",
++      "amount": 2974.4,
++      "nav": 23.2357,
++      "units": 128.0099
++    },
++    {
++      "date": "2023-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 259.2,
++      "nav": 23.4362,
++      "units": 11.0598
++    },
++    {
++      "date": "2023-05-02",
++      "description": "By Contribution for April2023",
++      "amount": 3060.6,
++      "nav": 23.4362,
++      "units": 130.5928
++    },
++    {
++      "date": "2023-06-01",
++      "description": "By Contribution for May2023",
++      "amount": 3060.6,
++      "nav": 23.7486,
++      "units": 128.8749
++    },
++    {
++      "date": "2023-07-03",
++      "description": "By Contribution for June2023",
++      "amount": 3060.6,
++      "nav": 23.6708,
++      "units": 129.2985
++    },
++    {
++      "date": "2023-08-07",
++      "description": "By Contribution for July2023",
++      "amount": 3149.2,
++      "nav": 23.7509,
++      "units": 132.5928
++    },
++    {
++      "date": "2023-09-01",
++      "description": "By Contribution for August2023",
++      "amount": 3149.2,
++      "nav": 23.9254,
++      "units": 131.6258
++    },
++    {
++      "date": "2023-10-03",
++      "description": "By Contribution for September2023",
++      "amount": 3149.2,
++      "nav": 23.9078,
++      "units": 131.7227
++    },
++    {
++      "date": "2023-11-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 266.4,
++      "nav": 23.8902,
++      "units": 11.151
++    },
++    {
++      "date": "2023-11-02",
++      "description": "By Contribution for October2023",
++      "amount": 3238,
++      "nav": 23.8902,
++      "units": 135.5367
++    },
++    {
++      "date": "2023-12-01",
++      "description": "By Contribution for November2023",
++      "amount": 3238,
++      "nav": 24.0139,
++      "units": 134.8385
++    },
++    {
++      "date": "2024-01-01",
++      "description": "By Contribution for December2023",
++      "amount": 3238,
++      "nav": 24.3467,
++      "units": 132.9954
++    },
++    {
++      "date": "2024-02-01",
++      "description": "By Contribution for January2024",
++      "amount": 3238,
++      "nav": 24.91,
++      "units": 129.9879
++    },
++    {
++      "date": "2024-02-22",
++      "description": "By Switch In From HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 2798.78,
++      "nav": 25.0869,
++      "units": 111.5634
++    },
++    {
++      "date": "2024-03-01",
++      "description": "By Contribution for February2024",
++      "amount": 3238,
++      "nav": 25.1373,
++      "units": 128.8125
++    },
++    {
++      "date": "2024-04-06",
++      "description": "Billing for Q4 2023-2024",
++      "amount": -0.89,
++      "nav": 25.2167,
++      "units": -0.0352
++    },
++    {
++      "date": "2024-04-10",
++      "description": "By Contribution for March2024",
++      "amount": 3326.4,
++      "nav": 25.2216,
++      "units": 131.8869
++    },
++    {
++      "date": "2024-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 177.6,
++      "nav": 25.1902,
++      "units": 7.0503
++    },
++    {
++      "date": "2024-05-02",
++      "description": "By Contribution for April2024",
++      "amount": 3326.4,
++      "nav": 25.1902,
++      "units": 132.0513
++    },
++    {
++      "date": "2024-06-03",
++      "description": "By Contribution for May2024",
++      "amount": 3326.4,
++      "nav": 25.7226,
++      "units": 129.3181
++    },
++    {
++      "date": "2024-07-01",
++      "description": "By Contribution for June2024",
++      "amount": 3326.4,
++      "nav": 25.8654,
++      "units": 128.6042
++    },
++    {
++      "date": "2024-08-01",
++      "description": "By Contribution for July2024",
++      "amount": 3427.2,
++      "nav": 26.1252,
++      "units": 131.1836
++    },
++    {
++      "date": "2024-09-02",
++      "description": "By Contribution for August2024",
++      "amount": 3427.2,
++      "nav": 26.4242,
++      "units": 129.6992
++    },
++    {
++      "date": "2024-10-01",
++      "description": "By Contribution for September2024",
++      "amount": 3427.2,
++      "nav": 26.9056,
++      "units": 127.3786
++    },
++    {
++      "date": "2024-10-31",
++      "description": "By Contribution for October2024",
++      "amount": 3427.2,
++      "nav": 26.8051,
++      "units": 127.8562
++    },
++    {
++      "date": "2024-12-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 274.4,
++      "nav": 26.9923,
++      "units": 10.1658
++    },
++    {
++      "date": "2024-12-02",
++      "description": "By Contribution for November2024",
++      "amount": 3495.8,
++      "nav": 26.9923,
++      "units": 129.511
++    },
++    {
++      "date": "2025-01-01",
++      "description": "By Contribution for December2024",
++      "amount": 3495.8,
++      "nav": 27.0023,
++      "units": 129.463
++    },
++    {
++      "date": "2025-01-11",
++      "description": "Billing for Q3 2024-2025",
++      "amount": -0.34,
++      "nav": 26.9963,
++      "units": -0.0125
++    },
++    {
++      "date": "2025-01-31",
++      "description": "By Contribution for January2025",
++      "amount": 3495.8,
++      "nav": 27.2187,
++      "units": 128.4337
++    },
++    {
++      "date": "2025-02-18",
++      "description": "To Switch out to NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": -2476.94,
++      "nav": 27.248,
++      "units": -90.9039
++    },
++    {
++      "date": "2025-03-03",
++      "description": "By Contribution for February2025",
++      "amount": 3495.8,
++      "nav": 27.1058,
++      "units": 128.9687
++    },
++    {
++      "date": "2025-04-05",
++      "description": "Billing for Q4 2024-2025",
++      "amount": -0.91,
++      "nav": 28.1165,
++      "units": -0.0323
++    },
++    {
++      "date": "2025-04-07",
++      "description": "By Contribution for March2025",
++      "amount": 3495.8,
++      "nav": 28.0852,
++      "units": 124.4712
++    },
++    {
++      "date": "2025-05-02",
++      "description": "By Contribution for April2025",
++      "amount": 3541.6,
++      "nav": 28.5267,
++      "units": 124.1503
++    },
++    {
++      "date": "2025-05-02",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 138,
++      "nav": 28.5267,
++      "units": 4.8375
++    },
++    {
++      "date": "2025-06-02",
++      "description": "By Contribution for May2025",
++      "amount": 3541.6,
++      "nav": 28.6006,
++      "units": 123.8295
++    },
++    {
++      "date": "2025-07-02",
++      "description": "By Contribution for June2025",
++      "amount": 2597.2,
++      "nav": 28.1382,
++      "units": 92.3015
++    },
++    {
++      "date": "2025-08-04",
++      "description": "By Arrear - PAY DIFFERENCE",
++      "amount": 944.6,
++      "nav": 28.2984,
++      "units": 33.3799
++    },
++    {
++      "date": "2025-08-04",
++      "description": "By Contribution for July2025",
++      "amount": 3645.6,
++      "nav": 28.2984,
++      "units": 128.827
++    },
++    {
++      "date": "2025-09-01",
++      "description": "By Contribution for August2025",
++      "amount": 3645.6,
++      "nav": 27.4741,
++      "units": 132.6922
++    },
++    {
++      "date": "2025-10-03",
++      "description": "By Contribution for September2025",
++      "amount": 3645.6,
++      "nav": 28.0811,
++      "units": 129.8239
++    },
++    {
++      "date": "2025-10-31",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 211.8,
++      "nav": 28.0104,
++      "units": 7.5614
++    },
++    {
++      "date": "2025-11-03",
++      "description": "By Contribution for October2025",
++      "amount": 3716.2,
++      "nav": 27.9841,
++      "units": 132.7968
++    },
++    {
++      "date": "2025-12-01",
++      "description": "By Contribution for November2025",
++      "amount": 3716.2,
++      "nav": 27.9206,
++      "units": 133.0988
++    },
++    {
++      "date": "2026-01-02",
++      "description": "By Contribution for December2025",
++      "amount": 3716.2,
++      "nav": 28.1583,
++      "units": 131.9752
++    },
++    {
++      "date": "2026-02-02",
++      "description": "By Contribution for January2026",
++      "amount": 3716.2,
++      "nav": 27.9038,
++      "units": 133.1789
++    },
++    {
++      "date": "2026-02-23",
++      "description": "By Switch In From NPS TRUST- A/C HDFC PENSION FUND MANAGEMENT LIMITED SCHEME E - TIER I(EQUITY) On account of Rebalancing of Assets as per Regulatory Requirement",
++      "amount": 9303.16,
++      "nav": 28.1318,
++      "units": 330.699
++    },
++    {
++      "date": "2026-03-04",
++      "description": "By Contribution for February2026",
++      "amount": 3716.2,
++      "nav": 28.2203,
++      "units": 131.6853
++    },
++    {
++      "date": "2026-04-01",
++      "description": "Credit of units due to implementation of Multiple NAV Framework",
++      "amount": 154097.39,
++      "nav": 27.614,
++      "units": 5580.4082
++    },
++    {
++      "date": "2026-04-15",
++      "description": "By Contribution for March2026",
++      "amount": 3716.2,
++      "nav": 28.1548,
++      "units": 131.9917
++    },
++    {
++      "date": "2026-05-04",
++      "description": "By Contribution for April2026",
++      "amount": 3716.2,
++      "nav": 28.0421,
++      "units": 132.5221
++    },
++    {
++      "date": "2026-05-04",
++      "description": "By Arrear - DA ARREARS",
++      "amount": 141.6,
++      "nav": 28.0421,
++      "units": 5.0495
++    },
++    {
++      "date": "2026-06-01",
++      "description": "By Contribution for May2026",
++      "amount": 3763.2,
++      "nav": 28.0433,
++      "units": 134.1924
++    },
++    {
++      "date": "2026-07-02",
++      "description": "By Contribution for June2026",
++      "amount": 3763.2,
++      "nav": 29.0511,
++      "units": 129.5372
++    },
++    {
++      "date": "2026-07-02",
++      "description": "By Arrear - PAY DIFFERENCE",
++      "amount": 47.2,
++      "nav": 29.0511,
++      "units": 1.6247
++    },
++    {
++      "date": "2026-07-31",
++      "description": "By Contribution for July2026",
++      "amount": 3878.4,
++      "nav": 28.896,
++      "units": 134.2192
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/test/nps-classification.test.ts b/test/nps-classification.test.ts
+new file mode 100644
+index 0000000..3cdab45
+--- /dev/null
++++ b/test/nps-classification.test.ts
+@@ -0,0 +1,144 @@
++import { describe, it, expect } from "vitest";
++import { classifyStatementRow, classifySchemeStatement, type RawStatementRow } from "@/lib/calculations/nps-classification";
++import fixture from "./fixtures/nps-consolidated-sample.json";
++
++describe("classifyStatementRow", () => {
++  it("classifies a monthly contribution", () => {
++    const row: RawStatementRow = { date: "2024-01-02", description: "By Contribution for December2023", amount: 7436, nav: 36.36, units: 204.5 };
++    const result = classifyStatementRow(row, 1000);
++    expect(result).toMatchObject({ kind: "transaction", transactionType: "contribution" });
++  });
++
++  it("classifies an arrear payment as a contribution", () => {
++    const row: RawStatementRow = { date: "2023-05-02", description: "By Arrear - DA ARREARS", amount: 648, nav: 36.45, units: 17.7761 };
++    const result = classifyStatementRow(row, 1000);
++    expect(result).toMatchObject({ kind: "transaction", transactionType: "contribution" });
++  });
++
++  it("classifies a switch-in", () => {
++    const row: RawStatementRow = {
++      date: "2023-02-22",
++      description: "By Switch In From HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME C - TIER I(CORPORATE BONDS) On account of Rebalancing",
++      amount: 81.8,
++      nav: 35.34,
++      units: 2.3146,
++    };
++    const result = classifyStatementRow(row, 1000);
++    expect(result).toMatchObject({ kind: "transaction", transactionType: "switch_in" });
++  });
++
++  it("classifies a switch-out (already negative in the source)", () => {
++    const row: RawStatementRow = {
++      date: "2024-02-20",
++      description: "To Switch out to HDFC PENSION MANAGEMENT COMPANY LIMITED SCHEME G - TIER I(GOVERNMENT SECURITIES)",
++      amount: -2798.78,
++      nav: 46.32,
++      units: -60.4226,
++    };
++    const result = classifyStatementRow(row, 1000);
++    expect(result).toMatchObject({ kind: "transaction", transactionType: "switch_out", amount: -2798.78, units: -60.4226 });
++  });
++
++  it("classifies a quarterly billing charge as a fee", () => {
++    const row: RawStatementRow = { date: "2023-04-06", description: "Billing for Q4 2022-2023", amount: -2.18, nav: 35.46, units: -0.0614 };
++    const result = classifyStatementRow(row, 1000);
++    expect(result).toMatchObject({ kind: "transaction", transactionType: "fee" });
++  });
++
++  it("classifies a withdrawal", () => {
++    const row: RawStatementRow = { date: "2025-01-01", description: "Withdrawal on partial exit", amount: -50000, nav: 40, units: -1250 };
++    const result = classifyStatementRow(row, 5000);
++    expect(result).toMatchObject({ kind: "transaction", transactionType: "withdrawal" });
++  });
++
++  it("skips opening/closing balance rows", () => {
++    const row: RawStatementRow = { date: "2023-01-01", description: "Opening Balance", amount: 0, nav: 36, units: 500 };
++    const result = classifyStatementRow(row, 500);
++    expect(result.kind).toBe("skip");
++  });
++
++  it("skips a Multiple NAV Framework reissuance by exact description", () => {
++    const row: RawStatementRow = {
++      date: "2026-04-01",
++      description: "Credit of units due to implementation of Multiple NAV Framework",
++      amount: 344504.36,
++      nav: 49.5635,
++      units: 6950.7676,
++    };
++    const result = classifyStatementRow(row, 6950.7676);
++    expect(result.kind).toBe("skip");
++  });
++
++  it("skips an unrecognized restatement row purely by the units-match heuristic", () => {
++    // Different, made-up wording — the classifier shouldn't need to know
++    // PFRDA's exact phrase for a future reissuance event, only the pattern:
++    // no real transaction changes units without changing money.
++    const row: RawStatementRow = { date: "2027-01-01", description: "Some future re-platforming credit", amount: 999999, nav: 50, units: 3000 };
++    const result = classifyStatementRow(row, 3000);
++    expect(result.kind).toBe("skip");
++  });
++
++  it("flags truly unrecognized rows as unknown rather than guessing", () => {
++    const row: RawStatementRow = { date: "2025-01-01", description: "Something entirely unfamiliar", amount: 123, nav: 40, units: 3.075 };
++    const result = classifyStatementRow(row, 1000);
++    expect(result.kind).toBe("unknown");
++  });
++});
++
++describe("classifySchemeStatement against a real subscriber's consolidated statement", () => {
++  // This fixture is an anonymized real NPS consolidated statement: 3 sheets
++  // (E/C/G — no Alternative Assets scheme held), 193 total rows, including
++  // 6 switch pairs and one Multiple NAV Framework reissuance per scheme.
++  // The subscriber independently verified their invested amount and corpus
++  // against their statement; these are the exact figures this test checks
++  // the classifier reproduces.
++  const EXPECTED_TOTAL_INVESTED = 770_430.0;
++  const EXPECTED_TOTAL_CORPUS = 882_252.12;
++
++  it("produces no unknown rows across all three schemes", () => {
++    for (const scheme of ["E", "C", "G"] as const) {
++      const { unknown } = classifySchemeStatement(fixture[scheme] as RawStatementRow[]);
++      expect(unknown).toEqual([]);
++    }
++  });
++
++  it("skips exactly one row per scheme (the Multiple NAV Framework reissuance)", () => {
++    for (const scheme of ["E", "C", "G"] as const) {
++      const { skipped } = classifySchemeStatement(fixture[scheme] as RawStatementRow[]);
++      expect(skipped).toHaveLength(1);
++      expect(skipped[0].description.toLowerCase()).toContain("multiple nav framework");
++    }
++  });
++
++  it("reproduces the subscriber's independently verified total invested amount", () => {
++    let totalInvested = 0;
++    for (const scheme of ["E", "C", "G"] as const) {
++      const { transactions } = classifySchemeStatement(fixture[scheme] as RawStatementRow[]);
++      for (const t of transactions) {
++        if (t.transactionType === "contribution") totalInvested += t.amount;
++      }
++    }
++    expect(totalInvested).toBeCloseTo(EXPECTED_TOTAL_INVESTED, 2);
++  });
++
++  it("reproduces the subscriber's independently verified total corpus (units held × last statement NAV, per scheme)", () => {
++    let totalCorpus = 0;
++    for (const scheme of ["E", "C", "G"] as const) {
++      const rows = fixture[scheme] as RawStatementRow[];
++      const { finalUnits } = classifySchemeStatement(rows);
++      const lastNav = rows[rows.length - 1].nav;
++      totalCorpus += finalUnits * lastNav;
++    }
++    expect(totalCorpus).toBeCloseTo(EXPECTED_TOTAL_CORPUS, 2);
++  });
++
++  it("keeps switch_in/switch_out in the running unit total despite excluding them from invested amount", () => {
++    // Sanity check that switches aren't silently dropped: the E scheme's
++    // final units should differ from a hypothetical contributions-only sum,
++    // proving switch rows are actually being added into the running total.
++    const rows = fixture.E as RawStatementRow[];
++    const { transactions, finalUnits } = classifySchemeStatement(rows);
++    const contributionsOnlyUnits = transactions.filter((t) => t.transactionType === "contribution").reduce((sum, t) => sum + t.units, 0);
++    expect(finalUnits).not.toBeCloseTo(contributionsOnlyUnits, 2);
++  });
++});
