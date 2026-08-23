@@ -1,5 +1,5 @@
 import { npsRepository } from "@/lib/database/repositories/nps.repository";
-import { projectNPSCorpus, buildNPSCashflows } from "@/lib/calculations/nps";
+import { projectNPSCorpus, buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
 import { pairSwitches, selectTransactionsToImport } from "@/lib/import/nps-statement-parser";
 import { todayISO } from "@/lib/utils/date";
 import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
@@ -141,13 +141,43 @@ export const npsService = {
   },
 
   /**
-   * Cash flows for the portfolio-wide XIRR — see buildNPSCashflows() in
-   * calculations/nps.ts for the modeling details (untracked pre-logging
-   * corpus, terminal value, etc.).
+   * Cash flows for the portfolio-wide XIRR, routed per account:
+   *  - Accounts with scheme-level data (a statement has been imported) use
+   *    buildSchemeTransactionCashflows() — real, dated contribution/
+   *    withdrawal rows, no untracked-gap guessing needed.
+   *  - Accounts without it fall back to buildNPSCashflows()'s
+   *    contribution-log + untracked-gap heuristic, unchanged from before.
+   * A user with one imported account and one still-manual account gets a
+   * correct blend of both — this is what fixes the Dashboard/Analytics XIRR
+   * inconsistency (Part 6 of the NPS rewrite): both pages call this same
+   * function now, so they can no longer disagree.
    */
   async getCashflows(): Promise<Cashflow[]> {
-    const [accounts, contributions] = await Promise.all([npsRepository.findAll(), npsRepository.findAllContributions()]);
-    return buildNPSCashflows(accounts, contributions, todayISO());
+    const accounts = await npsRepository.findAll();
+    const today = todayISO();
+    const flows: Cashflow[] = [];
+    const schemeTrackedIds = new Set<string>();
+
+    const schemeTrackedFlows = await Promise.all(
+      accounts.map(async (account) => {
+        const holdings = await npsRepository.findSchemeHoldings(account.id);
+        if (holdings.length === 0) return null;
+        schemeTrackedIds.add(account.id);
+        const [schemeTxns, effectiveCorpus] = await Promise.all([npsRepository.findSchemeTransactions(account.id), this.getEffectiveCorpus(account)]);
+        return buildSchemeTransactionCashflows(effectiveCorpus, schemeTxns, today);
+      })
+    );
+    for (const f of schemeTrackedFlows) {
+      if (f) flows.push(...f);
+    }
+
+    const nonTrackedAccounts = accounts.filter((a) => !schemeTrackedIds.has(a.id));
+    if (nonTrackedAccounts.length > 0) {
+      const contributions = await npsRepository.findAllContributions();
+      flows.push(...buildNPSCashflows(nonTrackedAccounts, contributions, today));
+    }
+
+    return flows;
   },
 };
 

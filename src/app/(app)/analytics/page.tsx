@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { StatTile } from "@/features/analytics/components/stat-tile";
 import { AllocationDonut } from "@/components/charts/allocation-donut";
 import { portfolioService } from "@/lib/services/portfolio.service";
+import { npsService } from "@/lib/services/nps.service";
 import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
 import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
@@ -20,17 +21,21 @@ export const dynamic = "force-dynamic";
 const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
 
 export default async function AnalyticsPage() {
-  const [summary, allocation, transactions, snapshots, holdingsWithXirr] = await Promise.all([
+  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     transactionsRepository.findAll(),
     snapshotsRepository.findAll(),
     portfolioService.getHoldingsWithXIRR(),
+    npsService.getCashflows(),
   ]);
 
-  const cashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
-  if (cashflows.length > 0) cashflows.push({ date: todayISO(), amount: summary.currentValue });
-  const xirr = calculateXIRR(cashflows);
+  const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+  if (securitiesCashflows.length > 0) securitiesCashflows.push({ date: todayISO(), amount: summary.currentValue });
+  // Pooled with NPS the same way the Dashboard's XIRR card is (see
+  // npsService.getCashflows()) — this was previously securities-only here,
+  // silently disagreeing with the Dashboard under the same "XIRR" label.
+  const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
 
   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
@@ -60,7 +65,7 @@ export default async function AnalyticsPage() {
           <CardHeader><CardTitle>Returns</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatTile label="CAGR" result={cagr} />
-            <StatTile label="XIRR" result={xirr} />
+            <StatTile label="XIRR" result={xirr} caption="Securities + NPS · excludes FD, PPF, cash" />
             <Card className="flex flex-col gap-1.5 p-5">
               <span className="text-xs font-medium text-ink-muted">Realized P&amp;L</span>
               <span className="font-tabular text-xl font-medium text-ink">{formatSignedCurrency(summary.realizedPnl)}</span>

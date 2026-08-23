@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildNPSCashflows } from "@/lib/calculations/nps";
-import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
+import { buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
+import { classifySchemeStatement } from "@/lib/calculations/nps-classification";
+import type { NPSAccount, NPSContribution, NPSSchemeTransaction } from "@/types/domain/nps";
+import type { RawStatementRow } from "@/lib/calculations/nps-classification";
+import fixture from "./fixtures/nps-consolidated-sample.json";
 
 function account(overrides: Partial<NPSAccount> = {}): NPSAccount {
   return {
@@ -85,5 +88,93 @@ describe("buildNPSCashflows", () => {
       { date: "2023-06-01", amount: -30_000 },
       { date: "2025-01-01", amount: 30_000 },
     ]);
+  });
+});
+
+function schemeTxn(overrides: Partial<NPSSchemeTransaction> = {}): NPSSchemeTransaction {
+  return {
+    id: "npst-1",
+    npsAccountId: "nps-1",
+    scheme: "E",
+    transactionDate: "2024-06-01",
+    transactionType: "contribution",
+    amount: 7000,
+    nav: 40,
+    units: 175,
+    employeeAmount: null,
+    employerAmount: null,
+    linkedTransactionId: null,
+    description: "By Contribution for May2024",
+    createdAt: "2024-06-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("buildSchemeTransactionCashflows", () => {
+  it("treats a positive-stored contribution as a negative (outflow) cash flow", () => {
+    const flows = buildSchemeTransactionCashflows(0, [schemeTxn({ amount: 7000, transactionDate: "2024-06-01" })], "2025-01-01");
+    expect(flows).toEqual([{ date: "2024-06-01", amount: -7000 }]);
+  });
+
+  it("treats a negative-stored withdrawal as a positive (inflow) cash flow", () => {
+    const flows = buildSchemeTransactionCashflows(0, [schemeTxn({ transactionType: "withdrawal", amount: -50_000, transactionDate: "2024-08-01" })], "2025-01-01");
+    expect(flows).toEqual([{ date: "2024-08-01", amount: 50_000 }]);
+  });
+
+  it("excludes switch_in, switch_out, and fee rows entirely — no cash flow for any of them", () => {
+    const flows = buildSchemeTransactionCashflows(
+      0,
+      [
+        schemeTxn({ transactionType: "switch_in", amount: 5000, id: "1" }),
+        schemeTxn({ transactionType: "switch_out", amount: -5000, id: "2" }),
+        schemeTxn({ transactionType: "fee", amount: -2.18, id: "3" }),
+      ],
+      "2025-01-01"
+    );
+    expect(flows).toEqual([]);
+  });
+
+  it("appends one terminal inflow at `today` for the effective corpus, and omits it when corpus is zero", () => {
+    const withCorpus = buildSchemeTransactionCashflows(100_000, [], "2025-01-01");
+    expect(withCorpus).toEqual([{ date: "2025-01-01", amount: 100_000 }]);
+
+    const zeroCorpus = buildSchemeTransactionCashflows(0, [], "2025-01-01");
+    expect(zeroCorpus).toEqual([]);
+  });
+
+  it("reproduces the real subscriber's total invested amount as the sum of contribution outflows", () => {
+    // Same real fixture validated elsewhere: classify all three schemes,
+    // flatten to scheme transactions, run through the cashflow builder, and
+    // confirm the contribution outflows still sum to the exact validated
+    // total-invested figure — proving nothing was lost or double-counted
+    // going from "classified transactions" to "XIRR cash flows".
+    const allTxns: NPSSchemeTransaction[] = [];
+    for (const scheme of ["E", "C", "G"] as const) {
+      const { transactions } = classifySchemeStatement(fixture[scheme] as RawStatementRow[]);
+      for (const t of transactions) {
+        allTxns.push(
+          schemeTxn({
+            id: `${scheme}-${t.date}-${t.units}`,
+            scheme,
+            transactionDate: t.date,
+            transactionType: t.transactionType,
+            amount: t.amount,
+            nav: t.nav,
+            units: t.units,
+            description: t.description,
+          })
+        );
+      }
+    }
+
+    const flows = buildSchemeTransactionCashflows(882_252.12, allTxns, "2026-08-01");
+
+    const contributionOutflowTotal = flows.filter((f) => f.date !== "2026-08-01").reduce((sum, f) => sum + -f.amount, 0);
+    expect(contributionOutflowTotal).toBeCloseTo(770_430.0, 2);
+
+    // No switch/fee dates leaked through as cash flows.
+    const terminalEntries = flows.filter((f) => f.date === "2026-08-01");
+    expect(terminalEntries).toHaveLength(1);
+    expect(terminalEntries[0].amount).toBeCloseTo(882_252.12, 2);
   });
 });

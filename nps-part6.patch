@@ -1,0 +1,295 @@
+diff --git a/src/app/(app)/analytics/page.tsx b/src/app/(app)/analytics/page.tsx
+index 759f124..bbbee10 100644
+--- a/src/app/(app)/analytics/page.tsx
++++ b/src/app/(app)/analytics/page.tsx
+@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/shared/empty-state";
+ import { StatTile } from "@/features/analytics/components/stat-tile";
+ import { AllocationDonut } from "@/components/charts/allocation-donut";
+ import { portfolioService } from "@/lib/services/portfolio.service";
++import { npsService } from "@/lib/services/nps.service";
+ import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
+ import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
+ import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
+@@ -20,17 +21,21 @@ export const dynamic = "force-dynamic";
+ const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
+ 
+ export default async function AnalyticsPage() {
+-  const [summary, allocation, transactions, snapshots, holdingsWithXirr] = await Promise.all([
++  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows] = await Promise.all([
+     portfolioService.getPortfolioSummary(),
+     portfolioService.getAssetAllocation(),
+     transactionsRepository.findAll(),
+     snapshotsRepository.findAll(),
+     portfolioService.getHoldingsWithXIRR(),
++    npsService.getCashflows(),
+   ]);
+ 
+-  const cashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+-  if (cashflows.length > 0) cashflows.push({ date: todayISO(), amount: summary.currentValue });
+-  const xirr = calculateXIRR(cashflows);
++  const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
++  if (securitiesCashflows.length > 0) securitiesCashflows.push({ date: todayISO(), amount: summary.currentValue });
++  // Pooled with NPS the same way the Dashboard's XIRR card is (see
++  // npsService.getCashflows()) — this was previously securities-only here,
++  // silently disagreeing with the Dashboard under the same "XIRR" label.
++  const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
+ 
+   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
+@@ -60,7 +65,7 @@ export default async function AnalyticsPage() {
+           <CardHeader><CardTitle>Returns</CardTitle></CardHeader>
+           <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
+             <StatTile label="CAGR" result={cagr} />
+-            <StatTile label="XIRR" result={xirr} />
++            <StatTile label="XIRR" result={xirr} caption="Securities + NPS · excludes FD, PPF, cash" />
+             <Card className="flex flex-col gap-1.5 p-5">
+               <span className="text-xs font-medium text-ink-muted">Realized P&amp;L</span>
+               <span className="font-tabular text-xl font-medium text-ink">{formatSignedCurrency(summary.realizedPnl)}</span>
+diff --git a/src/features/analytics/components/stat-tile.tsx b/src/features/analytics/components/stat-tile.tsx
+index 0a3847e..a2090da 100644
+--- a/src/features/analytics/components/stat-tile.tsx
++++ b/src/features/analytics/components/stat-tile.tsx
+@@ -7,9 +7,11 @@ interface StatTileProps {
+   result: CalcResult<number>;
+   format?: (value: number) => string;
+   colorByValue?: boolean;
++  /** Small muted line under the value — use to disclose scope (e.g. what's included/excluded), same idea as the Dashboard XIRR card's caption. */
++  caption?: string;
+ }
+ 
+-export function StatTile({ label, result, format = (v) => `${v.toFixed(2)}%`, colorByValue = false }: StatTileProps) {
++export function StatTile({ label, result, format = (v) => `${v.toFixed(2)}%`, colorByValue = false, caption }: StatTileProps) {
+   return (
+     <Card className="flex flex-col gap-1.5 p-5">
+       <span className="text-xs font-medium text-ink-muted">{label}</span>
+@@ -20,6 +22,7 @@ export function StatTile({ label, result, format = (v) => `${v.toFixed(2)}%`, co
+       ) : (
+         <span className="text-xs text-ink-muted">{result.reason}</span>
+       )}
++      {caption && <span className="text-xs text-ink-muted">{caption}</span>}
+     </Card>
+   );
+ }
+diff --git a/src/lib/calculations/nps.ts b/src/lib/calculations/nps.ts
+index 9a0503a..f199b56 100644
+--- a/src/lib/calculations/nps.ts
++++ b/src/lib/calculations/nps.ts
+@@ -1,4 +1,4 @@
+-import type { NPSProjectionPoint, NPSAccount, NPSContribution } from "@/types/domain/nps";
++import type { NPSProjectionPoint, NPSAccount, NPSContribution, NPSSchemeTransaction } from "@/types/domain/nps";
+ import type { Cashflow } from "./returns";
+ import type { NPSScheme } from "@/constants/nps";
+ 
+@@ -83,3 +83,44 @@ export function buildNPSCashflows(accounts: NPSAccount[], contributions: NPSCont
+ 
+   return flows;
+ }
++
++/**
++ * Cash flows for ONE account that has scheme-level data (i.e. a statement
++ * has been imported for it — see Part 2/3/4 of the NPS rewrite), derived
++ * from its real, dated nps_scheme_transactions rather than the
++ * untracked-gap heuristic buildNPSCashflows() above uses.
++ *
++ * Only `contribution` and `withdrawal` rows are real cash flows.
++ * `switch_in`/`switch_out` are internal reallocations between schemes — no
++ * money enters or leaves the NPS account, so including them would double-
++ * count the same rupees moving between schemes as if they were fresh
++ * contributions. `fee` rows are excluded too: real but consistently
++ * negligible (paisa-scale quarterly billing), not worth the complexity.
++ *
++ * Sign convention: schema stores amount as positive for
++ * contribution/switch_in, negative for switch_out/fee/withdrawal — the
++ * OPPOSITE of Cashflow's investor-perspective convention (negative =
++ * outflow from the investor). So `-t.amount` is correct for BOTH kept
++ * types: a positive contribution amount becomes a negative (outflow)
++ * cash flow, and a negative withdrawal amount becomes a positive (inflow)
++ * cash flow.
++ *
++ * KNOWN LIMITATION: if the imported statement doesn't cover the account's
++ * entire history (e.g. only recent years), this will overstate XIRR the
++ * same way the untracked-gap heuristic above exists to correct for — there
++ * isn't an equivalent correction here, since once an account is on
++ * scheme-level tracking there's no separate "opening balance" figure left
++ * to reconcile against. Importing the full consolidated statement (not
++ * just a recent period) avoids this.
++ */
++export function buildSchemeTransactionCashflows(effectiveCorpus: number, schemeTransactions: NPSSchemeTransaction[], today: string): Cashflow[] {
++  const flows: Cashflow[] = schemeTransactions
++    .filter((t) => t.transactionType === "contribution" || t.transactionType === "withdrawal")
++    .map((t) => ({ date: t.transactionDate, amount: -t.amount }));
++
++  if (effectiveCorpus > 0) {
++    flows.push({ date: today, amount: effectiveCorpus });
++  }
++
++  return flows;
++}
+diff --git a/src/lib/services/nps.service.ts b/src/lib/services/nps.service.ts
+index d537c85..c2c3029 100644
+--- a/src/lib/services/nps.service.ts
++++ b/src/lib/services/nps.service.ts
+@@ -1,5 +1,5 @@
+ import { npsRepository } from "@/lib/database/repositories/nps.repository";
+-import { projectNPSCorpus, buildNPSCashflows } from "@/lib/calculations/nps";
++import { projectNPSCorpus, buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
+ import { pairSwitches, selectTransactionsToImport } from "@/lib/import/nps-statement-parser";
+ import { todayISO } from "@/lib/utils/date";
+ import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
+@@ -141,13 +141,43 @@ export const npsService = {
+   },
+ 
+   /**
+-   * Cash flows for the portfolio-wide XIRR — see buildNPSCashflows() in
+-   * calculations/nps.ts for the modeling details (untracked pre-logging
+-   * corpus, terminal value, etc.).
++   * Cash flows for the portfolio-wide XIRR, routed per account:
++   *  - Accounts with scheme-level data (a statement has been imported) use
++   *    buildSchemeTransactionCashflows() — real, dated contribution/
++   *    withdrawal rows, no untracked-gap guessing needed.
++   *  - Accounts without it fall back to buildNPSCashflows()'s
++   *    contribution-log + untracked-gap heuristic, unchanged from before.
++   * A user with one imported account and one still-manual account gets a
++   * correct blend of both — this is what fixes the Dashboard/Analytics XIRR
++   * inconsistency (Part 6 of the NPS rewrite): both pages call this same
++   * function now, so they can no longer disagree.
+    */
+   async getCashflows(): Promise<Cashflow[]> {
+-    const [accounts, contributions] = await Promise.all([npsRepository.findAll(), npsRepository.findAllContributions()]);
+-    return buildNPSCashflows(accounts, contributions, todayISO());
++    const accounts = await npsRepository.findAll();
++    const today = todayISO();
++    const flows: Cashflow[] = [];
++    const schemeTrackedIds = new Set<string>();
++
++    const schemeTrackedFlows = await Promise.all(
++      accounts.map(async (account) => {
++        const holdings = await npsRepository.findSchemeHoldings(account.id);
++        if (holdings.length === 0) return null;
++        schemeTrackedIds.add(account.id);
++        const [schemeTxns, effectiveCorpus] = await Promise.all([npsRepository.findSchemeTransactions(account.id), this.getEffectiveCorpus(account)]);
++        return buildSchemeTransactionCashflows(effectiveCorpus, schemeTxns, today);
++      })
++    );
++    for (const f of schemeTrackedFlows) {
++      if (f) flows.push(...f);
++    }
++
++    const nonTrackedAccounts = accounts.filter((a) => !schemeTrackedIds.has(a.id));
++    if (nonTrackedAccounts.length > 0) {
++      const contributions = await npsRepository.findAllContributions();
++      flows.push(...buildNPSCashflows(nonTrackedAccounts, contributions, today));
++    }
++
++    return flows;
+   },
+ };
+ 
+diff --git a/test/nps-cashflows.test.ts b/test/nps-cashflows.test.ts
+index 5df0d70..9bc1a54 100644
+--- a/test/nps-cashflows.test.ts
++++ b/test/nps-cashflows.test.ts
+@@ -1,6 +1,9 @@
+ import { describe, it, expect } from "vitest";
+-import { buildNPSCashflows } from "@/lib/calculations/nps";
+-import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
++import { buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
++import { classifySchemeStatement } from "@/lib/calculations/nps-classification";
++import type { NPSAccount, NPSContribution, NPSSchemeTransaction } from "@/types/domain/nps";
++import type { RawStatementRow } from "@/lib/calculations/nps-classification";
++import fixture from "./fixtures/nps-consolidated-sample.json";
+ 
+ function account(overrides: Partial<NPSAccount> = {}): NPSAccount {
+   return {
+@@ -87,3 +90,91 @@ describe("buildNPSCashflows", () => {
+     ]);
+   });
+ });
++
++function schemeTxn(overrides: Partial<NPSSchemeTransaction> = {}): NPSSchemeTransaction {
++  return {
++    id: "npst-1",
++    npsAccountId: "nps-1",
++    scheme: "E",
++    transactionDate: "2024-06-01",
++    transactionType: "contribution",
++    amount: 7000,
++    nav: 40,
++    units: 175,
++    employeeAmount: null,
++    employerAmount: null,
++    linkedTransactionId: null,
++    description: "By Contribution for May2024",
++    createdAt: "2024-06-01T00:00:00.000Z",
++    ...overrides,
++  };
++}
++
++describe("buildSchemeTransactionCashflows", () => {
++  it("treats a positive-stored contribution as a negative (outflow) cash flow", () => {
++    const flows = buildSchemeTransactionCashflows(0, [schemeTxn({ amount: 7000, transactionDate: "2024-06-01" })], "2025-01-01");
++    expect(flows).toEqual([{ date: "2024-06-01", amount: -7000 }]);
++  });
++
++  it("treats a negative-stored withdrawal as a positive (inflow) cash flow", () => {
++    const flows = buildSchemeTransactionCashflows(0, [schemeTxn({ transactionType: "withdrawal", amount: -50_000, transactionDate: "2024-08-01" })], "2025-01-01");
++    expect(flows).toEqual([{ date: "2024-08-01", amount: 50_000 }]);
++  });
++
++  it("excludes switch_in, switch_out, and fee rows entirely — no cash flow for any of them", () => {
++    const flows = buildSchemeTransactionCashflows(
++      0,
++      [
++        schemeTxn({ transactionType: "switch_in", amount: 5000, id: "1" }),
++        schemeTxn({ transactionType: "switch_out", amount: -5000, id: "2" }),
++        schemeTxn({ transactionType: "fee", amount: -2.18, id: "3" }),
++      ],
++      "2025-01-01"
++    );
++    expect(flows).toEqual([]);
++  });
++
++  it("appends one terminal inflow at `today` for the effective corpus, and omits it when corpus is zero", () => {
++    const withCorpus = buildSchemeTransactionCashflows(100_000, [], "2025-01-01");
++    expect(withCorpus).toEqual([{ date: "2025-01-01", amount: 100_000 }]);
++
++    const zeroCorpus = buildSchemeTransactionCashflows(0, [], "2025-01-01");
++    expect(zeroCorpus).toEqual([]);
++  });
++
++  it("reproduces the real subscriber's total invested amount as the sum of contribution outflows", () => {
++    // Same real fixture validated elsewhere: classify all three schemes,
++    // flatten to scheme transactions, run through the cashflow builder, and
++    // confirm the contribution outflows still sum to the exact validated
++    // total-invested figure — proving nothing was lost or double-counted
++    // going from "classified transactions" to "XIRR cash flows".
++    const allTxns: NPSSchemeTransaction[] = [];
++    for (const scheme of ["E", "C", "G"] as const) {
++      const { transactions } = classifySchemeStatement(fixture[scheme] as RawStatementRow[]);
++      for (const t of transactions) {
++        allTxns.push(
++          schemeTxn({
++            id: `${scheme}-${t.date}-${t.units}`,
++            scheme,
++            transactionDate: t.date,
++            transactionType: t.transactionType,
++            amount: t.amount,
++            nav: t.nav,
++            units: t.units,
++            description: t.description,
++          })
++        );
++      }
++    }
++
++    const flows = buildSchemeTransactionCashflows(882_252.12, allTxns, "2026-08-01");
++
++    const contributionOutflowTotal = flows.filter((f) => f.date !== "2026-08-01").reduce((sum, f) => sum + -f.amount, 0);
++    expect(contributionOutflowTotal).toBeCloseTo(770_430.0, 2);
++
++    // No switch/fee dates leaked through as cash flows.
++    const terminalEntries = flows.filter((f) => f.date === "2026-08-01");
++    expect(terminalEntries).toHaveLength(1);
++    expect(terminalEntries[0].amount).toBeCloseTo(882_252.12, 2);
++  });
++});

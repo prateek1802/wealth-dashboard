@@ -7,9 +7,11 @@ interface StatTileProps {
   result: CalcResult<number>;
   format?: (value: number) => string;
   colorByValue?: boolean;
+  /** Small muted line under the value — use to disclose scope (e.g. what's included/excluded), same idea as the Dashboard XIRR card's caption. */
+  caption?: string;
 }
 
-export function StatTile({ label, result, format = (v) => `${v.toFixed(2)}%`, colorByValue = false }: StatTileProps) {
+export function StatTile({ label, result, format = (v) => `${v.toFixed(2)}%`, colorByValue = false, caption }: StatTileProps) {
   return (
     <Card className="flex flex-col gap-1.5 p-5">
       <span className="text-xs font-medium text-ink-muted">{label}</span>
@@ -20,6 +22,7 @@ export function StatTile({ label, result, format = (v) => `${v.toFixed(2)}%`, co
       ) : (
         <span className="text-xs text-ink-muted">{result.reason}</span>
       )}
+      {caption && <span className="text-xs text-ink-muted">{caption}</span>}
     </Card>
   );
 }

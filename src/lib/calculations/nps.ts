@@ -1,4 +1,4 @@
-import type { NPSProjectionPoint, NPSAccount, NPSContribution } from "@/types/domain/nps";
+import type { NPSProjectionPoint, NPSAccount, NPSContribution, NPSSchemeTransaction } from "@/types/domain/nps";
 import type { Cashflow } from "./returns";
 import type { NPSScheme } from "@/constants/nps";
 
@@ -79,6 +79,47 @@ export function buildNPSCashflows(accounts: NPSAccount[], contributions: NPSCont
     if (account.currentCorpus > 0) {
       flows.push({ date: today, amount: account.currentCorpus });
     }
+  }
+
+  return flows;
+}
+
+/**
+ * Cash flows for ONE account that has scheme-level data (i.e. a statement
+ * has been imported for it — see Part 2/3/4 of the NPS rewrite), derived
+ * from its real, dated nps_scheme_transactions rather than the
+ * untracked-gap heuristic buildNPSCashflows() above uses.
+ *
+ * Only `contribution` and `withdrawal` rows are real cash flows.
+ * `switch_in`/`switch_out` are internal reallocations between schemes — no
+ * money enters or leaves the NPS account, so including them would double-
+ * count the same rupees moving between schemes as if they were fresh
+ * contributions. `fee` rows are excluded too: real but consistently
+ * negligible (paisa-scale quarterly billing), not worth the complexity.
+ *
+ * Sign convention: schema stores amount as positive for
+ * contribution/switch_in, negative for switch_out/fee/withdrawal — the
+ * OPPOSITE of Cashflow's investor-perspective convention (negative =
+ * outflow from the investor). So `-t.amount` is correct for BOTH kept
+ * types: a positive contribution amount becomes a negative (outflow)
+ * cash flow, and a negative withdrawal amount becomes a positive (inflow)
+ * cash flow.
+ *
+ * KNOWN LIMITATION: if the imported statement doesn't cover the account's
+ * entire history (e.g. only recent years), this will overstate XIRR the
+ * same way the untracked-gap heuristic above exists to correct for — there
+ * isn't an equivalent correction here, since once an account is on
+ * scheme-level tracking there's no separate "opening balance" figure left
+ * to reconcile against. Importing the full consolidated statement (not
+ * just a recent period) avoids this.
+ */
+export function buildSchemeTransactionCashflows(effectiveCorpus: number, schemeTransactions: NPSSchemeTransaction[], today: string): Cashflow[] {
+  const flows: Cashflow[] = schemeTransactions
+    .filter((t) => t.transactionType === "contribution" || t.transactionType === "withdrawal")
+    .map((t) => ({ date: t.transactionDate, amount: -t.amount }));
+
+  if (effectiveCorpus > 0) {
+    flows.push({ date: today, amount: effectiveCorpus });
   }
 
   return flows;
