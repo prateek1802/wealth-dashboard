@@ -1,5 +1,19 @@
 import type { NPSProjectionPoint, NPSAccount, NPSContribution } from "@/types/domain/nps";
 import type { Cashflow } from "./returns";
+import type { NPSScheme } from "@/constants/nps";
+
+/**
+ * Dedup key for one scheme-level transaction, matching the DB's unique
+ * index on (nps_account_id, scheme, transaction_date, description, units)
+ * — see schema.sql. Single source of truth used by both the repository
+ * (to build the set of already-persisted keys) and
+ * selectTransactionsToImport() below (to check membership) — used to live
+ * duplicated in both places, which is exactly the kind of drift risk that
+ * makes idempotent import silently stop being idempotent.
+ */
+export function buildNPSTransactionDedupKey(scheme: NPSScheme, transactionDate: string, description: string | null, units: number): string {
+  return `${scheme}|${transactionDate}|${description ?? ""}|${units.toFixed(4)}`;
+}
 
 /**
  * Year-by-year NPS corpus projection. Clearly an ESTIMATE — the UI is

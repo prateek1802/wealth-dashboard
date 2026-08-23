@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
 import { classifySchemeStatement, type ClassifiedStatementRow, type RawStatementRow } from "@/lib/calculations/nps-classification";
+import { buildNPSTransactionDedupKey } from "@/lib/calculations/nps";
 
 type Transaction = Extract<ClassifiedStatementRow, { kind: "transaction" }>;
 export type PairedTransaction = Transaction & { switchGroupId: string | null };
@@ -361,4 +362,44 @@ export function parseNPSStatement(input: { kind: "xlsx"; data: ArrayBuffer | Uin
   }
 
   return { format, metadata, schemes, totalInvested, switchWarnings };
+}
+
+// ---------------------------------------------------------------------------
+// IMPORT PLANNING (idempotent re-import)
+//
+// Pure — takes a parse result and the set of dedup keys already persisted
+// for this account, and decides what's genuinely new vs already imported.
+// No DB access here; the service layer (which does the actual I/O) is a
+// thin wrapper around this. This is what test/nps-import-plan.test.ts
+// exercises directly against the real fixture, since the service/
+// repository layer can't be imported into a Vitest test at all (they pull
+// in Next.js's `server-only` guard).
+// ---------------------------------------------------------------------------
+
+export interface ImportSelection {
+  toInsert: Array<PairedTransaction & { scheme: NPSScheme }>;
+  alreadyImported: number;
+  unrecognizedRows: number;
+}
+
+export function selectTransactionsToImport(parseResult: NPSStatementParseResult, existingKeys: ReadonlySet<string>): ImportSelection {
+  const toInsert: ImportSelection["toInsert"] = [];
+  let alreadyImported = 0;
+  let unrecognizedRows = 0;
+
+  for (const scheme of NPS_SCHEMES) {
+    const schemeResult = parseResult.schemes[scheme];
+    if (!schemeResult) continue;
+    unrecognizedRows += schemeResult.unknown.length;
+    for (const t of schemeResult.transactions) {
+      const key = buildNPSTransactionDedupKey(scheme, t.date, t.description, t.units);
+      if (existingKeys.has(key)) {
+        alreadyImported += 1;
+        continue;
+      }
+      toInsert.push({ ...t, scheme });
+    }
+  }
+
+  return { toInsert, alreadyImported, unrecognizedRows };
 }

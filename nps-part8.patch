@@ -1,0 +1,554 @@
+diff --git a/src/lib/calculations/nps.ts b/src/lib/calculations/nps.ts
+index f926fc2..9a0503a 100644
+--- a/src/lib/calculations/nps.ts
++++ b/src/lib/calculations/nps.ts
+@@ -1,5 +1,19 @@
+ import type { NPSProjectionPoint, NPSAccount, NPSContribution } from "@/types/domain/nps";
+ import type { Cashflow } from "./returns";
++import type { NPSScheme } from "@/constants/nps";
++
++/**
++ * Dedup key for one scheme-level transaction, matching the DB's unique
++ * index on (nps_account_id, scheme, transaction_date, description, units)
++ * — see schema.sql. Single source of truth used by both the repository
++ * (to build the set of already-persisted keys) and
++ * selectTransactionsToImport() below (to check membership) — used to live
++ * duplicated in both places, which is exactly the kind of drift risk that
++ * makes idempotent import silently stop being idempotent.
++ */
++export function buildNPSTransactionDedupKey(scheme: NPSScheme, transactionDate: string, description: string | null, units: number): string {
++  return `${scheme}|${transactionDate}|${description ?? ""}|${units.toFixed(4)}`;
++}
+ 
+ /**
+  * Year-by-year NPS corpus projection. Clearly an ESTIMATE — the UI is
+diff --git a/src/lib/database/demo-data.ts b/src/lib/database/demo-data.ts
+index ff5a14b..adf95fc 100644
+--- a/src/lib/database/demo-data.ts
++++ b/src/lib/database/demo-data.ts
+@@ -2,7 +2,7 @@ import type { Asset } from "@/types/domain/asset";
+ import type { Transaction } from "@/types/domain/transaction";
+ import type { Goal } from "@/types/domain/goal";
+ import type { FixedDeposit } from "@/types/domain/fixed-deposit";
+-import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
++import type { NPSAccount, NPSContribution, NPSSchemeHolding, NPSSchemeTransaction } from "@/types/domain/nps";
+ import type { PPFAccount } from "@/types/domain/ppf";
+ import type { BankAccount } from "@/types/domain/bank-account";
+ import type { Liability } from "@/types/domain/liability";
+@@ -111,6 +111,12 @@ export const demoNPSContributions: NPSContribution[] = [
+   { id: "npsc-3", npsAccountId: "nps-1", contributionDate: daysAgo(90), employeeAmount: 4000, employerAmount: 4000, notes: null, createdAt: daysAgo(90) },
+ ];
+ 
++// Scheme-level (E/C/G/A) tracking is opt-in via statement import — empty
++// until the user imports a real NPS statement. See lib/import and
++// lib/services/nps.service.ts#importStatement.
++export const demoNPSSchemeHoldings: NPSSchemeHolding[] = [];
++export const demoNPSSchemeTransactions: NPSSchemeTransaction[] = [];
++
+ export const demoWatchlist: WatchlistItem[] = [
+   { id: "wl-1", assetId: "asset-tcs", asset: demoAssets.find((a) => a.id === "asset-tcs")!, targetPrice: 3600, stopLoss: null, note: "Add on dips below 3600", createdAt: daysAgo(90), updatedAt: nowISO },
+ ];
+diff --git a/src/lib/database/repositories/nps.repository.ts b/src/lib/database/repositories/nps.repository.ts
+index b9aa568..453847b 100644
+--- a/src/lib/database/repositories/nps.repository.ts
++++ b/src/lib/database/repositories/nps.repository.ts
+@@ -1,9 +1,10 @@
+ import { isDemoMode } from "@/lib/database/client";
+ import { getServerSupabaseClient } from "@/lib/database/server-client";
+-import { demoNPSAccounts, demoNPSContributions, nextId } from "@/lib/database/demo-data";
+-import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution } from "@/types/domain/nps";
+-import type { NPSAccountRow, NPSContributionRow } from "@/types/database";
+-import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
++import { demoNPSAccounts, demoNPSContributions, demoNPSSchemeHoldings, demoNPSSchemeTransactions, nextId } from "@/lib/database/demo-data";
++import { buildNPSTransactionDedupKey } from "@/lib/calculations/nps";
++import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution, NPSSchemeHolding, NPSSchemeTransaction, NewNPSSchemeTransaction } from "@/types/domain/nps";
++import type { NPSAccountRow, NPSContributionRow, NPSSchemeHoldingRow, NPSSchemeTransactionRow } from "@/types/database";
++import type { NPSTier, NPSSchemePreference, NPSScheme } from "@/constants/nps";
+ 
+ function rowToAccount(row: NPSAccountRow): NPSAccount {
+   return {
+@@ -34,6 +35,37 @@ function rowToContribution(row: NPSContributionRow): NPSContribution {
+   };
+ }
+ 
++function rowToSchemeHolding(row: NPSSchemeHoldingRow): NPSSchemeHolding {
++  return {
++    id: row.id,
++    npsAccountId: row.nps_account_id,
++    scheme: row.scheme as NPSScheme,
++    unitsHeld: row.units_held,
++    lastNav: row.last_nav,
++    lastNavDate: row.last_nav_date,
++    createdAt: row.created_at,
++    updatedAt: row.updated_at,
++  };
++}
++
++function rowToSchemeTransaction(row: NPSSchemeTransactionRow): NPSSchemeTransaction {
++  return {
++    id: row.id,
++    npsAccountId: row.nps_account_id,
++    scheme: row.scheme as NPSScheme,
++    transactionDate: row.transaction_date,
++    transactionType: row.transaction_type as NPSSchemeTransaction["transactionType"],
++    amount: row.amount,
++    nav: row.nav,
++    units: row.units,
++    employeeAmount: row.employee_amount,
++    employerAmount: row.employer_amount,
++    linkedTransactionId: row.linked_transaction_id,
++    description: row.description,
++    createdAt: row.created_at,
++  };
++}
++
+ export const npsRepository = {
+   /** V1 supports multiple accounts — typically one per Tier (Tier I / Tier II). */
+   async findAll(): Promise<NPSAccount[]> {
+@@ -200,4 +232,120 @@ export const npsRepository = {
+     if (updateError) throw updateError;
+     return rowToContribution(data as NPSContributionRow);
+   },
++
++  // -------------------------------------------------------------------
++  // Scheme-level (E/C/G/A) tracking — populated by statement import.
++  // See lib/import/nps-statement-parser.ts and
++  // lib/services/nps.service.ts#importStatement.
++  // -------------------------------------------------------------------
++
++  async findSchemeHoldings(npsAccountId: string): Promise<NPSSchemeHolding[]> {
++    if (isDemoMode()) {
++      return demoNPSSchemeHoldings.filter((h) => h.npsAccountId === npsAccountId);
++    }
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db.from("nps_scheme_holdings").select("*").eq("nps_account_id", npsAccountId);
++    if (error) throw error;
++    return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
++  },
++
++  /** All scheme holdings across every NPS account the user holds — used to derive total corpus for accounts that have scheme-level data. */
++  async findAllSchemeHoldings(): Promise<NPSSchemeHolding[]> {
++    if (isDemoMode()) return [...demoNPSSchemeHoldings];
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db.from("nps_scheme_holdings").select("*");
++    if (error) throw error;
++    return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
++  },
++
++  /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. */
++  async upsertSchemeHolding(npsAccountId: string, scheme: NPSScheme, unitsHeld: number, lastNav: number | null, lastNavDate: string | null): Promise<NPSSchemeHolding> {
++    if (isDemoMode()) {
++      const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
++      const now = new Date().toISOString();
++      if (existing) {
++        existing.unitsHeld = unitsHeld;
++        existing.lastNav = lastNav;
++        existing.lastNavDate = lastNavDate;
++        existing.updatedAt = now;
++        return existing;
++      }
++      const holding: NPSSchemeHolding = { id: nextId("npssh"), npsAccountId, scheme, unitsHeld, lastNav, lastNavDate, createdAt: now, updatedAt: now };
++      demoNPSSchemeHoldings.push(holding);
++      return holding;
++    }
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db
++      .from("nps_scheme_holdings")
++      .upsert(
++        { nps_account_id: npsAccountId, scheme, units_held: unitsHeld, last_nav: lastNav, last_nav_date: lastNavDate },
++        { onConflict: "nps_account_id,scheme" }
++      )
++      .select()
++      .single();
++    if (error) throw error;
++    return rowToSchemeHolding(data as NPSSchemeHoldingRow);
++  },
++
++  async findSchemeTransactions(npsAccountId: string): Promise<NPSSchemeTransaction[]> {
++    if (isDemoMode()) {
++      return demoNPSSchemeTransactions.filter((t) => t.npsAccountId === npsAccountId).sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
++    }
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db.from("nps_scheme_transactions").select("*").eq("nps_account_id", npsAccountId).order("transaction_date", { ascending: true });
++    if (error) throw error;
++    return (data as NPSSchemeTransactionRow[]).map(rowToSchemeTransaction);
++  },
++
++  /** Dedup keys already persisted for this account — see buildNPSTransactionDedupKey() in calculations/nps.ts. Used by importStatement() to skip rows already imported (idempotent re-upload). */
++  async findSchemeTransactionDedupKeys(npsAccountId: string): Promise<Set<string>> {
++    const existing = await this.findSchemeTransactions(npsAccountId);
++    return new Set(existing.map((t) => buildNPSTransactionDedupKey(t.scheme, t.transactionDate, t.description, t.units)));
++  },
++
++  async insertSchemeTransactions(rows: NewNPSSchemeTransaction[]): Promise<NPSSchemeTransaction[]> {
++    if (rows.length === 0) return [];
++    if (isDemoMode()) {
++      const now = new Date().toISOString();
++      const inserted = rows.map((r) => ({ ...r, id: nextId("npst"), createdAt: now }));
++      demoNPSSchemeTransactions.push(...inserted);
++      return inserted;
++    }
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db
++      .from("nps_scheme_transactions")
++      .insert(
++        rows.map((r) => ({
++          nps_account_id: r.npsAccountId,
++          scheme: r.scheme,
++          transaction_date: r.transactionDate,
++          transaction_type: r.transactionType,
++          amount: r.amount,
++          nav: r.nav,
++          units: r.units,
++          employee_amount: r.employeeAmount,
++          employer_amount: r.employerAmount,
++          linked_transaction_id: r.linkedTransactionId,
++          description: r.description,
++        }))
++      )
++      .select();
++    if (error) throw error;
++    return (data as NPSSchemeTransactionRow[]).map(rowToSchemeTransaction);
++  },
++
++  async linkSchemeTransactions(idA: string, idB: string): Promise<void> {
++    if (isDemoMode()) {
++      const a = demoNPSSchemeTransactions.find((t) => t.id === idA);
++      const b = demoNPSSchemeTransactions.find((t) => t.id === idB);
++      if (a) a.linkedTransactionId = idB;
++      if (b) b.linkedTransactionId = idA;
++      return;
++    }
++    const db = await getServerSupabaseClient();
++    const r1 = await db.from("nps_scheme_transactions").update({ linked_transaction_id: idB }).eq("id", idA);
++    if (r1.error) throw r1.error;
++    const r2 = await db.from("nps_scheme_transactions").update({ linked_transaction_id: idA }).eq("id", idB);
++    if (r2.error) throw r2.error;
++  },
+ };
+diff --git a/src/lib/import/nps-statement-parser.ts b/src/lib/import/nps-statement-parser.ts
+index 09a949a..6ed7759 100644
+--- a/src/lib/import/nps-statement-parser.ts
++++ b/src/lib/import/nps-statement-parser.ts
+@@ -1,6 +1,7 @@
+ import * as XLSX from "xlsx";
+ import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
+ import { classifySchemeStatement, type ClassifiedStatementRow, type RawStatementRow } from "@/lib/calculations/nps-classification";
++import { buildNPSTransactionDedupKey } from "@/lib/calculations/nps";
+ 
+ type Transaction = Extract<ClassifiedStatementRow, { kind: "transaction" }>;
+ export type PairedTransaction = Transaction & { switchGroupId: string | null };
+@@ -362,3 +363,43 @@ export function parseNPSStatement(input: { kind: "xlsx"; data: ArrayBuffer | Uin
+ 
+   return { format, metadata, schemes, totalInvested, switchWarnings };
+ }
++
++// ---------------------------------------------------------------------------
++// IMPORT PLANNING (idempotent re-import)
++//
++// Pure — takes a parse result and the set of dedup keys already persisted
++// for this account, and decides what's genuinely new vs already imported.
++// No DB access here; the service layer (which does the actual I/O) is a
++// thin wrapper around this. This is what test/nps-import-plan.test.ts
++// exercises directly against the real fixture, since the service/
++// repository layer can't be imported into a Vitest test at all (they pull
++// in Next.js's `server-only` guard).
++// ---------------------------------------------------------------------------
++
++export interface ImportSelection {
++  toInsert: Array<PairedTransaction & { scheme: NPSScheme }>;
++  alreadyImported: number;
++  unrecognizedRows: number;
++}
++
++export function selectTransactionsToImport(parseResult: NPSStatementParseResult, existingKeys: ReadonlySet<string>): ImportSelection {
++  const toInsert: ImportSelection["toInsert"] = [];
++  let alreadyImported = 0;
++  let unrecognizedRows = 0;
++
++  for (const scheme of NPS_SCHEMES) {
++    const schemeResult = parseResult.schemes[scheme];
++    if (!schemeResult) continue;
++    unrecognizedRows += schemeResult.unknown.length;
++    for (const t of schemeResult.transactions) {
++      const key = buildNPSTransactionDedupKey(scheme, t.date, t.description, t.units);
++      if (existingKeys.has(key)) {
++        alreadyImported += 1;
++        continue;
++      }
++      toInsert.push({ ...t, scheme });
++    }
++  }
++
++  return { toInsert, alreadyImported, unrecognizedRows };
++}
+diff --git a/src/lib/services/nps.service.ts b/src/lib/services/nps.service.ts
+index c28e1d9..d537c85 100644
+--- a/src/lib/services/nps.service.ts
++++ b/src/lib/services/nps.service.ts
+@@ -1,8 +1,19 @@
+ import { npsRepository } from "@/lib/database/repositories/nps.repository";
+ import { projectNPSCorpus, buildNPSCashflows } from "@/lib/calculations/nps";
++import { pairSwitches, selectTransactionsToImport } from "@/lib/import/nps-statement-parser";
+ import { todayISO } from "@/lib/utils/date";
+-import type { NPSProjectionPoint, NewNPSContribution, NewNPSAccount } from "@/types/domain/nps";
++import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
++import type { NPSProjectionPoint, NewNPSContribution, NewNPSAccount, NPSAccount, NPSSchemeTransaction } from "@/types/domain/nps";
+ import type { Cashflow } from "@/lib/calculations/returns";
++import type { NPSStatementParseResult } from "@/lib/import/nps-statement-parser";
++
++export interface NPSImportSummary {
++  newRowsInserted: number;
++  alreadyImported: number;
++  unrecognizedRows: number;
++  switchWarnings: NPSStatementParseResult["switchWarnings"];
++  totalInvested: number;
++}
+ 
+ export const npsService = {
+   async listAccounts() {
+@@ -50,10 +61,83 @@ export const npsService = {
+     return npsRepository.addContribution(input);
+   },
+ 
++  /**
++   * An account's corpus, preferring scheme-level data (units_held × last_nav
++   * summed across E/C/G/A) when it exists — i.e. once a statement has been
++   * imported for that account — and falling back to the manually-maintained
++   * nps_accounts.current_corpus otherwise. See Part 2 of the NPS rewrite:
++   * current_corpus is a fallback, not the source of truth, once scheme-level
++   * tracking exists for an account.
++   */
++  async getEffectiveCorpus(account: NPSAccount): Promise<number> {
++    const holdings = await npsRepository.findSchemeHoldings(account.id);
++    if (holdings.length === 0) return account.currentCorpus;
++    return holdings.reduce((sum, h) => sum + h.unitsHeld * (h.lastNav ?? 0), 0);
++  },
++
+   /** Total corpus across ALL NPS accounts (Tier I + Tier II combined) — what the aggregation service reports as npsValue. */
+   async currentCorpus(): Promise<number> {
+     const accounts = await npsRepository.findAll();
+-    return accounts.reduce((sum, a) => sum + a.currentCorpus, 0);
++    const perAccount = await Promise.all(accounts.map((a) => this.getEffectiveCorpus(a)));
++    return perAccount.reduce((sum, v) => sum + v, 0);
++  },
++
++  /**
++   * Imports a parsed NPS statement (see lib/import/nps-statement-parser.ts)
++   * into scheme-level tracking for one account. Idempotent: rows already
++   * persisted (matched via the same dedup key as the DB's unique index) are
++   * silently skipped rather than duplicated, so re-uploading the same or an
++   * overlapping statement is always safe — this is what makes "just import
++   * your full history every time you download an updated statement" work
++   * without ever double-counting.
++   *
++   * After inserting new rows, this re-derives switch pairing and per-scheme
++   * holdings from the FULL persisted set (existing + new) rather than just
++   * this import's rows, so a switch whose two legs arrive in separate
++   * imports (one already on file, one new) still gets linked correctly.
++   */
++  async importStatement(npsAccountId: string, parseResult: NPSStatementParseResult): Promise<NPSImportSummary> {
++    const existingKeys = await npsRepository.findSchemeTransactionDedupKeys(npsAccountId);
++    const { toInsert, alreadyImported, unrecognizedRows } = selectTransactionsToImport(parseResult, existingKeys);
++
++    if (toInsert.length > 0) {
++      await npsRepository.insertSchemeTransactions(
++        toInsert.map((t) => ({
++          npsAccountId,
++          scheme: t.scheme,
++          transactionDate: t.date,
++          transactionType: t.transactionType,
++          amount: t.amount,
++          nav: t.nav,
++          units: t.units,
++          employeeAmount: null,
++          employerAmount: null,
++          linkedTransactionId: null,
++          description: t.description,
++        }))
++      );
++    }
++
++    const allTxns = await npsRepository.findSchemeTransactions(npsAccountId);
++    await relinkSwitchPairs(allTxns);
++    await recomputeSchemeHoldings(npsAccountId, allTxns);
++
++    return {
++      newRowsInserted: toInsert.length,
++      alreadyImported,
++      unrecognizedRows,
++      switchWarnings: parseResult.switchWarnings,
++      totalInvested: parseResult.totalInvested,
++    };
++  },
++
++  /** This account's persisted scheme-level transactions — used for a per-scheme breakdown in the UI. */
++  async getSchemeTransactions(npsAccountId: string) {
++    return npsRepository.findSchemeTransactions(npsAccountId);
++  },
++
++  async getSchemeHoldings(npsAccountId: string) {
++    return npsRepository.findSchemeHoldings(npsAccountId);
+   },
+ 
+   /**
+@@ -66,3 +150,72 @@ export const npsService = {
+     return buildNPSCashflows(accounts, contributions, todayISO());
+   },
+ };
++
++/**
++ * Re-runs pairSwitches() (see lib/import/nps-statement-parser.ts) over ALL
++ * of an account's persisted switch legs and links any newly-formed pair
++ * that isn't linked in the DB yet. Re-deriving from the full persisted set
++ * (rather than just the rows from the current import) is what makes a
++ * switch whose two legs land in separate imports still get linked — the
++ * pairing logic itself was validated against a real subscriber's switch
++ * history in test/nps-statement-parser.test.ts.
++ */
++async function relinkSwitchPairs(allTxns: NPSSchemeTransaction[]): Promise<void> {
++  const switchRowsByScheme: Partial<Record<NPSScheme, NPSSchemeTransaction[]>> = {};
++  const pairingInput: Parameters<typeof pairSwitches>[0] = {};
++
++  for (const scheme of NPS_SCHEMES) {
++    const rows = allTxns.filter((t) => t.scheme === scheme && (t.transactionType === "switch_in" || t.transactionType === "switch_out"));
++    if (rows.length === 0) continue;
++    switchRowsByScheme[scheme] = rows;
++    pairingInput[scheme] = rows.map((r) => ({
++      kind: "transaction" as const,
++      transactionType: r.transactionType as "switch_in" | "switch_out",
++      date: r.transactionDate,
++      amount: r.amount,
++      nav: r.nav,
++      units: r.units,
++      description: r.description ?? "",
++    }));
++  }
++
++  const { paired } = pairSwitches(pairingInput);
++
++  const byGroup = new Map<string, NPSSchemeTransaction[]>();
++  for (const scheme of NPS_SCHEMES) {
++    const dbRows = switchRowsByScheme[scheme];
++    const pairedRows = paired[scheme];
++    if (!dbRows || !pairedRows) continue;
++    dbRows.forEach((dbRow, i) => {
++      const groupId = pairedRows[i]?.switchGroupId;
++      if (!groupId) return;
++      const arr = byGroup.get(groupId) ?? [];
++      arr.push(dbRow);
++      byGroup.set(groupId, arr);
++    });
++  }
++
++  for (const rows of byGroup.values()) {
++    if (rows.length !== 2) continue; // only link clean 1:1 pairs
++    const [a, b] = rows;
++    if (a.linkedTransactionId === b.id && b.linkedTransactionId === a.id) continue; // already linked
++    await npsRepository.linkSchemeTransactions(a.id, b.id);
++  }
++}
++
++/**
++ * Rebuilds nps_scheme_holdings for every scheme that has any persisted
++ * transactions, purely from the currently-persisted transaction set. This
++ * is what makes holdings correct regardless of whether an import added 0,
++ * some, or all of its rows as new — always derived fresh, never
++ * incrementally patched.
++ */
++async function recomputeSchemeHoldings(npsAccountId: string, allTxns: NPSSchemeTransaction[]): Promise<void> {
++  for (const scheme of NPS_SCHEMES) {
++    const schemeTxns = allTxns.filter((t) => t.scheme === scheme);
++    if (schemeTxns.length === 0) continue;
++    const unitsHeld = schemeTxns.reduce((sum, t) => sum + t.units, 0);
++    const latest = schemeTxns.reduce((a, b) => (a.transactionDate > b.transactionDate ? a : b));
++    await npsRepository.upsertSchemeHolding(npsAccountId, scheme, unitsHeld, latest.nav, latest.transactionDate);
++  }
++}
+diff --git a/test/nps-import-plan.test.ts b/test/nps-import-plan.test.ts
+new file mode 100644
+index 0000000..44394ed
+--- /dev/null
++++ b/test/nps-import-plan.test.ts
+@@ -0,0 +1,81 @@
++import { describe, it, expect } from "vitest";
++import { selectTransactionsToImport } from "@/lib/import/nps-statement-parser";
++import { buildNPSTransactionDedupKey } from "@/lib/calculations/nps";
++import { parseNPSStatement } from "@/lib/import/nps-statement-parser";
++import * as XLSX from "xlsx";
++import type { RawStatementRow } from "@/lib/calculations/nps-classification";
++import fixture from "./fixtures/nps-consolidated-sample.json";
++
++// Same real, anonymized subscriber statement validated elsewhere: 193 rows
++// across E/C/G, 3 Multiple NAV Framework reissuance rows skipped (one per
++// scheme), leaving 190 real transactions.
++const TOTAL_REAL_TRANSACTIONS = 190;
++
++function aoaForScheme(rows: RawStatementRow[]): unknown[][] {
++  return [["Date", "Description", "Amount (in Rs)", "NAV", "Units"], ...rows.map((r) => [new Date(r.date), r.description, r.amount, r.nav, r.units])];
++}
++
++function buildWorkbookBuffer(schemes: ("E" | "C" | "G")[]): ArrayBuffer {
++  const workbook = XLSX.utils.book_new();
++  for (const scheme of schemes) {
++    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(aoaForScheme(fixture[scheme] as RawStatementRow[])), scheme);
++  }
++  return XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
++}
++
++describe("selectTransactionsToImport — idempotent re-import planning (pure, no I/O)", () => {
++  it("with no existing keys, everything is new", () => {
++    const parsed = parseNPSStatement({ kind: "xlsx", data: buildWorkbookBuffer(["E", "C", "G"]) });
++    const { toInsert, alreadyImported, unrecognizedRows } = selectTransactionsToImport(parsed, new Set());
++
++    expect(toInsert).toHaveLength(TOTAL_REAL_TRANSACTIONS);
++    expect(alreadyImported).toBe(0);
++    expect(unrecognizedRows).toBe(0);
++  });
++
++  it("importing the exact same statement twice: second pass finds everything already imported", () => {
++    const parsed = parseNPSStatement({ kind: "xlsx", data: buildWorkbookBuffer(["E", "C", "G"]) });
++
++    const first = selectTransactionsToImport(parsed, new Set());
++    expect(first.toInsert).toHaveLength(TOTAL_REAL_TRANSACTIONS);
++
++    // Simulate persisting first.toInsert, then re-running the planner with
++    // those now-existing keys against the SAME parse result.
++    const existingKeys = new Set(first.toInsert.map((t) => buildNPSTransactionDedupKey(t.scheme, t.date, t.description, t.units)));
++    const second = selectTransactionsToImport(parsed, existingKeys);
++
++    expect(second.toInsert).toHaveLength(0);
++    expect(second.alreadyImported).toBe(TOTAL_REAL_TRANSACTIONS);
++  });
++
++  it("a partial-overlap re-import (E already persisted) only proposes C/G's rows as new", () => {
++    const eOnly = parseNPSStatement({ kind: "xlsx", data: buildWorkbookBuffer(["E"]) });
++    const eSelection = selectTransactionsToImport(eOnly, new Set());
++    const eKeys = new Set(eSelection.toInsert.map((t) => buildNPSTransactionDedupKey(t.scheme, t.date, t.description, t.units)));
++
++    const full = parseNPSStatement({ kind: "xlsx", data: buildWorkbookBuffer(["E", "C", "G"]) });
++    const fullSelection = selectTransactionsToImport(full, eKeys);
++
++    // Every one of E's rows is now recognized as a duplicate...
++    expect(fullSelection.alreadyImported).toBe(eSelection.toInsert.length);
++    // ...and only C/G's rows are proposed as new.
++    expect(fullSelection.toInsert).toHaveLength(TOTAL_REAL_TRANSACTIONS - eSelection.toInsert.length);
++    expect(fullSelection.toInsert.every((t) => t.scheme === "C" || t.scheme === "G")).toBe(true);
++  });
++
++  it("a genuinely different row (different units) with the same date/description is NOT treated as a duplicate", () => {
++    // Guards against the dedup key being too loose (e.g. matching on date+description alone).
++    const parsed = parseNPSStatement({ kind: "xlsx", data: buildWorkbookBuffer(["E"]) });
++    const first = selectTransactionsToImport(parsed, new Set());
++    const firstRow = first.toInsert[0];
++
++    // Same scheme/date/description, but a different units value — a
++    // corrected re-export of the same month, say — must NOT be silently
++    // dropped as a false-positive duplicate.
++    const differentUnitsKey = new Set([buildNPSTransactionDedupKey(firstRow.scheme, firstRow.date, firstRow.description, firstRow.units + 1)]);
++    const second = selectTransactionsToImport(parsed, differentUnitsKey);
++
++    expect(second.alreadyImported).toBe(0);
++    expect(second.toInsert.length).toBe(first.toInsert.length);
++  });
++});

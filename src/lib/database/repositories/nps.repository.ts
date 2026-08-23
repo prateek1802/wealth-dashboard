@@ -1,9 +1,10 @@
 import { isDemoMode } from "@/lib/database/client";
 import { getServerSupabaseClient } from "@/lib/database/server-client";
-import { demoNPSAccounts, demoNPSContributions, nextId } from "@/lib/database/demo-data";
-import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution } from "@/types/domain/nps";
-import type { NPSAccountRow, NPSContributionRow } from "@/types/database";
-import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
+import { demoNPSAccounts, demoNPSContributions, demoNPSSchemeHoldings, demoNPSSchemeTransactions, nextId } from "@/lib/database/demo-data";
+import { buildNPSTransactionDedupKey } from "@/lib/calculations/nps";
+import type { NPSAccount, NewNPSAccount, NPSContribution, NewNPSContribution, NPSSchemeHolding, NPSSchemeTransaction, NewNPSSchemeTransaction } from "@/types/domain/nps";
+import type { NPSAccountRow, NPSContributionRow, NPSSchemeHoldingRow, NPSSchemeTransactionRow } from "@/types/database";
+import type { NPSTier, NPSSchemePreference, NPSScheme } from "@/constants/nps";
 
 function rowToAccount(row: NPSAccountRow): NPSAccount {
   return {
@@ -30,6 +31,37 @@ function rowToContribution(row: NPSContributionRow): NPSContribution {
     employeeAmount: row.employee_amount,
     employerAmount: row.employer_amount,
     notes: row.notes,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToSchemeHolding(row: NPSSchemeHoldingRow): NPSSchemeHolding {
+  return {
+    id: row.id,
+    npsAccountId: row.nps_account_id,
+    scheme: row.scheme as NPSScheme,
+    unitsHeld: row.units_held,
+    lastNav: row.last_nav,
+    lastNavDate: row.last_nav_date,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToSchemeTransaction(row: NPSSchemeTransactionRow): NPSSchemeTransaction {
+  return {
+    id: row.id,
+    npsAccountId: row.nps_account_id,
+    scheme: row.scheme as NPSScheme,
+    transactionDate: row.transaction_date,
+    transactionType: row.transaction_type as NPSSchemeTransaction["transactionType"],
+    amount: row.amount,
+    nav: row.nav,
+    units: row.units,
+    employeeAmount: row.employee_amount,
+    employerAmount: row.employer_amount,
+    linkedTransactionId: row.linked_transaction_id,
+    description: row.description,
     createdAt: row.created_at,
   };
 }
@@ -199,5 +231,121 @@ export const npsRepository = {
       .eq("id", input.npsAccountId);
     if (updateError) throw updateError;
     return rowToContribution(data as NPSContributionRow);
+  },
+
+  // -------------------------------------------------------------------
+  // Scheme-level (E/C/G/A) tracking — populated by statement import.
+  // See lib/import/nps-statement-parser.ts and
+  // lib/services/nps.service.ts#importStatement.
+  // -------------------------------------------------------------------
+
+  async findSchemeHoldings(npsAccountId: string): Promise<NPSSchemeHolding[]> {
+    if (isDemoMode()) {
+      return demoNPSSchemeHoldings.filter((h) => h.npsAccountId === npsAccountId);
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db.from("nps_scheme_holdings").select("*").eq("nps_account_id", npsAccountId);
+    if (error) throw error;
+    return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
+  },
+
+  /** All scheme holdings across every NPS account the user holds — used to derive total corpus for accounts that have scheme-level data. */
+  async findAllSchemeHoldings(): Promise<NPSSchemeHolding[]> {
+    if (isDemoMode()) return [...demoNPSSchemeHoldings];
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db.from("nps_scheme_holdings").select("*");
+    if (error) throw error;
+    return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
+  },
+
+  /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. */
+  async upsertSchemeHolding(npsAccountId: string, scheme: NPSScheme, unitsHeld: number, lastNav: number | null, lastNavDate: string | null): Promise<NPSSchemeHolding> {
+    if (isDemoMode()) {
+      const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
+      const now = new Date().toISOString();
+      if (existing) {
+        existing.unitsHeld = unitsHeld;
+        existing.lastNav = lastNav;
+        existing.lastNavDate = lastNavDate;
+        existing.updatedAt = now;
+        return existing;
+      }
+      const holding: NPSSchemeHolding = { id: nextId("npssh"), npsAccountId, scheme, unitsHeld, lastNav, lastNavDate, createdAt: now, updatedAt: now };
+      demoNPSSchemeHoldings.push(holding);
+      return holding;
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db
+      .from("nps_scheme_holdings")
+      .upsert(
+        { nps_account_id: npsAccountId, scheme, units_held: unitsHeld, last_nav: lastNav, last_nav_date: lastNavDate },
+        { onConflict: "nps_account_id,scheme" }
+      )
+      .select()
+      .single();
+    if (error) throw error;
+    return rowToSchemeHolding(data as NPSSchemeHoldingRow);
+  },
+
+  async findSchemeTransactions(npsAccountId: string): Promise<NPSSchemeTransaction[]> {
+    if (isDemoMode()) {
+      return demoNPSSchemeTransactions.filter((t) => t.npsAccountId === npsAccountId).sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db.from("nps_scheme_transactions").select("*").eq("nps_account_id", npsAccountId).order("transaction_date", { ascending: true });
+    if (error) throw error;
+    return (data as NPSSchemeTransactionRow[]).map(rowToSchemeTransaction);
+  },
+
+  /** Dedup keys already persisted for this account — see buildNPSTransactionDedupKey() in calculations/nps.ts. Used by importStatement() to skip rows already imported (idempotent re-upload). */
+  async findSchemeTransactionDedupKeys(npsAccountId: string): Promise<Set<string>> {
+    const existing = await this.findSchemeTransactions(npsAccountId);
+    return new Set(existing.map((t) => buildNPSTransactionDedupKey(t.scheme, t.transactionDate, t.description, t.units)));
+  },
+
+  async insertSchemeTransactions(rows: NewNPSSchemeTransaction[]): Promise<NPSSchemeTransaction[]> {
+    if (rows.length === 0) return [];
+    if (isDemoMode()) {
+      const now = new Date().toISOString();
+      const inserted = rows.map((r) => ({ ...r, id: nextId("npst"), createdAt: now }));
+      demoNPSSchemeTransactions.push(...inserted);
+      return inserted;
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db
+      .from("nps_scheme_transactions")
+      .insert(
+        rows.map((r) => ({
+          nps_account_id: r.npsAccountId,
+          scheme: r.scheme,
+          transaction_date: r.transactionDate,
+          transaction_type: r.transactionType,
+          amount: r.amount,
+          nav: r.nav,
+          units: r.units,
+          employee_amount: r.employeeAmount,
+          employer_amount: r.employerAmount,
+          linked_transaction_id: r.linkedTransactionId,
+          description: r.description,
+        }))
+      )
+      .select();
+    if (error) throw error;
+    return (data as NPSSchemeTransactionRow[]).map(rowToSchemeTransaction);
+  },
+
+  async linkSchemeTransactions(idA: string, idB: string): Promise<void> {
+    if (isDemoMode()) {
+      const a = demoNPSSchemeTransactions.find((t) => t.id === idA);
+      const b = demoNPSSchemeTransactions.find((t) => t.id === idB);
+      if (a) a.linkedTransactionId = idB;
+      if (b) b.linkedTransactionId = idA;
+      return;
+    }
+    const db = await getServerSupabaseClient();
+    const r1 = await db.from("nps_scheme_transactions").update({ linked_transaction_id: idB }).eq("id", idA);
+    if (r1.error) throw r1.error;
+    const r2 = await db.from("nps_scheme_transactions").update({ linked_transaction_id: idA }).eq("id", idB);
+    if (r2.error) throw r2.error;
   },
 };

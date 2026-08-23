@@ -2,7 +2,7 @@ import type { Asset } from "@/types/domain/asset";
 import type { Transaction } from "@/types/domain/transaction";
 import type { Goal } from "@/types/domain/goal";
 import type { FixedDeposit } from "@/types/domain/fixed-deposit";
-import type { NPSAccount, NPSContribution } from "@/types/domain/nps";
+import type { NPSAccount, NPSContribution, NPSSchemeHolding, NPSSchemeTransaction } from "@/types/domain/nps";
 import type { PPFAccount } from "@/types/domain/ppf";
 import type { BankAccount } from "@/types/domain/bank-account";
 import type { Liability } from "@/types/domain/liability";
@@ -110,6 +110,12 @@ export const demoNPSContributions: NPSContribution[] = [
   { id: "npsc-2", npsAccountId: "nps-1", contributionDate: daysAgo(60), employeeAmount: 4000, employerAmount: 4000, notes: null, createdAt: daysAgo(60) },
   { id: "npsc-3", npsAccountId: "nps-1", contributionDate: daysAgo(90), employeeAmount: 4000, employerAmount: 4000, notes: null, createdAt: daysAgo(90) },
 ];
+
+// Scheme-level (E/C/G/A) tracking is opt-in via statement import — empty
+// until the user imports a real NPS statement. See lib/import and
+// lib/services/nps.service.ts#importStatement.
+export const demoNPSSchemeHoldings: NPSSchemeHolding[] = [];
+export const demoNPSSchemeTransactions: NPSSchemeTransaction[] = [];
 
 export const demoWatchlist: WatchlistItem[] = [
   { id: "wl-1", assetId: "asset-tcs", asset: demoAssets.find((a) => a.id === "asset-tcs")!, targetPrice: 3600, stopLoss: null, note: "Add on dips below 3600", createdAt: daysAgo(90), updatedAt: nowISO },
