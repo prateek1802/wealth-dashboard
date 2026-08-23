@@ -1,0 +1,262 @@
+diff --git a/src/app/(app)/nps/page.tsx b/src/app/(app)/nps/page.tsx
+index d93fc7c..28763ac 100644
+--- a/src/app/(app)/nps/page.tsx
++++ b/src/app/(app)/nps/page.tsx
+@@ -5,7 +5,15 @@ import { NPSView } from "@/features/nps/components/nps-view";
+ export const dynamic = "force-dynamic";
+ 
+ export default async function NPSPage() {
+-  const accounts = await npsService.listAccounts();
++  const rawAccounts = await npsService.listAccounts();
++
++  // Once an account has an imported statement, its true corpus lives in
++  // nps_scheme_holdings (units × NAV per scheme), not the manually-entered
++  // current_corpus field — see npsService.getEffectiveCorpus(). Override it
++  // here so every downstream display (corpus, total, withdrawal max) is
++  // consistent, rather than threading a separate "effective corpus" prop
++  // through every place NPSView reads account.currentCorpus.
++  const accounts = await Promise.all(rawAccounts.map(async (a) => ({ ...a, currentCorpus: await npsService.getEffectiveCorpus(a) })));
+ 
+   const contributionsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getContributions>>> = {};
+   const projectionsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getProjection>>> = {};
+diff --git a/src/features/nps/actions.ts b/src/features/nps/actions.ts
+index 67d63d8..573f01d 100644
+--- a/src/features/nps/actions.ts
++++ b/src/features/nps/actions.ts
+@@ -1,9 +1,11 @@
+ "use server";
+ import { revalidatePath } from "next/cache";
+ import { npsService } from "@/lib/services/nps.service";
++import { parseNPSStatement } from "@/lib/import/nps-statement-parser";
+ import { npsAccountSchema, npsContributionSchema, withdrawNPSSchema } from "@/lib/validation/nps.schema";
+ import { ROUTES } from "@/constants/routes";
+ import type { ActionResult } from "@/features/transactions/actions";
++import type { NPSImportSummary } from "@/lib/services/nps.service";
+ 
+ export async function addNPSAccountAction(input: unknown): Promise<ActionResult> {
+   const parsed = npsAccountSchema.safeParse(input);
+@@ -67,3 +69,40 @@ export async function addNPSContributionAction(input: unknown): Promise<ActionRe
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
++
++const MAX_STATEMENT_FILE_BYTES = 15 * 1024 * 1024; // 15MB — generous headroom over a multi-year statement
++
++/**
++ * Imports a real NPS statement (NSDL/Protean export) for one account.
++ * Accepts .xlsx (consolidated, multi-sheet — Format B, validated against a
++ * real subscriber's data) or .csv (single-period CRA export — Format A,
++ * best-effort, see lib/import/nps-statement-parser.ts for caveats).
++ * Idempotent: safe to import the same or an overlapping file more than
++ * once — see npsService.importStatement().
++ */
++export async function importNPSStatementAction(npsAccountId: string, formData: FormData): Promise<{ ok: true; summary: NPSImportSummary } | { ok: false; error: string }> {
++  try {
++    const file = formData.get("file");
++    if (!(file instanceof File)) return { ok: false, error: "No file was provided." };
++    if (file.size === 0) return { ok: false, error: "That file is empty." };
++    if (file.size > MAX_STATEMENT_FILE_BYTES) return { ok: false, error: "That file is larger than expected for an NPS statement — please double-check it." };
++
++    const name = file.name.toLowerCase();
++    const isXlsx = name.endsWith(".xlsx") || file.type.includes("spreadsheet");
++    const isCsv = name.endsWith(".csv") || file.type.includes("csv");
++    if (!isXlsx && !isCsv) return { ok: false, error: "Please upload the .xlsx (consolidated) or .csv (single-period) statement exported from NSDL/Protean." };
++
++    const parseResult = isXlsx ? parseNPSStatement({ kind: "xlsx", data: await file.arrayBuffer() }) : parseNPSStatement({ kind: "csv", text: await file.text() });
++
++    if (Object.keys(parseResult.schemes).length === 0) {
++      return { ok: false, error: "Couldn't find any recognizable scheme data (E/C/G/A) in that file." };
++    }
++
++    const summary = await npsService.importStatement(npsAccountId, parseResult);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true, summary };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong while reading that file." };
++  }
++}
+diff --git a/src/features/nps/components/import-nps-statement-dialog.tsx b/src/features/nps/components/import-nps-statement-dialog.tsx
+new file mode 100644
+index 0000000..83d6c89
+--- /dev/null
++++ b/src/features/nps/components/import-nps-statement-dialog.tsx
+@@ -0,0 +1,106 @@
++"use client";
++import { useRef, useState, useTransition } from "react";
++import { toast } from "sonner";
++import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
++import { importNPSStatementAction } from "../actions";
++import { formatCurrency } from "@/lib/utils/currency";
++import { UploadCloud, CheckCircle2, AlertTriangle } from "lucide-react";
++import type { NPSAccount } from "@/types/domain/nps";
++import type { NPSImportSummary } from "@/lib/services/nps.service";
++
++export function ImportNPSStatementDialog({ account, open, onOpenChange }: { account: NPSAccount; open: boolean; onOpenChange: (o: boolean) => void }) {
++  const fileInputRef = useRef<HTMLInputElement>(null);
++  const [isPending, startTransition] = useTransition();
++  const [fileName, setFileName] = useState<string | null>(null);
++  const [summary, setSummary] = useState<NPSImportSummary | null>(null);
++  const [error, setError] = useState<string | null>(null);
++
++  function reset() {
++    setFileName(null);
++    setSummary(null);
++    setError(null);
++    if (fileInputRef.current) fileInputRef.current.value = "";
++  }
++
++  function handleFile(file: File) {
++    setFileName(file.name);
++    setSummary(null);
++    setError(null);
++    const formData = new FormData();
++    formData.set("file", file);
++    startTransition(async () => {
++      const result = await importNPSStatementAction(account.id, formData);
++      if (result.ok) {
++        setSummary(result.summary);
++        if (result.summary.newRowsInserted > 0) {
++          toast.success(`Imported ${result.summary.newRowsInserted} new transaction${result.summary.newRowsInserted === 1 ? "" : "s"}`);
++        } else {
++          toast.info("Nothing new to import — every row in that file is already on file.");
++        }
++      } else {
++        setError(result.error);
++      }
++    });
++  }
++
++  return (
++    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
++      <DialogContent>
++        <DialogHeader>
++          <DialogTitle>Import NPS statement</DialogTitle>
++          <DialogDescription>
++            Upload your consolidated statement from NSDL/Protean (.xlsx, one sheet per scheme) or a single-period export (.csv) for {account.tier}. Safe to
++            re-upload the same or an overlapping file — anything already on file is skipped, never duplicated.
++          </DialogDescription>
++        </DialogHeader>
++
++        <div className="flex flex-col gap-4">
++          <label className="flex cursor-pointer flex-col items-center gap-2 rounded-[var(--radius-control)] border border-dashed border-border-subtle p-6 text-center hover:bg-surface-sunken">
++            <UploadCloud className="size-6 text-ink-muted" />
++            <span className="text-sm text-ink">{fileName ?? "Click to choose a .xlsx or .csv file"}</span>
++            <input
++              ref={fileInputRef}
++              type="file"
++              accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
++              className="hidden"
++              onChange={(e) => {
++                const file = e.target.files?.[0];
++                if (file) handleFile(file);
++              }}
++            />
++          </label>
++
++          {isPending && <p className="text-sm text-ink-muted">Reading and importing…</p>}
++          {error && <p className="text-sm text-loss">{error}</p>}
++
++          {summary && (
++            <div className="flex flex-col gap-2">
++              <div className="flex items-center gap-2 text-sm text-ink">
++                <CheckCircle2 className="size-4 text-gain" />
++                {summary.newRowsInserted} new transaction{summary.newRowsInserted === 1 ? "" : "s"} imported
++                {summary.alreadyImported > 0 && ` · ${summary.alreadyImported} already on file`}.
++              </div>
++              <p className="text-xs text-ink-muted">Total invested (contributions) in this file: {formatCurrency(summary.totalInvested)}</p>
++
++              {summary.unrecognizedRows > 0 && (
++                <div className="flex items-center gap-1.5 rounded-[var(--radius-control)] border border-loss/30 bg-loss-soft p-3 text-xs text-loss">
++                  <AlertTriangle className="size-3.5 shrink-0" />
++                  {summary.unrecognizedRows} row{summary.unrecognizedRows === 1 ? "" : "s"} in that file used wording we didn&apos;t recognize and{" "}
++                  {summary.unrecognizedRows === 1 ? "was" : "were"} skipped rather than guessed at — nothing was imported for {summary.unrecognizedRows === 1 ? "it" : "them"}.
++                </div>
++              )}
++
++              {summary.switchWarnings.length > 0 && (
++                <div className="flex items-center gap-1.5 rounded-[var(--radius-control)] border border-loss/30 bg-loss-soft p-3 text-xs text-loss">
++                  <AlertTriangle className="size-3.5 shrink-0" />
++                  {summary.switchWarnings.length} scheme switch{summary.switchWarnings.length === 1 ? "" : "es"} couldn&apos;t be matched to its counterpart —
++                  the transaction itself was still imported.
++                </div>
++              )}
++            </div>
++          )}
++        </div>
++      </DialogContent>
++    </Dialog>
++  );
++}
+diff --git a/src/features/nps/components/nps-view.tsx b/src/features/nps/components/nps-view.tsx
+index 5724bdc..6f6bea0 100644
+--- a/src/features/nps/components/nps-view.tsx
++++ b/src/features/nps/components/nps-view.tsx
+@@ -12,11 +12,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
+ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+ import { EmptyState } from "@/components/shared/empty-state";
+ import { NPSProjectionChart } from "./nps-projection-chart";
++import { ImportNPSStatementDialog } from "./import-nps-statement-dialog";
+ import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
+ import { formatCurrency } from "@/lib/utils/currency";
+ import { formatDate } from "@/lib/utils/date";
+ import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
+-import { ShieldCheck, Settings, Plus, Trash2, Banknote } from "lucide-react";
++import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud } from "lucide-react";
+ import type { NPSAccount, NPSContribution, NPSProjectionPoint } from "@/types/domain/nps";
+ import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
+ 
+@@ -33,6 +34,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+   const [deleteTarget, setDeleteTarget] = useState<NPSAccount | null>(null);
+   const [withdrawTarget, setWithdrawTarget] = useState<NPSAccount | null>(null);
+   const [withdrawAmount, setWithdrawAmount] = useState("");
++  const [importTarget, setImportTarget] = useState<NPSAccount | null>(null);
+   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(accounts[0]?.id ?? null);
+   const [isPending, startTransition] = useTransition();
+   const [error, setError] = useState<string | null>(null);
+@@ -237,7 +239,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+ 
+       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+         {accounts.map((a) => (
+-          <Card key={a.id} className="relative flex flex-col gap-3 p-5">
++          <Card key={a.id} className="flex flex-col gap-3 p-5">
+             <div className="flex items-start justify-between gap-2">
+               <div className="flex flex-col">
+                 <span className="font-medium text-ink">{a.tier}</span>
+@@ -246,7 +248,12 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+                   {a.schemePreference && ` · ${a.schemePreference}`}
+                 </span>
+               </div>
+-              <Badge>{a.expectedAnnualReturn ? `${a.expectedAnnualReturn}% p.a.` : "—"}</Badge>
++              <div className="flex shrink-0 items-center gap-1.5">
++                <Badge>{a.expectedAnnualReturn ? `${a.expectedAnnualReturn}% p.a.` : "—"}</Badge>
++                <button onClick={() => setDeleteTarget(a)} className="text-ink-muted hover:text-loss" title="Delete">
++                  <Trash2 className="size-4" />
++                </button>
++              </div>
+             </div>
+             <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(a.currentCorpus)}</span>
+             <span className="text-xs text-ink-muted">
+@@ -273,10 +280,10 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+               <Button variant="outline" size="sm" onClick={() => setWithdrawTarget(a)} disabled={a.currentCorpus <= 0}>
+                 <Banknote className="size-3.5" /> Withdraw
+               </Button>
++              <Button variant="outline" size="sm" onClick={() => setImportTarget(a)}>
++                <UploadCloud className="size-3.5" /> Import statement
++              </Button>
+             </div>
+-            <button onClick={() => setDeleteTarget(a)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
+-              <Trash2 className="size-4" />
+-            </button>
+           </Card>
+         ))}
+       </div>
+@@ -427,6 +434,8 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+         confirmLabel="Delete"
+         onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
+       />
++
++      {importTarget && <ImportNPSStatementDialog account={importTarget} open={!!importTarget} onOpenChange={(o) => !o && setImportTarget(null)} />}
+     </div>
+   );
+ }

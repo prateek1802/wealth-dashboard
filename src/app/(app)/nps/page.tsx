@@ -5,7 +5,15 @@ import { NPSView } from "@/features/nps/components/nps-view";
 export const dynamic = "force-dynamic";
 
 export default async function NPSPage() {
-  const accounts = await npsService.listAccounts();
+  const rawAccounts = await npsService.listAccounts();
+
+  // Once an account has an imported statement, its true corpus lives in
+  // nps_scheme_holdings (units × NAV per scheme), not the manually-entered
+  // current_corpus field — see npsService.getEffectiveCorpus(). Override it
+  // here so every downstream display (corpus, total, withdrawal max) is
+  // consistent, rather than threading a separate "effective corpus" prop
+  // through every place NPSView reads account.currentCorpus.
+  const accounts = await Promise.all(rawAccounts.map(async (a) => ({ ...a, currentCorpus: await npsService.getEffectiveCorpus(a) })));
 
   const contributionsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getContributions>>> = {};
   const projectionsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getProjection>>> = {};

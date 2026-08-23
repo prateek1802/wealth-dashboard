@@ -1,9 +1,11 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { npsService } from "@/lib/services/nps.service";
+import { parseNPSStatement } from "@/lib/import/nps-statement-parser";
 import { npsAccountSchema, npsContributionSchema, withdrawNPSSchema } from "@/lib/validation/nps.schema";
 import { ROUTES } from "@/constants/routes";
 import type { ActionResult } from "@/features/transactions/actions";
+import type { NPSImportSummary } from "@/lib/services/nps.service";
 
 export async function addNPSAccountAction(input: unknown): Promise<ActionResult> {
   const parsed = npsAccountSchema.safeParse(input);
@@ -65,5 +67,42 @@ export async function addNPSContributionAction(input: unknown): Promise<ActionRe
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
+const MAX_STATEMENT_FILE_BYTES = 15 * 1024 * 1024; // 15MB — generous headroom over a multi-year statement
+
+/**
+ * Imports a real NPS statement (NSDL/Protean export) for one account.
+ * Accepts .xlsx (consolidated, multi-sheet — Format B, validated against a
+ * real subscriber's data) or .csv (single-period CRA export — Format A,
+ * best-effort, see lib/import/nps-statement-parser.ts for caveats).
+ * Idempotent: safe to import the same or an overlapping file more than
+ * once — see npsService.importStatement().
+ */
+export async function importNPSStatementAction(npsAccountId: string, formData: FormData): Promise<{ ok: true; summary: NPSImportSummary } | { ok: false; error: string }> {
+  try {
+    const file = formData.get("file");
+    if (!(file instanceof File)) return { ok: false, error: "No file was provided." };
+    if (file.size === 0) return { ok: false, error: "That file is empty." };
+    if (file.size > MAX_STATEMENT_FILE_BYTES) return { ok: false, error: "That file is larger than expected for an NPS statement — please double-check it." };
+
+    const name = file.name.toLowerCase();
+    const isXlsx = name.endsWith(".xlsx") || file.type.includes("spreadsheet");
+    const isCsv = name.endsWith(".csv") || file.type.includes("csv");
+    if (!isXlsx && !isCsv) return { ok: false, error: "Please upload the .xlsx (consolidated) or .csv (single-period) statement exported from NSDL/Protean." };
+
+    const parseResult = isXlsx ? parseNPSStatement({ kind: "xlsx", data: await file.arrayBuffer() }) : parseNPSStatement({ kind: "csv", text: await file.text() });
+
+    if (Object.keys(parseResult.schemes).length === 0) {
+      return { ok: false, error: "Couldn't find any recognizable scheme data (E/C/G/A) in that file." };
+    }
+
+    const summary = await npsService.importStatement(npsAccountId, parseResult);
+    revalidatePath(ROUTES.nps);
+    revalidatePath(ROUTES.dashboard);
+    return { ok: true, summary };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong while reading that file." };
   }
 }

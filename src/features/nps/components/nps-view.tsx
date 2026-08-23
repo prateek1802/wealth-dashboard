@@ -12,11 +12,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { NPSProjectionChart } from "./nps-projection-chart";
+import { ImportNPSStatementDialog } from "./import-nps-statement-dialog";
 import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
-import { ShieldCheck, Settings, Plus, Trash2, Banknote } from "lucide-react";
+import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud } from "lucide-react";
 import type { NPSAccount, NPSContribution, NPSProjectionPoint } from "@/types/domain/nps";
 import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
 
@@ -33,6 +34,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
   const [deleteTarget, setDeleteTarget] = useState<NPSAccount | null>(null);
   const [withdrawTarget, setWithdrawTarget] = useState<NPSAccount | null>(null);
   const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [importTarget, setImportTarget] = useState<NPSAccount | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(accounts[0]?.id ?? null);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -237,7 +239,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {accounts.map((a) => (
-          <Card key={a.id} className="relative flex flex-col gap-3 p-5">
+          <Card key={a.id} className="flex flex-col gap-3 p-5">
             <div className="flex items-start justify-between gap-2">
               <div className="flex flex-col">
                 <span className="font-medium text-ink">{a.tier}</span>
@@ -246,7 +248,12 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
                   {a.schemePreference && ` · ${a.schemePreference}`}
                 </span>
               </div>
-              <Badge>{a.expectedAnnualReturn ? `${a.expectedAnnualReturn}% p.a.` : "—"}</Badge>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Badge>{a.expectedAnnualReturn ? `${a.expectedAnnualReturn}% p.a.` : "—"}</Badge>
+                <button onClick={() => setDeleteTarget(a)} className="text-ink-muted hover:text-loss" title="Delete">
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
             </div>
             <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(a.currentCorpus)}</span>
             <span className="text-xs text-ink-muted">
@@ -273,10 +280,10 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
               <Button variant="outline" size="sm" onClick={() => setWithdrawTarget(a)} disabled={a.currentCorpus <= 0}>
                 <Banknote className="size-3.5" /> Withdraw
               </Button>
+              <Button variant="outline" size="sm" onClick={() => setImportTarget(a)}>
+                <UploadCloud className="size-3.5" /> Import statement
+              </Button>
             </div>
-            <button onClick={() => setDeleteTarget(a)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
-              <Trash2 className="size-4" />
-            </button>
           </Card>
         ))}
       </div>
@@ -427,6 +434,8 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
         confirmLabel="Delete"
         onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
       />
+
+      {importTarget && <ImportNPSStatementDialog account={importTarget} open={!!importTarget} onOpenChange={(o) => !o && setImportTarget(null)} />}
     </div>
   );
 }
