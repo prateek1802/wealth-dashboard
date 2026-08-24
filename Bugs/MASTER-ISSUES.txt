@@ -24,14 +24,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
 ====================================================================
 🔴 OPEN — ready to patch directly (small, contained)
 ====================================================================
-1. Dashboard "Day Change" always shows ~₹0.
-   CAUSE: dashboard/page.tsx calls snapshotService.recordTodaysSnapshot() first (which
-   upserts today's snapshot), then calls getPortfolioSummary() again to render the page.
-   Inside getPortfolioSummary() (~line 132), "previous" for dayChange is just the
-   chronologically-last snapshot — but today's just-written row is now that last one,
-   so it diffs net worth against itself.
-   FIX: filter to snapshotDate < today before picking "previous".
-
 2. MF Equity / MF Debt labels too long/visually heavy in cards.
    CAUSE: src/constants/asset-types.ts — "Mutual Fund (Equity)" / "Mutual Fund (Debt)",
    single source of truth used everywhere.
