@@ -24,11 +24,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
 ====================================================================
 🔴 OPEN — ready to patch directly (small, contained)
 ====================================================================
-2. MF Equity / MF Debt labels too long/visually heavy in cards.
-   CAUSE: src/constants/asset-types.ts — "Mutual Fund (Equity)" / "Mutual Fund (Debt)",
-   single source of truth used everywhere.
-   FIX: shorten in this one file (e.g. "Equity MF" / "Debt MF").
-
 3. Vercel Analytics and Speed Insights not enabled.
    CONFIRMED: no @vercel/analytics / @vercel/speed-insights in package.json, no
    <Analytics/>/<SpeedInsights/> in src/app/layout.tsx.

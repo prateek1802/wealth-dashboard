@@ -28,6 +28,9 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
   const [importOpen, setImportOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Row | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Row | null>(null);
+  const PAGE_SIZE = 50;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const visibleRows = rows.slice(0, visibleCount);
 
   function handleExport() {
     const csv = toCSV(
@@ -92,7 +95,7 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {visibleRows.map((r) => (
                 <tr key={r.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
                   <td className="px-4 py-3 text-ink-muted">{formatDate(r.transactionDate)}</td>
                   <td className="px-4 py-3">
@@ -125,6 +128,14 @@ export function TransactionsView({ rows }: { rows: Row[] }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {visibleCount < rows.length && (
+        <div className="flex justify-center">
+          <Button variant="outline" size="sm" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
+            View more ({rows.length - visibleCount} remaining)
+          </Button>
         </div>
       )}
 

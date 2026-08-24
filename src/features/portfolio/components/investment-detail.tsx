@@ -26,6 +26,8 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
   const [addTxnOpen, setAddTxnOpen] = useState(false);
   const [editTxnTarget, setEditTxnTarget] = useState<Transaction | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
+  const TXN_PAGE_SIZE = 50;
+  const [visibleTxnCount, setVisibleTxnCount] = useState(TXN_PAGE_SIZE);
   const { asset } = holding;
   const isGain = holding.unrealizedPnl >= 0;
 
@@ -125,7 +127,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
             <EmptyState icon={Receipt} title="No transactions yet" description="Add the first transaction for this asset." />
           ) : (
             <div className="flex flex-col divide-y divide-border-subtle">
-              {[...transactions].reverse().map((t) => (
+              {[...transactions].reverse().slice(0, visibleTxnCount).map((t) => (
                 <div key={t.id} className="flex items-center justify-between gap-3 py-3">
                   <div className="flex flex-col">
                     <span className="flex items-center gap-2 text-sm font-medium text-ink">
@@ -148,6 +150,13 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {visibleTxnCount < transactions.length && (
+            <div className="mt-3 flex justify-center">
+              <Button variant="outline" size="sm" onClick={() => setVisibleTxnCount((c) => c + TXN_PAGE_SIZE)}>
+                View more ({transactions.length - visibleTxnCount} remaining)
+              </Button>
             </div>
           )}
         </CardContent>
