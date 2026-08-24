@@ -128,7 +128,13 @@ export const portfolioService = {
     const unrealizedPnlPercent = investedCapital > 0 ? (unrealizedPnl / investedCapital) * 100 : 0;
     const netWorth = currentValue + cashValue + fdValue + npsValue + ppfValue - liabilitiesValue;
 
-    const sorted = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+    const today = todayISO();
+    // Excludes today's own snapshot — recordTodaysSnapshot() (called by the
+    // dashboard right before this) upserts a row for today, so without this
+    // filter "previous" ends up being that same just-written row on any
+    // page load after the first one today, diffing net worth against
+    // itself and showing ~₹0 day change all day.
+    const sorted = [...snapshots].filter((s) => s.snapshotDate < today).sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
     const previous = sorted.length > 0 ? sorted[sorted.length - 1] : null;
     const dayChange = previous ? netWorth - previous.netWorth : null;
     const dayChangePercent = previous && previous.netWorth > 0 ? ((netWorth - previous.netWorth) / previous.netWorth) * 100 : null;
