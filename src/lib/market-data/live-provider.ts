@@ -94,7 +94,7 @@ async function getMutualFundQuote(schemeCode: string): Promise<Quote | null> {
   }
 }
 
-/** Routes by asset type. Cash, FD, NPS, PPF have no market quote — always null (manual/derived by design). */
+/** Routes by asset type. Cash, FD, PPF have no market quote — always null (manual/derived by design). NPS scheme-level NAV is handled separately (see fetchNPSNAVSchemeIndex/fetchNPSNAVQuote below), since it isn't an Asset row and doesn't go through this MarketDataProvider interface. */
 export function createLiveMarketDataProvider(): MarketDataProvider {
   return {
     async getQuote(symbol: string): Promise<Quote | null> {
@@ -118,4 +118,58 @@ export async function getLiveQuoteForAsset(asset: Pick<Asset, "symbol" | "assetT
     return getEquityQuote(asset);
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// NPS live NAV — npsnav.in (free, no-key, compiles Protean/NSDL's daily
+// public NAV disclosures; see https://npsnav.in/nps-api). Verified against
+// the real, documented API before wiring this in.
+//
+// Deliberately NOT auto-matched to a subscriber's PFM/scheme: npsnav.in's
+// scheme_code naming isn't something this app can reliably map from a PFM
+// name + E/C/G/A letter without risking a silently-wrong NAV attached to
+// the wrong fund, which would corrupt a real corpus figure. So a scheme
+// only gets live refresh after the user searches and confirms the exact
+// match once (see npsService.linkSchemeToNAVSource) — this file only
+// exposes the two building blocks (search, quote), never a guess.
+//
+// LICENSING NOTE: npsnav.in's dataset is licensed CC BY-NC 4.0 — personal,
+// educational, and non-commercial use only; commercial use/redistribution
+// needs their permission. Fine for a personal finance tracker used by its
+// owner; worth knowing if this app is ever used more broadly.
+// ---------------------------------------------------------------------------
+
+export interface NPSNAVSchemeInfo {
+  schemeCode: string;
+  schemeName: string;
+}
+
+/** Every known NPS scheme (all PFMs, all asset classes) — powers the one-time "search and confirm" mapping UI, never used for automatic matching. */
+export async function fetchNPSNAVSchemeIndex(): Promise<NPSNAVSchemeInfo[]> {
+  try {
+    const res = await fetch("https://npsnav.in/api/schemes", { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const rows = data?.data;
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter((r: unknown): r is [string, string] => Array.isArray(r) && typeof r[0] === "string" && typeof r[1] === "string")
+      .map(([schemeCode, schemeName]) => ({ schemeCode, schemeName }));
+  } catch {
+    return [];
+  }
+}
+
+/** Latest NAV for one scheme code the user has already confirmed via fetchNPSNAVSchemeIndex(). Returns null on any failure — caller treats that as "couldn't refresh this one", never throws. */
+export async function fetchNPSNAVQuote(schemeCode: string): Promise<{ nav: number; asOf: string } | null> {
+  try {
+    const res = await fetch(`https://npsnav.in/api/${encodeURIComponent(schemeCode)}`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const text = (await res.text()).trim();
+    const nav = parseFloat(text);
+    if (!Number.isFinite(nav)) return null;
+    return { nav, asOf: new Date().toISOString() };
+  } catch {
+    return null;
+  }
 }

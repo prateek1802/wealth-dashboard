@@ -6,6 +6,7 @@ import { npsAccountSchema, npsContributionSchema, withdrawNPSSchema } from "@/li
 import { ROUTES } from "@/constants/routes";
 import type { ActionResult } from "@/features/transactions/actions";
 import type { NPSImportSummary } from "@/lib/services/nps.service";
+import type { NPSScheme } from "@/constants/nps";
 
 export async function addNPSAccountAction(input: unknown): Promise<ActionResult> {
   const parsed = npsAccountSchema.safeParse(input);
@@ -104,5 +105,33 @@ export async function importNPSStatementAction(npsAccountId: string, formData: F
     return { ok: true, summary };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong while reading that file." };
+  }
+}
+
+/** Free-text search over npsnav.in's scheme index — backs the "connect live NAV" search UI. */
+export async function searchNPSNAVSchemesAction(query: string) {
+  return npsService.searchNPSNAVSchemes(query);
+}
+
+/** Records (or clears, if schemeCode is null) which npsnav.in scheme a held scheme maps to. */
+export async function linkSchemeToNAVSourceAction(npsAccountId: string, scheme: NPSScheme, schemeCode: string | null): Promise<ActionResult> {
+  try {
+    await npsService.linkSchemeToNAVSource(npsAccountId, scheme, schemeCode);
+    revalidatePath(ROUTES.nps);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
+/** Refreshes live NAV for every scheme in one account that's been connected to a npsnav.in scheme_code. */
+export async function refreshNPSLiveNAVsAction(npsAccountId: string): Promise<{ ok: true; updated: number; skipped: number; failed: number } | { ok: false; error: string }> {
+  try {
+    const result = await npsService.refreshLiveNAVs(npsAccountId);
+    revalidatePath(ROUTES.nps);
+    revalidatePath(ROUTES.dashboard);
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

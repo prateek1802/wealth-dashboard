@@ -209,6 +209,7 @@ alter table nps_scheme_holdings add column if not exists scheme text;
 alter table nps_scheme_holdings add column if not exists units_held numeric(18,4) not null default 0;
 alter table nps_scheme_holdings add column if not exists last_nav numeric(12,4);
 alter table nps_scheme_holdings add column if not exists last_nav_date date;
+alter table nps_scheme_holdings add column if not exists npsnav_scheme_code text;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'nps_scheme_holdings_account_scheme_key') then
     alter table nps_scheme_holdings add constraint nps_scheme_holdings_account_scheme_key unique (nps_account_id, scheme);

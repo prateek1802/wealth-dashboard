@@ -1,5 +1,5 @@
 import { npsRepository } from "@/lib/database/repositories/nps.repository";
-import { projectNPSCorpus, buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
+import { projectNPSCorpus, buildNPSCashflows, buildSchemeTransactionCashflows, filterNPSNAVSchemes } from "@/lib/calculations/nps";
 import { pairSwitches, selectTransactionsToImport } from "@/lib/import/nps-statement-parser";
 import { todayISO } from "@/lib/utils/date";
 import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
@@ -141,6 +141,54 @@ export const npsService = {
   },
 
   /**
+   * Searches npsnav.in's full scheme index by free text (PFM name, scheme
+   * name) — powers the one-time "connect this scheme to live NAV" search.
+   * Never auto-selects a result; the user always picks explicitly (see
+   * lib/market-data/live-provider.ts for why this is deliberately
+   * search-and-confirm rather than automatic).
+   */
+  async searchNPSNAVSchemes(query: string): Promise<Array<{ schemeCode: string; schemeName: string }>> {
+    const { fetchNPSNAVSchemeIndex } = await import("@/lib/market-data/live-provider");
+    const all = await fetchNPSNAVSchemeIndex();
+    return filterNPSNAVSchemes(all, query);
+  },
+
+  /** Records which npsnav.in scheme_code a held scheme maps to — see setSchemeNAVSource() in the repository. Pass null to disconnect. */
+  async linkSchemeToNAVSource(npsAccountId: string, scheme: NPSScheme, schemeCode: string | null): Promise<void> {
+    await npsRepository.setSchemeNAVSource(npsAccountId, scheme, schemeCode);
+  },
+
+  /**
+   * Refreshes live NAV for every scheme in ONE account that has been
+   * connected to a npsnav.in scheme_code (see linkSchemeToNAVSource).
+   * Schemes without a mapping are silently skipped — this never guesses at
+   * one. Best-effort per scheme: one failed fetch never blocks the others.
+   */
+  async refreshLiveNAVs(npsAccountId: string): Promise<{ updated: number; skipped: number; failed: number }> {
+    const { fetchNPSNAVQuote } = await import("@/lib/market-data/live-provider");
+    const holdings = await npsRepository.findSchemeHoldings(npsAccountId);
+    let updated = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const holding of holdings) {
+      if (!holding.npsnavSchemeCode) {
+        skipped += 1;
+        continue;
+      }
+      const quote = await fetchNPSNAVQuote(holding.npsnavSchemeCode);
+      if (!quote) {
+        failed += 1;
+        continue;
+      }
+      await npsRepository.updateSchemeHoldingNAV(npsAccountId, holding.scheme, quote.nav, quote.asOf.slice(0, 10));
+      updated += 1;
+    }
+
+    return { updated, skipped, failed };
+  },
+
+  /**
    * Cash flows for the portfolio-wide XIRR, routed per account:
    *  - Accounts with scheme-level data (a statement has been imported) use
    *    buildSchemeTransactionCashflows() — real, dated contribution/
@@ -239,13 +287,28 @@ async function relinkSwitchPairs(allTxns: NPSSchemeTransaction[]): Promise<void>
  * is what makes holdings correct regardless of whether an import added 0,
  * some, or all of its rows as new — always derived fresh, never
  * incrementally patched.
+ *
+ * Preserves a live-refreshed NAV (see refreshLiveNAVs) across re-imports:
+ * imported statements only ever carry historical transaction-dated NAVs,
+ * so if the holding already has a live_nav_date MORE RECENT than the
+ * latest imported transaction's date, that live value wins instead of
+ * being silently overwritten by older data on the next import.
  */
 async function recomputeSchemeHoldings(npsAccountId: string, allTxns: NPSSchemeTransaction[]): Promise<void> {
+  const existingHoldings = await npsRepository.findSchemeHoldings(npsAccountId);
+  const existingByScheme = new Map(existingHoldings.map((h) => [h.scheme, h]));
+
   for (const scheme of NPS_SCHEMES) {
     const schemeTxns = allTxns.filter((t) => t.scheme === scheme);
     if (schemeTxns.length === 0) continue;
     const unitsHeld = schemeTxns.reduce((sum, t) => sum + t.units, 0);
-    const latest = schemeTxns.reduce((a, b) => (a.transactionDate > b.transactionDate ? a : b));
-    await npsRepository.upsertSchemeHolding(npsAccountId, scheme, unitsHeld, latest.nav, latest.transactionDate);
+    const latestTxn = schemeTxns.reduce((a, b) => (a.transactionDate > b.transactionDate ? a : b));
+
+    const existing = existingByScheme.get(scheme);
+    const liveIsNewer = !!existing?.lastNavDate && existing.lastNavDate > latestTxn.transactionDate;
+    const nav = liveIsNewer ? existing!.lastNav : latestTxn.nav;
+    const navDate = liveIsNewer ? existing!.lastNavDate : latestTxn.transactionDate;
+
+    await npsRepository.upsertSchemeHolding(npsAccountId, scheme, unitsHeld, nav, navDate);
   }
 }

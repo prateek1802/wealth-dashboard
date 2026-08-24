@@ -116,6 +116,7 @@ export interface NPSSchemeHoldingRow {
   units_held: number;
   last_nav: number | null;
   last_nav_date: string | null;
+  npsnav_scheme_code: string | null;
   created_at: string;
   updated_at: string;
 }

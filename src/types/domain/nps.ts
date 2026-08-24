@@ -46,6 +46,8 @@ export interface NPSSchemeHolding {
   unitsHeld: number;
   lastNav: number | null;
   lastNavDate: string | null;
+  /** User-confirmed npsnav.in scheme_code for live NAV refresh — see Part 5 of the NPS rewrite. Null until the user connects this scheme via a search/confirm flow (never auto-matched). */
+  npsnavSchemeCode: string | null;
   createdAt: string;
   updatedAt: string;
 }

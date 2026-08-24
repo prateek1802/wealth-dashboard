@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
+import { buildNPSCashflows, buildSchemeTransactionCashflows, filterNPSNAVSchemes } from "@/lib/calculations/nps";
 import { classifySchemeStatement } from "@/lib/calculations/nps-classification";
 import type { NPSAccount, NPSContribution, NPSSchemeTransaction } from "@/types/domain/nps";
 import type { RawStatementRow } from "@/lib/calculations/nps-classification";
@@ -176,5 +176,34 @@ describe("buildSchemeTransactionCashflows", () => {
     const terminalEntries = flows.filter((f) => f.date === "2026-08-01");
     expect(terminalEntries).toHaveLength(1);
     expect(terminalEntries[0].amount).toBeCloseTo(882_252.12, 2);
+  });
+});
+
+describe("filterNPSNAVSchemes", () => {
+  const schemes = [
+    { schemeCode: "SM008001", schemeName: "HDFC PENSION FUND SCHEME E - TIER I" },
+    { schemeCode: "SM008002", schemeName: "HDFC PENSION FUND SCHEME C - TIER I" },
+    { schemeCode: "SM001001", schemeName: "SBI PENSION FUND SCHEME E - TIER I" },
+    { schemeCode: "SM001002", schemeName: "SBI PENSION FUND SCHEME - CENTRAL GOVT" },
+  ];
+
+  it("requires at least 2 characters, returning nothing for shorter queries", () => {
+    expect(filterNPSNAVSchemes(schemes, "")).toEqual([]);
+    expect(filterNPSNAVSchemes(schemes, "H")).toEqual([]);
+  });
+
+  it("matches case-insensitively by substring anywhere in the scheme name", () => {
+    const result = filterNPSNAVSchemes(schemes, "hdfc");
+    expect(result.map((r) => r.schemeCode)).toEqual(["SM008001", "SM008002"]);
+  });
+
+  it("narrows further with a longer contiguous substring", () => {
+    const result = filterNPSNAVSchemes(schemes, "hdfc pension fund scheme e");
+    expect(result.map((r) => r.schemeCode)).toEqual(["SM008001"]);
+  });
+
+  it("caps results at 25", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ schemeCode: `SM${i}`, schemeName: `TEST PENSION FUND ${i}` }));
+    expect(filterNPSNAVSchemes(many, "test")).toHaveLength(25);
   });
 });

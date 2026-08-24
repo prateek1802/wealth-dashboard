@@ -124,3 +124,16 @@ export function buildSchemeTransactionCashflows(effectiveCorpus: number, schemeT
 
   return flows;
 }
+
+/**
+ * Case-insensitive substring filter over npsnav.in's scheme index, capped
+ * to 25 results — backs the "connect live NAV" search (see
+ * npsService.searchNPSNAVSchemes). Requires at least 2 characters, same as
+ * every other type-ahead in this app, to avoid a near-empty query matching
+ * almost everything in a 150+ entry list.
+ */
+export function filterNPSNAVSchemes<T extends { schemeName: string }>(schemes: T[], query: string): T[] {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length < 2) return [];
+  return schemes.filter((s) => s.schemeName.toLowerCase().includes(trimmed)).slice(0, 25);
+}

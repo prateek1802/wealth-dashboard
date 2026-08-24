@@ -190,6 +190,14 @@ create table nps_scheme_holdings (
   units_held numeric(18,4) not null default 0,
   last_nav numeric(12,4),
   last_nav_date date,
+  -- User-confirmed npsnav.in scheme_code (e.g. 'SM008001') for live NAV
+  -- refresh -- see Part 5 of the NPS rewrite. Deliberately NOT
+  -- auto-matched: PFM name -> scheme_code mapping isn't reliable enough to
+  -- guess at without risking silently attaching the wrong fund's NAV, so
+  -- the user picks it once from a search (lib/market-data/live-provider.ts
+  -- fetchNPSNAVSchemeIndex()) and refresh only fires for schemes with this
+  -- set.
+  npsnav_scheme_code text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (nps_account_id, scheme)

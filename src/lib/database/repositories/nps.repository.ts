@@ -43,6 +43,7 @@ function rowToSchemeHolding(row: NPSSchemeHoldingRow): NPSSchemeHolding {
     unitsHeld: row.units_held,
     lastNav: row.last_nav,
     lastNavDate: row.last_nav_date,
+    npsnavSchemeCode: row.npsnav_scheme_code,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -258,7 +259,7 @@ export const npsRepository = {
     return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
   },
 
-  /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. */
+  /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. Only touches units_held/last_nav/last_nav_date — never npsnav_scheme_code, so the live-NAV mapping (set via setSchemeNAVSource) survives every re-import untouched. */
   async upsertSchemeHolding(npsAccountId: string, scheme: NPSScheme, unitsHeld: number, lastNav: number | null, lastNavDate: string | null): Promise<NPSSchemeHolding> {
     if (isDemoMode()) {
       const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
@@ -270,7 +271,7 @@ export const npsRepository = {
         existing.updatedAt = now;
         return existing;
       }
-      const holding: NPSSchemeHolding = { id: nextId("npssh"), npsAccountId, scheme, unitsHeld, lastNav, lastNavDate, createdAt: now, updatedAt: now };
+      const holding: NPSSchemeHolding = { id: nextId("npssh"), npsAccountId, scheme, unitsHeld, lastNav, lastNavDate, npsnavSchemeCode: null, createdAt: now, updatedAt: now };
       demoNPSSchemeHoldings.push(holding);
       return holding;
     }
@@ -285,6 +286,37 @@ export const npsRepository = {
       .single();
     if (error) throw error;
     return rowToSchemeHolding(data as NPSSchemeHoldingRow);
+  },
+
+  /** Records the user-confirmed npsnav.in scheme_code for live NAV refresh — see Part 5 of the NPS rewrite. The holding must already exist (created by an import); this never creates one. */
+  async setSchemeNAVSource(npsAccountId: string, scheme: NPSScheme, schemeCode: string | null): Promise<void> {
+    if (isDemoMode()) {
+      const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
+      if (existing) {
+        existing.npsnavSchemeCode = schemeCode;
+        existing.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    const db = await getServerSupabaseClient();
+    const { error } = await db.from("nps_scheme_holdings").update({ npsnav_scheme_code: schemeCode }).eq("nps_account_id", npsAccountId).eq("scheme", scheme);
+    if (error) throw error;
+  },
+
+  /** Live-refreshes ONLY last_nav/last_nav_date — deliberately does not touch units_held, unlike upsertSchemeHolding(), since a live quote never changes how many units you hold. */
+  async updateSchemeHoldingNAV(npsAccountId: string, scheme: NPSScheme, nav: number, navDate: string): Promise<void> {
+    if (isDemoMode()) {
+      const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
+      if (existing) {
+        existing.lastNav = nav;
+        existing.lastNavDate = navDate;
+        existing.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    const db = await getServerSupabaseClient();
+    const { error } = await db.from("nps_scheme_holdings").update({ last_nav: nav, last_nav_date: navDate }).eq("nps_account_id", npsAccountId).eq("scheme", scheme);
+    if (error) throw error;
   },
 
   async findSchemeTransactions(npsAccountId: string): Promise<NPSSchemeTransaction[]> {

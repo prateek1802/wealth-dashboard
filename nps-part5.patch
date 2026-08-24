@@ -1,0 +1,832 @@
+diff --git a/src/features/nps/actions.ts b/src/features/nps/actions.ts
+index 28b111f..dad8052 100644
+--- a/src/features/nps/actions.ts
++++ b/src/features/nps/actions.ts
+@@ -1,108 +1,137 @@
+-"use server";
+-import { revalidatePath } from "next/cache";
+-import { npsService } from "@/lib/services/nps.service";
+-import { parseNPSStatement } from "@/lib/import/nps-statement-parser";
+-import { npsAccountSchema, npsContributionSchema, withdrawNPSSchema } from "@/lib/validation/nps.schema";
+-import { ROUTES } from "@/constants/routes";
+-import type { ActionResult } from "@/features/transactions/actions";
+-import type { NPSImportSummary } from "@/lib/services/nps.service";
+-
+-export async function addNPSAccountAction(input: unknown): Promise<ActionResult> {
+-  const parsed = npsAccountSchema.safeParse(input);
+-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+-  try {
+-    await npsService.createAccount(parsed.data);
+-    revalidatePath(ROUTES.nps);
+-    revalidatePath(ROUTES.dashboard);
+-    return { ok: true };
+-  } catch (err) {
+-    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+-  }
+-}
+-
+-export async function updateNPSAssumptionsAction(accountId: string, input: unknown): Promise<ActionResult> {
+-  const parsed = npsAccountSchema.safeParse(input);
+-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+-  try {
+-    await npsService.updateAssumptions(accountId, parsed.data);
+-    revalidatePath(ROUTES.nps);
+-    revalidatePath(ROUTES.dashboard);
+-    return { ok: true };
+-  } catch (err) {
+-    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+-  }
+-}
+-
+-export async function deleteNPSAccountAction(id: string): Promise<ActionResult> {
+-  try {
+-    await npsService.removeAccount(id);
+-    revalidatePath(ROUTES.nps);
+-    revalidatePath(ROUTES.dashboard);
+-    return { ok: true };
+-  } catch (err) {
+-    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+-  }
+-}
+-
+-export async function withdrawNPSAction(id: string, input: unknown): Promise<ActionResult> {
+-  const parsed = withdrawNPSSchema.safeParse(input);
+-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+-  try {
+-    await npsService.withdraw(id, parsed.data.amount);
+-    revalidatePath(ROUTES.nps);
+-    revalidatePath(ROUTES.dashboard);
+-    return { ok: true };
+-  } catch (err) {
+-    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+-  }
+-}
+-
+-export async function addNPSContributionAction(input: unknown): Promise<ActionResult> {
+-  const parsed = npsContributionSchema.safeParse(input);
+-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+-  try {
+-    await npsService.addContribution({ ...parsed.data, notes: parsed.data.notes ?? null });
+-    revalidatePath(ROUTES.nps);
+-    revalidatePath(ROUTES.dashboard);
+-    return { ok: true };
+-  } catch (err) {
+-    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+-  }
+-}
+-
+-const MAX_STATEMENT_FILE_BYTES = 15 * 1024 * 1024; // 15MB — generous headroom over a multi-year statement
+-
+-/**
+- * Imports a real NPS statement (NSDL/Protean export) for one account.
+- * Accepts .xlsx (consolidated, multi-sheet — Format B, validated against a
+- * real subscriber's data) or .csv (single-period CRA export — Format A,
+- * best-effort, see lib/import/nps-statement-parser.ts for caveats).
+- * Idempotent: safe to import the same or an overlapping file more than
+- * once — see npsService.importStatement().
+- */
+-export async function importNPSStatementAction(npsAccountId: string, formData: FormData): Promise<{ ok: true; summary: NPSImportSummary } | { ok: false; error: string }> {
+-  try {
+-    const file = formData.get("file");
+-    if (!(file instanceof File)) return { ok: false, error: "No file was provided." };
+-    if (file.size === 0) return { ok: false, error: "That file is empty." };
+-    if (file.size > MAX_STATEMENT_FILE_BYTES) return { ok: false, error: "That file is larger than expected for an NPS statement — please double-check it." };
+-
+-    const name = file.name.toLowerCase();
+-    const isXlsx = name.endsWith(".xlsx") || file.type.includes("spreadsheet");
+-    const isCsv = name.endsWith(".csv") || file.type.includes("csv");
+-    if (!isXlsx && !isCsv) return { ok: false, error: "Please upload the .xlsx (consolidated) or .csv (single-period) statement exported from NSDL/Protean." };
+-
+-    const parseResult = isXlsx ? parseNPSStatement({ kind: "xlsx", data: await file.arrayBuffer() }) : parseNPSStatement({ kind: "csv", text: await file.text() });
+-
+-    if (Object.keys(parseResult.schemes).length === 0) {
+-      return { ok: false, error: "Couldn't find any recognizable scheme data (E/C/G/A) in that file." };
+-    }
+-
+-    const summary = await npsService.importStatement(npsAccountId, parseResult);
+-    revalidatePath(ROUTES.nps);
+-    revalidatePath(ROUTES.dashboard);
+-    return { ok: true, summary };
+-  } catch (err) {
+-    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong while reading that file." };
+-  }
+-}
++"use server";
++import { revalidatePath } from "next/cache";
++import { npsService } from "@/lib/services/nps.service";
++import { parseNPSStatement } from "@/lib/import/nps-statement-parser";
++import { npsAccountSchema, npsContributionSchema, withdrawNPSSchema } from "@/lib/validation/nps.schema";
++import { ROUTES } from "@/constants/routes";
++import type { ActionResult } from "@/features/transactions/actions";
++import type { NPSImportSummary } from "@/lib/services/nps.service";
++import type { NPSScheme } from "@/constants/nps";
++
++export async function addNPSAccountAction(input: unknown): Promise<ActionResult> {
++  const parsed = npsAccountSchema.safeParse(input);
++  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
++  try {
++    await npsService.createAccount(parsed.data);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
++
++export async function updateNPSAssumptionsAction(accountId: string, input: unknown): Promise<ActionResult> {
++  const parsed = npsAccountSchema.safeParse(input);
++  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
++  try {
++    await npsService.updateAssumptions(accountId, parsed.data);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
++
++export async function deleteNPSAccountAction(id: string): Promise<ActionResult> {
++  try {
++    await npsService.removeAccount(id);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
++
++export async function withdrawNPSAction(id: string, input: unknown): Promise<ActionResult> {
++  const parsed = withdrawNPSSchema.safeParse(input);
++  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
++  try {
++    await npsService.withdraw(id, parsed.data.amount);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
++
++export async function addNPSContributionAction(input: unknown): Promise<ActionResult> {
++  const parsed = npsContributionSchema.safeParse(input);
++  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
++  try {
++    await npsService.addContribution({ ...parsed.data, notes: parsed.data.notes ?? null });
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
++
++const MAX_STATEMENT_FILE_BYTES = 15 * 1024 * 1024; // 15MB — generous headroom over a multi-year statement
++
++/**
++ * Imports a real NPS statement (NSDL/Protean export) for one account.
++ * Accepts .xlsx (consolidated, multi-sheet — Format B, validated against a
++ * real subscriber's data) or .csv (single-period CRA export — Format A,
++ * best-effort, see lib/import/nps-statement-parser.ts for caveats).
++ * Idempotent: safe to import the same or an overlapping file more than
++ * once — see npsService.importStatement().
++ */
++export async function importNPSStatementAction(npsAccountId: string, formData: FormData): Promise<{ ok: true; summary: NPSImportSummary } | { ok: false; error: string }> {
++  try {
++    const file = formData.get("file");
++    if (!(file instanceof File)) return { ok: false, error: "No file was provided." };
++    if (file.size === 0) return { ok: false, error: "That file is empty." };
++    if (file.size > MAX_STATEMENT_FILE_BYTES) return { ok: false, error: "That file is larger than expected for an NPS statement — please double-check it." };
++
++    const name = file.name.toLowerCase();
++    const isXlsx = name.endsWith(".xlsx") || file.type.includes("spreadsheet");
++    const isCsv = name.endsWith(".csv") || file.type.includes("csv");
++    if (!isXlsx && !isCsv) return { ok: false, error: "Please upload the .xlsx (consolidated) or .csv (single-period) statement exported from NSDL/Protean." };
++
++    const parseResult = isXlsx ? parseNPSStatement({ kind: "xlsx", data: await file.arrayBuffer() }) : parseNPSStatement({ kind: "csv", text: await file.text() });
++
++    if (Object.keys(parseResult.schemes).length === 0) {
++      return { ok: false, error: "Couldn't find any recognizable scheme data (E/C/G/A) in that file." };
++    }
++
++    const summary = await npsService.importStatement(npsAccountId, parseResult);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true, summary };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong while reading that file." };
++  }
++}
++
++/** Free-text search over npsnav.in's scheme index — backs the "connect live NAV" search UI. */
++export async function searchNPSNAVSchemesAction(query: string) {
++  return npsService.searchNPSNAVSchemes(query);
++}
++
++/** Records (or clears, if schemeCode is null) which npsnav.in scheme a held scheme maps to. */
++export async function linkSchemeToNAVSourceAction(npsAccountId: string, scheme: NPSScheme, schemeCode: string | null): Promise<ActionResult> {
++  try {
++    await npsService.linkSchemeToNAVSource(npsAccountId, scheme, schemeCode);
++    revalidatePath(ROUTES.nps);
++    return { ok: true };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
++
++/** Refreshes live NAV for every scheme in one account that's been connected to a npsnav.in scheme_code. */
++export async function refreshNPSLiveNAVsAction(npsAccountId: string): Promise<{ ok: true; updated: number; skipped: number; failed: number } | { ok: false; error: string }> {
++  try {
++    const result = await npsService.refreshLiveNAVs(npsAccountId);
++    revalidatePath(ROUTES.nps);
++    revalidatePath(ROUTES.dashboard);
++    return { ok: true, ...result };
++  } catch (err) {
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
+diff --git a/src/features/nps/components/nps-nav-scheme-search.tsx b/src/features/nps/components/nps-nav-scheme-search.tsx
+new file mode 100644
+index 0000000..7cf84a7
+--- /dev/null
++++ b/src/features/nps/components/nps-nav-scheme-search.tsx
+@@ -0,0 +1,89 @@
++"use client";
++import { useRef, useState } from "react";
++import { Input } from "@/components/ui/input";
++import { searchNPSNAVSchemesAction } from "../actions";
++import { Loader2, Search } from "lucide-react";
++
++export interface NPSNAVSchemeResult {
++  schemeCode: string;
++  schemeName: string;
++}
++
++/**
++ * Type-ahead over npsnav.in's scheme index (see
++ * lib/market-data/live-provider.ts) — used to CONFIRM which scheme a held
++ * E/C/G/A maps to before live NAV refresh is enabled for it. Deliberately
++ * requires an explicit pick; never pre-selects or auto-matches (see the
++ * comment in live-provider.ts for why).
++ */
++export function NPSNAVSchemeSearch({ onSelect, onCancel }: { onSelect: (result: NPSNAVSchemeResult) => void; onCancel: () => void }) {
++  const [query, setQuery] = useState("");
++  const [results, setResults] = useState<NPSNAVSchemeResult[]>([]);
++  const [loading, setLoading] = useState(false);
++  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const requestIdRef = useRef(0);
++
++  function handleChange(next: string) {
++    setQuery(next);
++    if (debounceRef.current) clearTimeout(debounceRef.current);
++    if (next.trim().length < 2) {
++      requestIdRef.current += 1;
++      setResults([]);
++      setLoading(false);
++      return;
++    }
++    setLoading(true);
++    const thisRequestId = ++requestIdRef.current;
++    debounceRef.current = setTimeout(async () => {
++      const found = await searchNPSNAVSchemesAction(next);
++      if (requestIdRef.current !== thisRequestId) return;
++      setResults(found);
++      setLoading(false);
++    }, 300);
++  }
++
++  return (
++    <div className="flex flex-col gap-2 rounded-[var(--radius-control)] border border-border-subtle bg-surface-raised p-2.5">
++      <div className="relative">
++        <Input
++          autoFocus
++          value={query}
++          onChange={(e) => handleChange(e.target.value)}
++          placeholder="Search e.g. HDFC Pension Scheme E…"
++          className="pr-8 text-xs"
++        />
++        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-muted">
++          {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
++        </span>
++      </div>
++
++      {query.trim().length >= 2 && (
++        <div className="max-h-40 overflow-y-auto">
++          {loading && results.length === 0 ? (
++            <p className="p-1 text-xs text-ink-muted">Searching…</p>
++          ) : results.length === 0 ? (
++            <p className="p-1 text-xs text-ink-muted">No matches — check spelling or try just the PFM name.</p>
++          ) : (
++            <ul className="flex flex-col gap-0.5">
++              {results.map((r) => (
++                <li key={r.schemeCode}>
++                  <button
++                    type="button"
++                    onClick={() => onSelect(r)}
++                    className="w-full rounded-[var(--radius-control)] px-1.5 py-1 text-left text-xs hover:bg-surface-sunken"
++                  >
++                    <span className="text-ink">{r.schemeName}</span> <span className="text-ink-muted">({r.schemeCode})</span>
++                  </button>
++                </li>
++              ))}
++            </ul>
++          )}
++        </div>
++      )}
++
++      <button type="button" onClick={onCancel} className="self-start text-xs text-ink-muted underline hover:text-ink">
++        Cancel
++      </button>
++    </div>
++  );
++}
+diff --git a/src/features/nps/components/nps-view.tsx b/src/features/nps/components/nps-view.tsx
+index b64c986..705877b 100644
+--- a/src/features/nps/components/nps-view.tsx
++++ b/src/features/nps/components/nps-view.tsx
+@@ -13,13 +13,22 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+ import { EmptyState } from "@/components/shared/empty-state";
+ import { NPSProjectionChart } from "./nps-projection-chart";
+ import { ImportNPSStatementDialog } from "./import-nps-statement-dialog";
+-import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
++import { NPSNAVSchemeSearch } from "./nps-nav-scheme-search";
++import {
++  addNPSAccountAction,
++  updateNPSAssumptionsAction,
++  deleteNPSAccountAction,
++  addNPSContributionAction,
++  withdrawNPSAction,
++  linkSchemeToNAVSourceAction,
++  refreshNPSLiveNAVsAction,
++} from "../actions";
+ import { formatCurrency } from "@/lib/utils/currency";
+ import { formatDate } from "@/lib/utils/date";
+ import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES, NPS_SCHEME_LABELS } from "@/constants/nps";
+-import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud } from "lucide-react";
++import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud, RefreshCw } from "lucide-react";
+ import type { NPSAccount, NPSContribution, NPSProjectionPoint, NPSSchemeHolding } from "@/types/domain/nps";
+-import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
++import type { NPSTier, NPSSchemePreference, NPSScheme } from "@/constants/nps";
+ 
+ interface NPSViewProps {
+   accounts: NPSAccount[];
+@@ -35,7 +44,8 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+   const [deleteTarget, setDeleteTarget] = useState<NPSAccount | null>(null);
+   const [withdrawTarget, setWithdrawTarget] = useState<NPSAccount | null>(null);
+   const [withdrawAmount, setWithdrawAmount] = useState("");
+-  const [importTarget, setImportTarget] = useState<NPSAccount | null>(null);
++  const [importTarget, setImportTarget] = useState<NPSAccount | null>(null);
++  const [connectingScheme, setConnectingScheme] = useState<{ accountId: string; scheme: NPSScheme } | null>(null);
+   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(accounts[0]?.id ?? null);
+   const [isPending, startTransition] = useTransition();
+   const [error, setError] = useState<string | null>(null);
+@@ -119,6 +129,26 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+     });
+   }
+ 
++  function handleConnectScheme(accountId: string, scheme: NPSScheme, schemeCode: string) {
++    startTransition(async () => {
++      const result = await linkSchemeToNAVSourceAction(accountId, scheme, schemeCode);
++      setConnectingScheme(null);
++      if (result.ok) toast.success("Connected — click \"Refresh live NAVs\" to pull the latest value");
++      else toast.error(result.error);
++    });
++  }
++
++  function handleRefreshLiveNAVs(accountId: string) {
++    startTransition(async () => {
++      const result = await refreshNPSLiveNAVsAction(accountId);
++      if (result.ok) {
++        toast.success(`Updated ${result.updated} scheme${result.updated === 1 ? "" : "s"}${result.failed ? ` · ${result.failed} couldn't be reached` : ""}`);
++      } else {
++        toast.error(result.error);
++      }
++    });
++  }
++
+   async function handleDelete(account: NPSAccount) {
+     const result = await deleteNPSAccountAction(account.id);
+     if (result.ok) toast.success("NPS account removed");
+@@ -259,21 +289,40 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+             </div>
+             <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(a.currentCorpus)}</span>
+             {(schemeHoldingsByAccount[a.id]?.length ?? 0) > 0 && (
+-              <div className="flex flex-col gap-1 rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken p-2.5">
++              <div className="flex flex-col gap-1.5 rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken p-2.5">
+                 {[...schemeHoldingsByAccount[a.id]]
+                   .filter((h) => h.unitsHeld > 0)
+                   .sort((x, y) => y.unitsHeld * (y.lastNav ?? 0) - x.unitsHeld * (x.lastNav ?? 0))
+                   .map((h) => {
+                     const value = h.unitsHeld * (h.lastNav ?? 0);
+                     const pct = a.currentCorpus > 0 ? (value / a.currentCorpus) * 100 : 0;
++                    const isConnecting = connectingScheme?.accountId === a.id && connectingScheme.scheme === h.scheme;
+                     return (
+-                      <div key={h.scheme} className="flex items-center justify-between text-xs">
+-                        <span className="text-ink-muted">
+-                          {h.scheme} · {NPS_SCHEME_LABELS[h.scheme]}
+-                        </span>
+-                        <span className="font-tabular text-ink">
+-                          {formatCurrency(value)} <span className="text-ink-muted">({pct.toFixed(0)}%)</span>
+-                        </span>
++                      <div key={h.scheme} className="flex flex-col gap-1">
++                        <div className="flex items-center justify-between text-xs">
++                          <span className="text-ink-muted">
++                            {h.scheme} · {NPS_SCHEME_LABELS[h.scheme]}
++                          </span>
++                          <span className="font-tabular text-ink">
++                            {formatCurrency(value)} <span className="text-ink-muted">({pct.toFixed(0)}%)</span>
++                          </span>
++                        </div>
++                        {isConnecting ? (
++                          <NPSNAVSchemeSearch onSelect={(r) => handleConnectScheme(a.id, h.scheme, r.schemeCode)} onCancel={() => setConnectingScheme(null)} />
++                        ) : h.npsnavSchemeCode ? (
++                          <span className="text-[11px] text-ink-muted">
++                            Live NAV {h.lastNav?.toFixed(4) ?? "—"}
++                            {h.lastNavDate && ` · as of ${formatDate(h.lastNavDate)}`}
++                          </span>
++                        ) : (
++                          <button
++                            type="button"
++                            onClick={() => setConnectingScheme({ accountId: a.id, scheme: h.scheme })}
++                            className="self-start text-[11px] text-ink-muted underline hover:text-ink"
++                          >
++                            Connect live NAV
++                          </button>
++                        )}
+                       </div>
+                     );
+                   })}
+@@ -306,6 +355,11 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
+               <Button variant="outline" size="sm" onClick={() => setImportTarget(a)}>
+                 <UploadCloud className="size-3.5" /> Import statement
+               </Button>
++              {schemeHoldingsByAccount[a.id]?.some((h) => h.npsnavSchemeCode) && (
++                <Button variant="outline" size="sm" onClick={() => handleRefreshLiveNAVs(a.id)} disabled={isPending}>
++                  <RefreshCw className="size-3.5" /> Refresh live NAVs
++                </Button>
++              )}
+             </div>
+           </Card>
+         ))}
+diff --git a/src/lib/calculations/nps.ts b/src/lib/calculations/nps.ts
+index f199b56..58a2f44 100644
+--- a/src/lib/calculations/nps.ts
++++ b/src/lib/calculations/nps.ts
+@@ -124,3 +124,16 @@ export function buildSchemeTransactionCashflows(effectiveCorpus: number, schemeT
+ 
+   return flows;
+ }
++
++/**
++ * Case-insensitive substring filter over npsnav.in's scheme index, capped
++ * to 25 results — backs the "connect live NAV" search (see
++ * npsService.searchNPSNAVSchemes). Requires at least 2 characters, same as
++ * every other type-ahead in this app, to avoid a near-empty query matching
++ * almost everything in a 150+ entry list.
++ */
++export function filterNPSNAVSchemes<T extends { schemeName: string }>(schemes: T[], query: string): T[] {
++  const trimmed = query.trim().toLowerCase();
++  if (trimmed.length < 2) return [];
++  return schemes.filter((s) => s.schemeName.toLowerCase().includes(trimmed)).slice(0, 25);
++}
+diff --git a/src/lib/database/repositories/nps.repository.ts b/src/lib/database/repositories/nps.repository.ts
+index 453847b..f56fb2b 100644
+--- a/src/lib/database/repositories/nps.repository.ts
++++ b/src/lib/database/repositories/nps.repository.ts
+@@ -43,6 +43,7 @@ function rowToSchemeHolding(row: NPSSchemeHoldingRow): NPSSchemeHolding {
+     unitsHeld: row.units_held,
+     lastNav: row.last_nav,
+     lastNavDate: row.last_nav_date,
++    npsnavSchemeCode: row.npsnav_scheme_code,
+     createdAt: row.created_at,
+     updatedAt: row.updated_at,
+   };
+@@ -258,7 +259,7 @@ export const npsRepository = {
+     return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
+   },
+ 
+-  /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. */
++  /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. Only touches units_held/last_nav/last_nav_date — never npsnav_scheme_code, so the live-NAV mapping (set via setSchemeNAVSource) survives every re-import untouched. */
+   async upsertSchemeHolding(npsAccountId: string, scheme: NPSScheme, unitsHeld: number, lastNav: number | null, lastNavDate: string | null): Promise<NPSSchemeHolding> {
+     if (isDemoMode()) {
+       const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
+@@ -270,7 +271,7 @@ export const npsRepository = {
+         existing.updatedAt = now;
+         return existing;
+       }
+-      const holding: NPSSchemeHolding = { id: nextId("npssh"), npsAccountId, scheme, unitsHeld, lastNav, lastNavDate, createdAt: now, updatedAt: now };
++      const holding: NPSSchemeHolding = { id: nextId("npssh"), npsAccountId, scheme, unitsHeld, lastNav, lastNavDate, npsnavSchemeCode: null, createdAt: now, updatedAt: now };
+       demoNPSSchemeHoldings.push(holding);
+       return holding;
+     }
+@@ -287,6 +288,37 @@ export const npsRepository = {
+     return rowToSchemeHolding(data as NPSSchemeHoldingRow);
+   },
+ 
++  /** Records the user-confirmed npsnav.in scheme_code for live NAV refresh — see Part 5 of the NPS rewrite. The holding must already exist (created by an import); this never creates one. */
++  async setSchemeNAVSource(npsAccountId: string, scheme: NPSScheme, schemeCode: string | null): Promise<void> {
++    if (isDemoMode()) {
++      const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
++      if (existing) {
++        existing.npsnavSchemeCode = schemeCode;
++        existing.updatedAt = new Date().toISOString();
++      }
++      return;
++    }
++    const db = await getServerSupabaseClient();
++    const { error } = await db.from("nps_scheme_holdings").update({ npsnav_scheme_code: schemeCode }).eq("nps_account_id", npsAccountId).eq("scheme", scheme);
++    if (error) throw error;
++  },
++
++  /** Live-refreshes ONLY last_nav/last_nav_date — deliberately does not touch units_held, unlike upsertSchemeHolding(), since a live quote never changes how many units you hold. */
++  async updateSchemeHoldingNAV(npsAccountId: string, scheme: NPSScheme, nav: number, navDate: string): Promise<void> {
++    if (isDemoMode()) {
++      const existing = demoNPSSchemeHoldings.find((h) => h.npsAccountId === npsAccountId && h.scheme === scheme);
++      if (existing) {
++        existing.lastNav = nav;
++        existing.lastNavDate = navDate;
++        existing.updatedAt = new Date().toISOString();
++      }
++      return;
++    }
++    const db = await getServerSupabaseClient();
++    const { error } = await db.from("nps_scheme_holdings").update({ last_nav: nav, last_nav_date: navDate }).eq("nps_account_id", npsAccountId).eq("scheme", scheme);
++    if (error) throw error;
++  },
++
+   async findSchemeTransactions(npsAccountId: string): Promise<NPSSchemeTransaction[]> {
+     if (isDemoMode()) {
+       return demoNPSSchemeTransactions.filter((t) => t.npsAccountId === npsAccountId).sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
+diff --git a/src/lib/market-data/live-provider.ts b/src/lib/market-data/live-provider.ts
+index cf239bc..1b52207 100644
+--- a/src/lib/market-data/live-provider.ts
++++ b/src/lib/market-data/live-provider.ts
+@@ -94,7 +94,7 @@ async function getMutualFundQuote(schemeCode: string): Promise<Quote | null> {
+   }
+ }
+ 
+-/** Routes by asset type. Cash, FD, NPS, PPF have no market quote — always null (manual/derived by design). */
++/** Routes by asset type. Cash, FD, PPF have no market quote — always null (manual/derived by design). NPS scheme-level NAV is handled separately (see fetchNPSNAVSchemeIndex/fetchNPSNAVQuote below), since it isn't an Asset row and doesn't go through this MarketDataProvider interface. */
+ export function createLiveMarketDataProvider(): MarketDataProvider {
+   return {
+     async getQuote(symbol: string): Promise<Quote | null> {
+@@ -119,3 +119,57 @@ export async function getLiveQuoteForAsset(asset: Pick<Asset, "symbol" | "assetT
+   }
+   return null;
+ }
++
++// ---------------------------------------------------------------------------
++// NPS live NAV — npsnav.in (free, no-key, compiles Protean/NSDL's daily
++// public NAV disclosures; see https://npsnav.in/nps-api). Verified against
++// the real, documented API before wiring this in.
++//
++// Deliberately NOT auto-matched to a subscriber's PFM/scheme: npsnav.in's
++// scheme_code naming isn't something this app can reliably map from a PFM
++// name + E/C/G/A letter without risking a silently-wrong NAV attached to
++// the wrong fund, which would corrupt a real corpus figure. So a scheme
++// only gets live refresh after the user searches and confirms the exact
++// match once (see npsService.linkSchemeToNAVSource) — this file only
++// exposes the two building blocks (search, quote), never a guess.
++//
++// LICENSING NOTE: npsnav.in's dataset is licensed CC BY-NC 4.0 — personal,
++// educational, and non-commercial use only; commercial use/redistribution
++// needs their permission. Fine for a personal finance tracker used by its
++// owner; worth knowing if this app is ever used more broadly.
++// ---------------------------------------------------------------------------
++
++export interface NPSNAVSchemeInfo {
++  schemeCode: string;
++  schemeName: string;
++}
++
++/** Every known NPS scheme (all PFMs, all asset classes) — powers the one-time "search and confirm" mapping UI, never used for automatic matching. */
++export async function fetchNPSNAVSchemeIndex(): Promise<NPSNAVSchemeInfo[]> {
++  try {
++    const res = await fetch("https://npsnav.in/api/schemes", { cache: "no-store" });
++    if (!res.ok) return [];
++    const data = await res.json();
++    const rows = data?.data;
++    if (!Array.isArray(rows)) return [];
++    return rows
++      .filter((r: unknown): r is [string, string] => Array.isArray(r) && typeof r[0] === "string" && typeof r[1] === "string")
++      .map(([schemeCode, schemeName]) => ({ schemeCode, schemeName }));
++  } catch {
++    return [];
++  }
++}
++
++/** Latest NAV for one scheme code the user has already confirmed via fetchNPSNAVSchemeIndex(). Returns null on any failure — caller treats that as "couldn't refresh this one", never throws. */
++export async function fetchNPSNAVQuote(schemeCode: string): Promise<{ nav: number; asOf: string } | null> {
++  try {
++    const res = await fetch(`https://npsnav.in/api/${encodeURIComponent(schemeCode)}`, { cache: "no-store" });
++    if (!res.ok) return null;
++    const text = (await res.text()).trim();
++    const nav = parseFloat(text);
++    if (!Number.isFinite(nav)) return null;
++    return { nav, asOf: new Date().toISOString() };
++  } catch {
++    return null;
++  }
++}
+diff --git a/src/lib/services/nps.service.ts b/src/lib/services/nps.service.ts
+index c2c3029..9d9ef7c 100644
+--- a/src/lib/services/nps.service.ts
++++ b/src/lib/services/nps.service.ts
+@@ -1,5 +1,5 @@
+ import { npsRepository } from "@/lib/database/repositories/nps.repository";
+-import { projectNPSCorpus, buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
++import { projectNPSCorpus, buildNPSCashflows, buildSchemeTransactionCashflows, filterNPSNAVSchemes } from "@/lib/calculations/nps";
+ import { pairSwitches, selectTransactionsToImport } from "@/lib/import/nps-statement-parser";
+ import { todayISO } from "@/lib/utils/date";
+ import { NPS_SCHEMES, type NPSScheme } from "@/constants/nps";
+@@ -140,6 +140,54 @@ export const npsService = {
+     return npsRepository.findSchemeHoldings(npsAccountId);
+   },
+ 
++  /**
++   * Searches npsnav.in's full scheme index by free text (PFM name, scheme
++   * name) — powers the one-time "connect this scheme to live NAV" search.
++   * Never auto-selects a result; the user always picks explicitly (see
++   * lib/market-data/live-provider.ts for why this is deliberately
++   * search-and-confirm rather than automatic).
++   */
++  async searchNPSNAVSchemes(query: string): Promise<Array<{ schemeCode: string; schemeName: string }>> {
++    const { fetchNPSNAVSchemeIndex } = await import("@/lib/market-data/live-provider");
++    const all = await fetchNPSNAVSchemeIndex();
++    return filterNPSNAVSchemes(all, query);
++  },
++
++  /** Records which npsnav.in scheme_code a held scheme maps to — see setSchemeNAVSource() in the repository. Pass null to disconnect. */
++  async linkSchemeToNAVSource(npsAccountId: string, scheme: NPSScheme, schemeCode: string | null): Promise<void> {
++    await npsRepository.setSchemeNAVSource(npsAccountId, scheme, schemeCode);
++  },
++
++  /**
++   * Refreshes live NAV for every scheme in ONE account that has been
++   * connected to a npsnav.in scheme_code (see linkSchemeToNAVSource).
++   * Schemes without a mapping are silently skipped — this never guesses at
++   * one. Best-effort per scheme: one failed fetch never blocks the others.
++   */
++  async refreshLiveNAVs(npsAccountId: string): Promise<{ updated: number; skipped: number; failed: number }> {
++    const { fetchNPSNAVQuote } = await import("@/lib/market-data/live-provider");
++    const holdings = await npsRepository.findSchemeHoldings(npsAccountId);
++    let updated = 0;
++    let skipped = 0;
++    let failed = 0;
++
++    for (const holding of holdings) {
++      if (!holding.npsnavSchemeCode) {
++        skipped += 1;
++        continue;
++      }
++      const quote = await fetchNPSNAVQuote(holding.npsnavSchemeCode);
++      if (!quote) {
++        failed += 1;
++        continue;
++      }
++      await npsRepository.updateSchemeHoldingNAV(npsAccountId, holding.scheme, quote.nav, quote.asOf.slice(0, 10));
++      updated += 1;
++    }
++
++    return { updated, skipped, failed };
++  },
++
+   /**
+    * Cash flows for the portfolio-wide XIRR, routed per account:
+    *  - Accounts with scheme-level data (a statement has been imported) use
+@@ -239,13 +287,28 @@ async function relinkSwitchPairs(allTxns: NPSSchemeTransaction[]): Promise<void>
+  * is what makes holdings correct regardless of whether an import added 0,
+  * some, or all of its rows as new — always derived fresh, never
+  * incrementally patched.
++ *
++ * Preserves a live-refreshed NAV (see refreshLiveNAVs) across re-imports:
++ * imported statements only ever carry historical transaction-dated NAVs,
++ * so if the holding already has a live_nav_date MORE RECENT than the
++ * latest imported transaction's date, that live value wins instead of
++ * being silently overwritten by older data on the next import.
+  */
+ async function recomputeSchemeHoldings(npsAccountId: string, allTxns: NPSSchemeTransaction[]): Promise<void> {
++  const existingHoldings = await npsRepository.findSchemeHoldings(npsAccountId);
++  const existingByScheme = new Map(existingHoldings.map((h) => [h.scheme, h]));
++
+   for (const scheme of NPS_SCHEMES) {
+     const schemeTxns = allTxns.filter((t) => t.scheme === scheme);
+     if (schemeTxns.length === 0) continue;
+     const unitsHeld = schemeTxns.reduce((sum, t) => sum + t.units, 0);
+-    const latest = schemeTxns.reduce((a, b) => (a.transactionDate > b.transactionDate ? a : b));
+-    await npsRepository.upsertSchemeHolding(npsAccountId, scheme, unitsHeld, latest.nav, latest.transactionDate);
++    const latestTxn = schemeTxns.reduce((a, b) => (a.transactionDate > b.transactionDate ? a : b));
++
++    const existing = existingByScheme.get(scheme);
++    const liveIsNewer = !!existing?.lastNavDate && existing.lastNavDate > latestTxn.transactionDate;
++    const nav = liveIsNewer ? existing!.lastNav : latestTxn.nav;
++    const navDate = liveIsNewer ? existing!.lastNavDate : latestTxn.transactionDate;
++
++    await npsRepository.upsertSchemeHolding(npsAccountId, scheme, unitsHeld, nav, navDate);
+   }
+ }
+diff --git a/src/types/database.ts b/src/types/database.ts
+index 010bc46..2d09f1f 100644
+--- a/src/types/database.ts
++++ b/src/types/database.ts
+@@ -116,6 +116,7 @@ export interface NPSSchemeHoldingRow {
+   units_held: number;
+   last_nav: number | null;
+   last_nav_date: string | null;
++  npsnav_scheme_code: string | null;
+   created_at: string;
+   updated_at: string;
+ }
+diff --git a/src/types/domain/nps.ts b/src/types/domain/nps.ts
+index 3ea8a87..06675b5 100644
+--- a/src/types/domain/nps.ts
++++ b/src/types/domain/nps.ts
+@@ -46,6 +46,8 @@ export interface NPSSchemeHolding {
+   unitsHeld: number;
+   lastNav: number | null;
+   lastNavDate: string | null;
++  /** User-confirmed npsnav.in scheme_code for live NAV refresh — see Part 5 of the NPS rewrite. Null until the user connects this scheme via a search/confirm flow (never auto-matched). */
++  npsnavSchemeCode: string | null;
+   createdAt: string;
+   updatedAt: string;
+ }
+diff --git a/supabase/schema.sql b/supabase/schema.sql
+index 3f6f702..82288bb 100644
+--- a/supabase/schema.sql
++++ b/supabase/schema.sql
+@@ -190,6 +190,14 @@ create table nps_scheme_holdings (
+   units_held numeric(18,4) not null default 0,
+   last_nav numeric(12,4),
+   last_nav_date date,
++  -- User-confirmed npsnav.in scheme_code (e.g. 'SM008001') for live NAV
++  -- refresh -- see Part 5 of the NPS rewrite. Deliberately NOT
++  -- auto-matched: PFM name -> scheme_code mapping isn't reliable enough to
++  -- guess at without risking silently attaching the wrong fund's NAV, so
++  -- the user picks it once from a search (lib/market-data/live-provider.ts
++  -- fetchNPSNAVSchemeIndex()) and refresh only fires for schemes with this
++  -- set.
++  npsnav_scheme_code text,
+   created_at timestamptz not null default now(),
+   updated_at timestamptz not null default now(),
+   unique (nps_account_id, scheme)
+diff --git a/supabase/sync-schema.sql b/supabase/sync-schema.sql
+index 63bb72a..3688bbb 100644
+--- a/supabase/sync-schema.sql
++++ b/supabase/sync-schema.sql
+@@ -208,7 +208,8 @@ alter table nps_scheme_holdings add column if not exists nps_account_id uuid ref
+ alter table nps_scheme_holdings add column if not exists scheme text;
+ alter table nps_scheme_holdings add column if not exists units_held numeric(18,4) not null default 0;
+ alter table nps_scheme_holdings add column if not exists last_nav numeric(12,4);
+-alter table nps_scheme_holdings add column if not exists last_nav_date date;
++alter table nps_scheme_holdings add column if not exists last_nav_date date;
++alter table nps_scheme_holdings add column if not exists npsnav_scheme_code text;
+ do $$ begin
+   if not exists (select 1 from pg_constraint where conname = 'nps_scheme_holdings_account_scheme_key') then
+     alter table nps_scheme_holdings add constraint nps_scheme_holdings_account_scheme_key unique (nps_account_id, scheme);
+diff --git a/test/nps-cashflows.test.ts b/test/nps-cashflows.test.ts
+index 9bc1a54..b36b3fa 100644
+--- a/test/nps-cashflows.test.ts
++++ b/test/nps-cashflows.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect } from "vitest";
+-import { buildNPSCashflows, buildSchemeTransactionCashflows } from "@/lib/calculations/nps";
++import { buildNPSCashflows, buildSchemeTransactionCashflows, filterNPSNAVSchemes } from "@/lib/calculations/nps";
+ import { classifySchemeStatement } from "@/lib/calculations/nps-classification";
+ import type { NPSAccount, NPSContribution, NPSSchemeTransaction } from "@/types/domain/nps";
+ import type { RawStatementRow } from "@/lib/calculations/nps-classification";
+@@ -178,3 +178,32 @@ describe("buildSchemeTransactionCashflows", () => {
+     expect(terminalEntries[0].amount).toBeCloseTo(882_252.12, 2);
+   });
+ });
++
++describe("filterNPSNAVSchemes", () => {
++  const schemes = [
++    { schemeCode: "SM008001", schemeName: "HDFC PENSION FUND SCHEME E - TIER I" },
++    { schemeCode: "SM008002", schemeName: "HDFC PENSION FUND SCHEME C - TIER I" },
++    { schemeCode: "SM001001", schemeName: "SBI PENSION FUND SCHEME E - TIER I" },
++    { schemeCode: "SM001002", schemeName: "SBI PENSION FUND SCHEME - CENTRAL GOVT" },
++  ];
++
++  it("requires at least 2 characters, returning nothing for shorter queries", () => {
++    expect(filterNPSNAVSchemes(schemes, "")).toEqual([]);
++    expect(filterNPSNAVSchemes(schemes, "H")).toEqual([]);
++  });
++
++  it("matches case-insensitively by substring anywhere in the scheme name", () => {
++    const result = filterNPSNAVSchemes(schemes, "hdfc");
++    expect(result.map((r) => r.schemeCode)).toEqual(["SM008001", "SM008002"]);
++  });
++
++  it("narrows further with a longer contiguous substring", () => {
++    const result = filterNPSNAVSchemes(schemes, "hdfc pension fund scheme e");
++    expect(result.map((r) => r.schemeCode)).toEqual(["SM008001"]);
++  });
++
++  it("caps results at 25", () => {
++    const many = Array.from({ length: 40 }, (_, i) => ({ schemeCode: `SM${i}`, schemeName: `TEST PENSION FUND ${i}` }));
++    expect(filterNPSNAVSchemes(many, "test")).toHaveLength(25);
++  });
++});

@@ -13,13 +13,22 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { NPSProjectionChart } from "./nps-projection-chart";
 import { ImportNPSStatementDialog } from "./import-nps-statement-dialog";
-import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
+import { NPSNAVSchemeSearch } from "./nps-nav-scheme-search";
+import {
+  addNPSAccountAction,
+  updateNPSAssumptionsAction,
+  deleteNPSAccountAction,
+  addNPSContributionAction,
+  withdrawNPSAction,
+  linkSchemeToNAVSourceAction,
+  refreshNPSLiveNAVsAction,
+} from "../actions";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES, NPS_SCHEME_LABELS } from "@/constants/nps";
-import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud } from "lucide-react";
+import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud, RefreshCw } from "lucide-react";
 import type { NPSAccount, NPSContribution, NPSProjectionPoint, NPSSchemeHolding } from "@/types/domain/nps";
-import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
+import type { NPSTier, NPSSchemePreference, NPSScheme } from "@/constants/nps";
 
 interface NPSViewProps {
   accounts: NPSAccount[];
@@ -36,6 +45,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
   const [withdrawTarget, setWithdrawTarget] = useState<NPSAccount | null>(null);
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [importTarget, setImportTarget] = useState<NPSAccount | null>(null);
+  const [connectingScheme, setConnectingScheme] = useState<{ accountId: string; scheme: NPSScheme } | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(accounts[0]?.id ?? null);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +126,26 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
         setContributionAmount(""); setContributionEmployerAmount(""); setContributionDate("");
         setContributionOpen(false);
       } else setError(result.error);
+    });
+  }
+
+  function handleConnectScheme(accountId: string, scheme: NPSScheme, schemeCode: string) {
+    startTransition(async () => {
+      const result = await linkSchemeToNAVSourceAction(accountId, scheme, schemeCode);
+      setConnectingScheme(null);
+      if (result.ok) toast.success("Connected — click \"Refresh live NAVs\" to pull the latest value");
+      else toast.error(result.error);
+    });
+  }
+
+  function handleRefreshLiveNAVs(accountId: string) {
+    startTransition(async () => {
+      const result = await refreshNPSLiveNAVsAction(accountId);
+      if (result.ok) {
+        toast.success(`Updated ${result.updated} scheme${result.updated === 1 ? "" : "s"}${result.failed ? ` · ${result.failed} couldn't be reached` : ""}`);
+      } else {
+        toast.error(result.error);
+      }
     });
   }
 
@@ -259,21 +289,40 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
             </div>
             <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(a.currentCorpus)}</span>
             {(schemeHoldingsByAccount[a.id]?.length ?? 0) > 0 && (
-              <div className="flex flex-col gap-1 rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken p-2.5">
+              <div className="flex flex-col gap-1.5 rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken p-2.5">
                 {[...schemeHoldingsByAccount[a.id]]
                   .filter((h) => h.unitsHeld > 0)
                   .sort((x, y) => y.unitsHeld * (y.lastNav ?? 0) - x.unitsHeld * (x.lastNav ?? 0))
                   .map((h) => {
                     const value = h.unitsHeld * (h.lastNav ?? 0);
                     const pct = a.currentCorpus > 0 ? (value / a.currentCorpus) * 100 : 0;
+                    const isConnecting = connectingScheme?.accountId === a.id && connectingScheme.scheme === h.scheme;
                     return (
-                      <div key={h.scheme} className="flex items-center justify-between text-xs">
-                        <span className="text-ink-muted">
-                          {h.scheme} · {NPS_SCHEME_LABELS[h.scheme]}
-                        </span>
-                        <span className="font-tabular text-ink">
-                          {formatCurrency(value)} <span className="text-ink-muted">({pct.toFixed(0)}%)</span>
-                        </span>
+                      <div key={h.scheme} className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-ink-muted">
+                            {h.scheme} · {NPS_SCHEME_LABELS[h.scheme]}
+                          </span>
+                          <span className="font-tabular text-ink">
+                            {formatCurrency(value)} <span className="text-ink-muted">({pct.toFixed(0)}%)</span>
+                          </span>
+                        </div>
+                        {isConnecting ? (
+                          <NPSNAVSchemeSearch onSelect={(r) => handleConnectScheme(a.id, h.scheme, r.schemeCode)} onCancel={() => setConnectingScheme(null)} />
+                        ) : h.npsnavSchemeCode ? (
+                          <span className="text-[11px] text-ink-muted">
+                            Live NAV {h.lastNav?.toFixed(4) ?? "—"}
+                            {h.lastNavDate && ` · as of ${formatDate(h.lastNavDate)}`}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConnectingScheme({ accountId: a.id, scheme: h.scheme })}
+                            className="self-start text-[11px] text-ink-muted underline hover:text-ink"
+                          >
+                            Connect live NAV
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -306,6 +355,11 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
               <Button variant="outline" size="sm" onClick={() => setImportTarget(a)}>
                 <UploadCloud className="size-3.5" /> Import statement
               </Button>
+              {schemeHoldingsByAccount[a.id]?.some((h) => h.npsnavSchemeCode) && (
+                <Button variant="outline" size="sm" onClick={() => handleRefreshLiveNAVs(a.id)} disabled={isPending}>
+                  <RefreshCw className="size-3.5" /> Refresh live NAVs
+                </Button>
+              )}
             </div>
           </Card>
         ))}
