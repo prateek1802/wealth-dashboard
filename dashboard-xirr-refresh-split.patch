@@ -1,0 +1,84 @@
+diff --git a/src/app/(app)/dashboard/page.tsx b/src/app/(app)/dashboard/page.tsx
+index 92f7a0f..dd5ca3e 100644
+--- a/src/app/(app)/dashboard/page.tsx
++++ b/src/app/(app)/dashboard/page.tsx
+@@ -11,6 +11,7 @@ import { todayISO } from "@/lib/utils/date";
+ 
+ import { NetWorthCard } from "@/features/dashboard/components/net-worth-card";
+ import { XIRRCard } from "@/features/dashboard/components/xirr-card";
++import { RefreshAllCard } from "@/features/dashboard/components/refresh-all-card";
+ import { PortfolioValueCard } from "@/features/dashboard/components/portfolio-value-card";
+ import { AllocationCard } from "@/features/dashboard/components/allocation-card";
+ import { TopHoldingsCard } from "@/features/dashboard/components/top-holdings-card";
+@@ -56,8 +57,9 @@ export default async function DashboardPage() {
+         <div className="md:col-span-2 lg:col-span-3">
+           <NetWorthCard summary={summary} recentPoints={performance} />
+         </div>
+-        <div className="lg:col-span-1">
++        <div className="flex flex-col gap-4 lg:col-span-1">
+           <XIRRCard xirr={xirr} />
++          <RefreshAllCard />
+         </div>
+ 
+         {/* Row 2 — allocation / value / top holdings */}
+diff --git a/src/features/dashboard/components/refresh-all-card.tsx b/src/features/dashboard/components/refresh-all-card.tsx
+new file mode 100644
+index 0000000..321f05b
+--- /dev/null
++++ b/src/features/dashboard/components/refresh-all-card.tsx
+@@ -0,0 +1,42 @@
++"use client";
++import { useTransition } from "react";
++import { toast } from "sonner";
++import { Card } from "@/components/ui/card";
++import { Button } from "@/components/ui/button";
++import { refreshLivePricesAction } from "@/features/portfolio/actions";
++import { RefreshCw } from "lucide-react";
++
++/**
++ * One-click refresh for every current holding's price, in one go — the
++ * dashboard-level counterpart to the per-asset-class and per-asset refresh
++ * buttons on the Portfolio page. Calls refreshLivePricesAction() with no
++ * assetIds filter, which already means "every current holding".
++ */
++export function RefreshAllCard() {
++  const [isRefreshing, startRefresh] = useTransition();
++
++  function handleRefresh() {
++    startRefresh(async () => {
++      const result = await refreshLivePricesAction();
++      if ("error" in result) {
++        toast.error(result.error);
++        return;
++      }
++      if (result.updated === 0) {
++        toast.info("No live prices available for your current holdings.");
++      } else {
++        toast.success(`Updated ${result.updated} price${result.updated === 1 ? "" : "s"}${result.skipped.length ? ` · ${result.skipped.length} skipped (no live source)` : ""}`);
++      }
++    });
++  }
++
++  return (
++    <Card className="flex flex-col justify-between gap-3 p-6">
++      <span className="text-sm font-medium text-ink-muted">Prices</span>
++      <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing} className="self-start">
++        <RefreshCw className={isRefreshing ? "size-3.5 animate-spin" : "size-3.5"} />
++        {isRefreshing ? "Refreshing…" : "Refresh all"}
++      </Button>
++    </Card>
++  );
++}
+diff --git a/src/features/dashboard/components/xirr-card.tsx b/src/features/dashboard/components/xirr-card.tsx
+index fc1de66..6d72148 100644
+--- a/src/features/dashboard/components/xirr-card.tsx
++++ b/src/features/dashboard/components/xirr-card.tsx
+@@ -4,7 +4,7 @@ import type { CalcResult } from "@/lib/calculations/returns";
+ 
+ export function XIRRCard({ xirr }: { xirr: CalcResult<number> }) {
+   return (
+-    <Card className="flex h-full flex-col justify-between gap-3 p-6">
++    <Card className="flex flex-col justify-between gap-3 p-6">
+       <span className="text-sm font-medium text-ink-muted">Portfolio XIRR</span>
+       {xirr.status === "ok" ? (
+         <span className="font-display font-tabular text-3xl text-ink">{formatPercent(xirr.value)}</span>

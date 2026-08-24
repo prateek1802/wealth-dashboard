@@ -134,13 +134,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
     headers regardless of type). Needs conditional labels/formatting based on assetType,
     likely also a new MF-specific section on the investment-detail page.
 
-16. Rewrite NPS — auto-populate fund manager/scheme type, log each contribution from
-    start, include NPS in overall XIRR.
-    pension_fund_manager/tier are free-text with no dropdown/auto-populate list;
-    currentCorpus is a manually-maintained number rather than derived from
-    nps_contributions; NPS cash flows are never included in the dashboard's overall
-    XIRR. Largest item on the list — schema + service + UI rewrite, not a small patch.
-
 17. Auto-refresh prices at market close daily, whether app is open or not.
     Confirmed no vercel.json, no scheduled workflow anywhere. Currently only refreshes
     opportunistically when someone opens the app (documented V1 trade-off in

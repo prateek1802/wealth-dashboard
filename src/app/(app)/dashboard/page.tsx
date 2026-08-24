@@ -11,6 +11,7 @@ import { todayISO } from "@/lib/utils/date";
 
 import { NetWorthCard } from "@/features/dashboard/components/net-worth-card";
 import { XIRRCard } from "@/features/dashboard/components/xirr-card";
+import { RefreshAllCard } from "@/features/dashboard/components/refresh-all-card";
 import { PortfolioValueCard } from "@/features/dashboard/components/portfolio-value-card";
 import { AllocationCard } from "@/features/dashboard/components/allocation-card";
 import { TopHoldingsCard } from "@/features/dashboard/components/top-holdings-card";
@@ -56,8 +57,9 @@ export default async function DashboardPage() {
         <div className="md:col-span-2 lg:col-span-3">
           <NetWorthCard summary={summary} recentPoints={performance} />
         </div>
-        <div className="lg:col-span-1">
+        <div className="flex flex-col gap-4 lg:col-span-1">
           <XIRRCard xirr={xirr} />
+          <RefreshAllCard />
         </div>
 
         {/* Row 2 — allocation / value / top holdings */}
