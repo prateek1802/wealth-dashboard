@@ -17,18 +17,25 @@ export default async function NPSPage() {
 
   const contributionsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getContributions>>> = {};
   const projectionsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getProjection>>> = {};
+  const schemeHoldingsByAccount: Record<string, Awaited<ReturnType<typeof npsService.getSchemeHoldings>>> = {};
 
   await Promise.all(
     accounts.map(async (a) => {
       contributionsByAccount[a.id] = await npsService.getContributions(a.id);
       projectionsByAccount[a.id] = await npsService.getProjection(a.id);
+      schemeHoldingsByAccount[a.id] = await npsService.getSchemeHoldings(a.id);
     })
   );
 
   return (
     <div>
       <TopBar title="NPS" subtitle="National Pension System — Tier I / Tier II corpus and projections" />
-      <NPSView accounts={accounts} contributionsByAccount={contributionsByAccount} projectionsByAccount={projectionsByAccount} />
+      <NPSView
+        accounts={accounts}
+        contributionsByAccount={contributionsByAccount}
+        projectionsByAccount={projectionsByAccount}
+        schemeHoldingsByAccount={schemeHoldingsByAccount}
+      />
     </div>
   );
 }

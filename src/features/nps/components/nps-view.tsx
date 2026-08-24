@@ -16,18 +16,19 @@ import { ImportNPSStatementDialog } from "./import-nps-statement-dialog";
 import { addNPSAccountAction, updateNPSAssumptionsAction, deleteNPSAccountAction, addNPSContributionAction, withdrawNPSAction } from "../actions";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
-import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES } from "@/constants/nps";
+import { NPS_TIERS, PENSION_FUND_MANAGERS, NPS_SCHEME_PREFERENCES, NPS_SCHEME_LABELS } from "@/constants/nps";
 import { ShieldCheck, Settings, Plus, Trash2, Banknote, UploadCloud } from "lucide-react";
-import type { NPSAccount, NPSContribution, NPSProjectionPoint } from "@/types/domain/nps";
+import type { NPSAccount, NPSContribution, NPSProjectionPoint, NPSSchemeHolding } from "@/types/domain/nps";
 import type { NPSTier, NPSSchemePreference } from "@/constants/nps";
 
 interface NPSViewProps {
   accounts: NPSAccount[];
   contributionsByAccount: Record<string, NPSContribution[]>;
   projectionsByAccount: Record<string, NPSProjectionPoint[] | null>;
+  schemeHoldingsByAccount: Record<string, NPSSchemeHolding[]>;
 }
 
-export function NPSView({ accounts, contributionsByAccount, projectionsByAccount }: NPSViewProps) {
+export function NPSView({ accounts, contributionsByAccount, projectionsByAccount, schemeHoldingsByAccount }: NPSViewProps) {
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [assumptionsTarget, setAssumptionsTarget] = useState<NPSAccount | null>(null);
   const [contributionOpen, setContributionOpen] = useState(false);
@@ -50,6 +51,7 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
   const [retirementYear, setRetirementYear] = useState("");
   const [contributionAccountId, setContributionAccountId] = useState<string>("");
   const [contributionAmount, setContributionAmount] = useState("");
+  const [contributionEmployerAmount, setContributionEmployerAmount] = useState("");
   const [contributionDate, setContributionDate] = useState("");
 
   const totalCorpus = accounts.reduce((s, a) => s + a.currentCorpus, 0);
@@ -106,12 +108,12 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
         npsAccountId: contributionAccountId,
         contributionDate,
         employeeAmount: Number(contributionAmount || 0),
-        employerAmount: 0,
+        employerAmount: Number(contributionEmployerAmount || 0),
         notes: null,
       });
       if (result.ok) {
         toast.success("Contribution logged");
-        setContributionAmount(""); setContributionDate("");
+        setContributionAmount(""); setContributionEmployerAmount(""); setContributionDate("");
         setContributionOpen(false);
       } else setError(result.error);
     });
@@ -256,6 +258,27 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
               </div>
             </div>
             <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(a.currentCorpus)}</span>
+            {(schemeHoldingsByAccount[a.id]?.length ?? 0) > 0 && (
+              <div className="flex flex-col gap-1 rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken p-2.5">
+                {[...schemeHoldingsByAccount[a.id]]
+                  .filter((h) => h.unitsHeld > 0)
+                  .sort((x, y) => y.unitsHeld * (y.lastNav ?? 0) - x.unitsHeld * (x.lastNav ?? 0))
+                  .map((h) => {
+                    const value = h.unitsHeld * (h.lastNav ?? 0);
+                    const pct = a.currentCorpus > 0 ? (value / a.currentCorpus) * 100 : 0;
+                    return (
+                      <div key={h.scheme} className="flex items-center justify-between text-xs">
+                        <span className="text-ink-muted">
+                          {h.scheme} · {NPS_SCHEME_LABELS[h.scheme]}
+                        </span>
+                        <span className="font-tabular text-ink">
+                          {formatCurrency(value)} <span className="text-ink-muted">({pct.toFixed(0)}%)</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
             <span className="text-xs text-ink-muted">
               {a.monthlyContribution ? `${formatCurrency(a.monthlyContribution)}/month` : "No monthly contribution set"}
               {a.retirementYear && ` · retiring ${a.retirementYear}`}
@@ -388,16 +411,20 @@ export function NPSView({ accounts, contributionsByAccount, projectionsByAccount
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="contrib-amount">Amount</Label>
-                <CurrencyInput id="contrib-amount" value={contributionAmount} onChange={(e) => setContributionAmount(e.target.value)} />
+                <Label htmlFor="contrib-employee-amount">Employee amount</Label>
+                <CurrencyInput id="contrib-employee-amount" value={contributionAmount} onChange={(e) => setContributionAmount(e.target.value)} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="contrib-date">Date</Label>
-                <Input id="contrib-date" type="date" value={contributionDate} onChange={(e) => setContributionDate(e.target.value)} />
+                <Label htmlFor="contrib-employer-amount">Employer amount</Label>
+                <CurrencyInput id="contrib-employer-amount" value={contributionEmployerAmount} onChange={(e) => setContributionEmployerAmount(e.target.value)} />
               </div>
             </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="contrib-date">Date</Label>
+              <Input id="contrib-date" type="date" value={contributionDate} onChange={(e) => setContributionDate(e.target.value)} />
+            </div>
             {error && <p className="text-sm text-loss">{error}</p>}
-            <Button onClick={handleAddContribution} disabled={isPending || !contributionAccountId || !contributionAmount || !contributionDate}>
+            <Button onClick={handleAddContribution} disabled={isPending || !contributionAccountId || !(contributionAmount || contributionEmployerAmount) || !contributionDate}>
               {isPending ? "Saving…" : "Log contribution"}
             </Button>
           </div>
