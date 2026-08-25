@@ -29,10 +29,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
    <Analytics/>/<SpeedInsights/> in src/app/layout.tsx.
    FIX: install both packages, add both components to root layout.
 
-4. Transaction history has no "View more" / pagination — renders unbounded (267+ rows
-   seen in one screenshot).
-   FIX: cap initial render (e.g. 25-50 rows) with a "View more" button, or real pagination.
-
 5. Goals — same icon-overlap bug as the already-fixed Bank Account/FD cards.
    CAUSE: goals-view.tsx wraps GoalCard in a relative div with an absolutely-positioned
    delete button; GoalCard's own header can render a "by {targetDate}" label in that same
@@ -60,14 +56,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
    feature.
    FIX: add a per-item or page-level refresh button calling refreshLivePricesAction()
    scoped to the watchlist's asset IDs.
-
-9. Refresh-all button — placement question.
-   A page-level "Refresh Prices" button already exists on the Portfolio page and refreshes
-   all currently-displayed holdings. But the request ("page with cumulative XIRR, has a
-   lot of empty space") sounds like the Dashboard's XIRRCard — confirmed genuinely sparse
-   (just a label + number, generous padding, no action).
-   NEEDS: confirm whether the Portfolio-page button already satisfies this, or whether a
-   refresh control specifically belongs on/near the Dashboard's XIRRCard.
 
 ====================================================================
 🟠 OPEN — needs live diagnosis or a decision before scoping

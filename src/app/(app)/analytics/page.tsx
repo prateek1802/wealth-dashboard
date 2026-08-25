@@ -39,6 +39,7 @@ export default async function AnalyticsPage() {
 
   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
+  const snapshotDates = sortedSnapshots.map((s) => s.snapshotDate);
   const firstSnapshot = sortedSnapshots[0];
   // eslint-disable-next-line react-hooks/purity -- Server Component computing "years since first snapshot" for this request; Date.now() here is standard server-side date math, not a client render-purity concern.
   const asOf = Date.now();
@@ -47,10 +48,10 @@ export default async function AnalyticsPage() {
     : 0;
   const cagr = firstSnapshot ? calculateCAGR(firstSnapshot.netWorth, summary.netWorth, years) : { status: "insufficient_data" as const, reason: "Need at least one prior snapshot to compute CAGR." };
 
-  const volatility = calculateVolatility(netWorthSeries);
+  const volatility = calculateVolatility(netWorthSeries, snapshotDates);
   const maxDrawdown = calculateMaxDrawdown(netWorthSeries);
-  const sharpe = calculateSharpeRatio(netWorthSeries, RISK_FREE_RATE);
-  const sortino = calculateSortinoRatio(netWorthSeries, RISK_FREE_RATE);
+  const sharpe = calculateSharpeRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE);
+  const sortino = calculateSortinoRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE);
 
   const topHolding = allocation[0];
   const concentration = topHolding
@@ -80,10 +81,10 @@ export default async function AnalyticsPage() {
         <Card>
           <CardHeader><CardTitle>Risk</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatTile label="Volatility" result={volatility} />
+            <StatTile label="Volatility" result={volatility} caption="Annualized from irregular snapshots · approximate" />
             <StatTile label="Max Drawdown" result={maxDrawdown} />
-            <StatTile label="Sharpe Ratio" result={sharpe} format={(v) => v.toFixed(2)} colorByValue />
-            <StatTile label="Sortino Ratio" result={sortino} format={(v) => v.toFixed(2)} colorByValue />
+            <StatTile label="Sharpe Ratio" result={sharpe} format={(v) => v.toFixed(2)} colorByValue caption="Annualized from irregular snapshots · approximate" />
+            <StatTile label="Sortino Ratio" result={sortino} format={(v) => v.toFixed(2)} colorByValue caption="Annualized from irregular snapshots · approximate" />
           </CardContent>
         </Card>
 
