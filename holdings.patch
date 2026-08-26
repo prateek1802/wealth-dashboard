@@ -1,0 +1,467 @@
+diff --git a/src/app/(app)/holdings/page.tsx b/src/app/(app)/holdings/page.tsx
+new file mode 100644
+index 0000000..f06531d
+--- /dev/null
++++ b/src/app/(app)/holdings/page.tsx
+@@ -0,0 +1,22 @@
++import { TopBar } from "@/components/layout/top-bar";
++import { portfolioService } from "@/lib/services/portfolio.service";
++import { liabilitiesService } from "@/lib/services/liabilities.service";
++import { watchlistRepository } from "@/lib/database/repositories/watchlist.repository";
++import { HoldingsHubView } from "@/features/holdings/components/holdings-hub-view";
++
++export const dynamic = "force-dynamic";
++
++export default async function HoldingsHubPage() {
++  const [allocation, liabilitiesValue, watchlistItems] = await Promise.all([
++    portfolioService.getAssetAllocation(),
++    liabilitiesService.totalOwed(),
++    watchlistRepository.findAll(),
++  ]);
++
++  return (
++    <div>
++      <TopBar title="Holdings" subtitle="Everything you own, by category — tap a card to see individual holdings" />
++      <HoldingsHubView allocation={allocation} liabilitiesValue={liabilitiesValue} watchlistCount={watchlistItems.length} />
++    </div>
++  );
++}
+diff --git a/src/app/(app)/layout.tsx b/src/app/(app)/layout.tsx
+index 6688452..c5ea9a7 100644
+--- a/src/app/(app)/layout.tsx
++++ b/src/app/(app)/layout.tsx
+@@ -2,23 +2,18 @@ import { Sidebar } from "@/components/layout/sidebar";
+ import { MobileNav } from "@/components/layout/mobile-nav";
+ import { CommandPalette } from "@/features/search/command-palette";
+ import { assetsRepository } from "@/lib/database/repositories/assets.repository";
+-import { portfolioService } from "@/lib/services/portfolio.service";
+ import { isDemoMode } from "@/lib/database/client";
+ import { ROUTES } from "@/constants/routes";
+ 
+ export const dynamic = "force-dynamic";
+ 
+ export default async function AppLayout({ children }: { children: React.ReactNode }) {
+-  const [assets, holdings] = await Promise.all([assetsRepository.findAll(), portfolioService.getHoldings()]);
++  const assets = await assetsRepository.findAll();
+   const assetEntries = assets.map((a) => ({
+     label: `${a.symbol} — ${a.name}`,
+     group: "Investments",
+     href: ROUTES.investmentDetail(a.id),
+   }));
+-  // Distinct asset classes actually held — drives one sidebar link per
+-  // class instead of a single combined "Portfolio" link, and skips
+-  // classes you don't hold anything in (no dead links).
+-  const heldAssetTypes = Array.from(new Set(holdings.map((h) => h.asset.assetType)));
+ 
+   let userEmail: string | null = null;
+   if (!isDemoMode()) {
+@@ -30,11 +25,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
+ 
+   return (
+     <div className="flex min-h-screen bg-surface">
+-      <Sidebar userEmail={userEmail} heldAssetTypes={heldAssetTypes} />
++      <Sidebar userEmail={userEmail} />
+       <div className="flex min-h-screen flex-1 flex-col pb-16 lg:pb-0">
+         <main className="flex-1">{children}</main>
+       </div>
+-      <MobileNav userEmail={userEmail} heldAssetTypes={heldAssetTypes} />
++      <MobileNav userEmail={userEmail} />
+       <CommandPalette assetEntries={assetEntries} />
+     </div>
+   );
+diff --git a/src/components/layout/mobile-nav.tsx b/src/components/layout/mobile-nav.tsx
+index 683ff07..e80c5b4 100644
+--- a/src/components/layout/mobile-nav.tsx
++++ b/src/components/layout/mobile-nav.tsx
+@@ -1,28 +1,18 @@
+ "use client";
+ import { Suspense, useState } from "react";
+ import Link from "next/link";
+-import { usePathname, useSearchParams, useRouter } from "next/navigation";
++import { usePathname, useRouter } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+ import { useTheme } from "./theme-provider";
+ import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
+ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+-import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+ import {
+   LayoutDashboard,
+   Wallet,
+-  TrendingUp,
+-  PieChart,
+-  Bitcoin,
+-  FileText,
+   Receipt,
+   LineChart,
+   Menu,
+-  Banknote,
+-  AlertTriangle,
+-  PiggyBank,
+-  ShieldCheck,
+-  Landmark,
+   Eye,
+   DatabaseBackup,
+   Target,
+@@ -40,65 +30,25 @@ interface NavItem {
+ 
+ const MOBILE_TABS: NavItem[] = [
+   { href: ROUTES.dashboard, label: "Home", icon: LayoutDashboard },
++  { href: ROUTES.holdings, label: "Holdings", icon: Wallet },
+   { href: ROUTES.transactions, label: "Activity", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
+-  { href: ROUTES.goals, label: "Goals", icon: Target },
+ ];
+ 
+-const SECURITY_ICONS: Partial<Record<AssetType, typeof Wallet>> = {
+-  stock_in: TrendingUp,
+-  stock_us: TrendingUp,
+-  etf: TrendingUp,
+-  mutual_fund: PieChart,
+-  mutual_fund_debt: PieChart,
+-  crypto: Bitcoin,
+-  bond: FileText,
+-  other: FileText,
+-};
+-const SECURITY_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund", "mutual_fund_debt", "crypto", "bond", "other"];
+-
+-/** Same set as the desktop sidebar's "Holdings" group, plus Backup — reachable via the "More" sheet since there's no room for this many items in the fixed bottom tab bar. */
+-const OTHER_MORE_ITEMS: NavItem[] = [
+-  { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+-  { href: ROUTES.liabilities, label: "Liabilities", icon: AlertTriangle },
+-  { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
+-  { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
+-  { href: ROUTES.ppf, label: "PPF", icon: Landmark },
++/** Everything that doesn't fit in the fixed 4-slot bottom tab bar, reachable via "More". Per-asset-class links now live one level deeper, inside the Holdings hub (see /holdings) — not duplicated here. */
++const MORE_ITEMS: NavItem[] = [
++  { href: ROUTES.goals, label: "Goals", icon: Target },
+   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
+   { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
+   { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
+ ];
+ 
+-/** Needs useSearchParams (for highlighting the active ?type= link), so it gets its own Suspense boundary — same pattern as the desktop sidebar. */
+-function MoreSheetContent({
+-  heldAssetTypes,
+-  userEmail,
+-  onNavigate,
+-}: {
+-  heldAssetTypes: AssetType[];
+-  userEmail: string | null;
+-  onNavigate: () => void;
+-}) {
++function MoreSheetContent({ userEmail, onNavigate }: { userEmail: string | null; onNavigate: () => void }) {
+   const pathname = usePathname();
+-  const searchParams = useSearchParams();
+-  const currentType = searchParams.get("type");
+   const router = useRouter();
+   const { theme, toggleTheme } = useTheme();
+ 
+-  const securityItems: NavItem[] = SECURITY_ORDER.filter((t) => heldAssetTypes.includes(t)).map((t) => ({
+-    href: `${ROUTES.portfolio}?type=${t}`,
+-    label: ASSET_TYPE_LABELS[t],
+-    icon: SECURITY_ICONS[t] ?? Wallet,
+-  }));
+-  const items: NavItem[] =
+-    securityItems.length > 0 ? [...securityItems, ...OTHER_MORE_ITEMS] : [{ href: ROUTES.portfolio, label: "Portfolio", icon: Wallet }, ...OTHER_MORE_ITEMS];
+-
+   function isItemActive(href: string): boolean {
+-    if (href.includes("?type=")) {
+-      const [path, query] = href.split("?type=");
+-      return pathname === path && currentType === query;
+-    }
+-    if (href === ROUTES.portfolio) return pathname === ROUTES.portfolio && !currentType;
+     return pathname === href || pathname.startsWith(href + "/");
+   }
+ 
+@@ -111,7 +61,7 @@ function MoreSheetContent({
+ 
+   return (
+     <div className="flex flex-col gap-1">
+-      {items.map((item) => (
++      {MORE_ITEMS.map((item) => (
+         <Link
+           key={item.href}
+           href={item.href}
+@@ -149,10 +99,10 @@ function MoreSheetContent({
+   );
+ }
+ 
+-export function MobileNav({ userEmail, heldAssetTypes }: { userEmail: string | null; heldAssetTypes: AssetType[] }) {
++export function MobileNav({ userEmail }: { userEmail: string | null }) {
+   const pathname = usePathname();
+   const [moreOpen, setMoreOpen] = useState(false);
+-  const moreActive = pathname === ROUTES.portfolio || OTHER_MORE_ITEMS.some((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
++  const moreActive = MORE_ITEMS.some((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
+ 
+   return (
+     <>
+@@ -186,7 +136,7 @@ export function MobileNav({ userEmail, heldAssetTypes }: { userEmail: string | n
+             <DialogTitle>More</DialogTitle>
+           </DialogHeader>
+           <Suspense fallback={null}>
+-            <MoreSheetContent heldAssetTypes={heldAssetTypes} userEmail={userEmail} onNavigate={() => setMoreOpen(false)} />
++            <MoreSheetContent userEmail={userEmail} onNavigate={() => setMoreOpen(false)} />
+           </Suspense>
+         </DialogContent>
+       </Dialog>
+diff --git a/src/components/layout/sidebar.tsx b/src/components/layout/sidebar.tsx
+index 64a18df..c35aa8f 100644
+--- a/src/components/layout/sidebar.tsx
++++ b/src/components/layout/sidebar.tsx
+@@ -1,36 +1,11 @@
+ "use client";
+-import { Suspense, useState } from "react";
+ import Link from "next/link";
+-import { usePathname, useSearchParams, useRouter } from "next/navigation";
++import { usePathname, useRouter } from "next/navigation";
+ import { ROUTES } from "@/constants/routes";
+ import { cn } from "@/lib/utils/cn";
+ import { useTheme } from "./theme-provider";
+ import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
+-import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+-import {
+-  LayoutDashboard,
+-  Receipt,
+-  LineChart,
+-  Target,
+-  DatabaseBackup,
+-  Wallet,
+-  TrendingUp,
+-  PieChart,
+-  Bitcoin,
+-  FileText,
+-  Banknote,
+-  AlertTriangle,
+-  PiggyBank,
+-  ShieldCheck,
+-  Landmark,
+-  Eye,
+-  Sun,
+-  Moon,
+-  Gem,
+-  LogOut,
+-  ChevronDown,
+-  Scissors,
+-} from "lucide-react";
++import { LayoutDashboard, Receipt, LineChart, Target, DatabaseBackup, Wallet, Sun, Moon, Gem, LogOut, Scissors } from "lucide-react";
+ 
+ interface NavItem {
+   href: string;
+@@ -40,76 +15,27 @@ interface NavItem {
+ 
+ const TOP_ITEMS: NavItem[] = [
+   { href: ROUTES.dashboard, label: "Dashboard", icon: LayoutDashboard },
++  { href: ROUTES.holdings, label: "Holdings", icon: Wallet },
+   { href: ROUTES.transactions, label: "Transactions", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
+   { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
+   { href: ROUTES.goals, label: "Goals", icon: Target },
+ ];
+ 
+-/** One icon per security asset class — used for the dynamic per-class Holdings links. */
+-const SECURITY_ICONS: Partial<Record<AssetType, typeof Wallet>> = {
+-  stock_in: TrendingUp,
+-  stock_us: TrendingUp,
+-  etf: TrendingUp,
+-  mutual_fund: PieChart,
+-  mutual_fund_debt: PieChart,
+-  crypto: Bitcoin,
+-  bond: FileText,
+-  other: FileText,
+-};
+-const SECURITY_ORDER: AssetType[] = ["stock_in", "stock_us", "etf", "mutual_fund", "mutual_fund_debt", "crypto", "bond", "other"];
+-
+-/** Non-security asset classes always get their own dedicated page — they never share a route with anything else, unlike securities which all live under /portfolio filtered by ?type=. */
+-const OTHER_HOLDINGS_ITEMS: NavItem[] = [
+-  { href: ROUTES.bankAccounts, label: "Bank Accounts", icon: Banknote },
+-  { href: ROUTES.liabilities, label: "Liabilities", icon: AlertTriangle },
+-  { href: ROUTES.fixedDeposits, label: "Fixed Deposits", icon: PiggyBank },
+-  { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
+-  { href: ROUTES.ppf, label: "PPF", icon: Landmark },
+-  { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
+-];
+-
+ const BOTTOM_ITEMS: NavItem[] = [{ href: ROUTES.backup, label: "Backup", icon: DatabaseBackup }];
+ 
+-/**
+- * Reads pathname + the ?type= query param, so it needs its own Suspense
+- * boundary (useSearchParams requirement) — kept as a small child component
+- * rather than making the whole Sidebar suspend, so the logo/theme
+- * toggle/profile block never flash a fallback state.
+- */
+-function SidebarNav({ heldAssetTypes }: { heldAssetTypes: AssetType[] }) {
++function SidebarNav() {
+   const pathname = usePathname();
+-  const searchParams = useSearchParams();
+-  const currentType = searchParams.get("type");
+-
+-  const securityItems: NavItem[] = SECURITY_ORDER.filter((t) => heldAssetTypes.includes(t)).map((t) => ({
+-    href: `${ROUTES.portfolio}?type=${t}`,
+-    label: ASSET_TYPE_LABELS[t],
+-    icon: SECURITY_ICONS[t] ?? Wallet,
+-  }));
+-  const holdingsItems: NavItem[] =
+-    securityItems.length > 0 ? [...securityItems, ...OTHER_HOLDINGS_ITEMS] : [{ href: ROUTES.portfolio, label: "Portfolio", icon: Wallet }, ...OTHER_HOLDINGS_ITEMS];
+ 
+   function isItemActive(href: string): boolean {
+-    if (href.includes("?type=")) {
+-      const [path, query] = href.split("?type=");
+-      return pathname === path && currentType === query;
+-    }
+-    if (href === ROUTES.portfolio) {
+-      return pathname === ROUTES.portfolio && !currentType;
+-    }
+     return pathname === href || pathname.startsWith(href + "/");
+   }
+ 
+-  const holdingsActive = holdingsItems.some((item) => isItemActive(item.href));
+-  const [holdingsOpen, setHoldingsOpen] = useState(holdingsActive);
+-
+-  const NavLink = ({ href, label, icon: Icon, indent = false }: NavItem & { indent?: boolean }) => (
++  const NavLink = ({ href, label, icon: Icon }: NavItem) => (
+     <Link
+       href={href}
+       className={cn(
+         "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
+-        indent && "ml-3",
+         isItemActive(href) ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
+       )}
+     >
+@@ -123,26 +49,6 @@ function SidebarNav({ heldAssetTypes }: { heldAssetTypes: AssetType[] }) {
+       {TOP_ITEMS.map((item) => (
+         <NavLink key={item.href} {...item} />
+       ))}
+-
+-      <button
+-        onClick={() => setHoldingsOpen((o) => !o)}
+-        className={cn(
+-          "flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-sm font-medium transition-colors",
+-          holdingsActive && !holdingsOpen ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-surface-sunken hover:text-ink"
+-        )}
+-      >
+-        <Wallet className="size-4" />
+-        Holdings
+-        <ChevronDown className={cn("ml-auto size-3.5 transition-transform", holdingsOpen && "rotate-180")} />
+-      </button>
+-      {holdingsOpen && (
+-        <div className="flex flex-col gap-1">
+-          {holdingsItems.map((item) => (
+-            <NavLink key={item.href} {...item} indent />
+-          ))}
+-        </div>
+-      )}
+-
+       {BOTTOM_ITEMS.map((item) => (
+         <NavLink key={item.href} {...item} />
+       ))}
+@@ -150,7 +56,7 @@ function SidebarNav({ heldAssetTypes }: { heldAssetTypes: AssetType[] }) {
+   );
+ }
+ 
+-export function Sidebar({ userEmail, heldAssetTypes }: { userEmail: string | null; heldAssetTypes: AssetType[] }) {
++export function Sidebar({ userEmail }: { userEmail: string | null }) {
+   const { theme, toggleTheme } = useTheme();
+   const router = useRouter();
+ 
+@@ -169,9 +75,7 @@ export function Sidebar({ userEmail, heldAssetTypes }: { userEmail: string | nul
+       </Link>
+ 
+       <nav className="flex flex-1 flex-col gap-1">
+-        <Suspense fallback={null}>
+-          <SidebarNav heldAssetTypes={heldAssetTypes} />
+-        </Suspense>
++        <SidebarNav />
+       </nav>
+ 
+       <button
+diff --git a/src/constants/routes.ts b/src/constants/routes.ts
+index c0b9357..c3fc3b1 100644
+--- a/src/constants/routes.ts
++++ b/src/constants/routes.ts
+@@ -12,6 +12,7 @@ export const ROUTES = {
+   nps: "/nps",
+   ppf: "/ppf",
+   watchlist: "/watchlist",
++  holdings: "/holdings",
+   taxHarvesting: "/tax-harvesting",
+   backup: "/backup",
+ } as const;
+diff --git a/src/features/holdings/components/holdings-hub-view.tsx b/src/features/holdings/components/holdings-hub-view.tsx
+new file mode 100644
+index 0000000..4997a0e
+--- /dev/null
++++ b/src/features/holdings/components/holdings-hub-view.tsx
+@@ -0,0 +1,72 @@
++import Link from "next/link";
++import { Card } from "@/components/ui/card";
++import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
++import { ROUTES } from "@/constants/routes";
++import { ALLOCATION_CATEGORY_LABELS, type AllocationCategory, type AssetType } from "@/constants/asset-types";
++import { TrendingUp, PieChart, Bitcoin, FileText, Banknote, PiggyBank, ShieldCheck, Landmark, AlertTriangle, Eye, type LucideIcon } from "lucide-react";
++import type { AllocationSlice } from "@/types/domain/snapshot";
++
++const CATEGORY_ICONS: Record<AllocationCategory, LucideIcon> = {
++  stock_in: TrendingUp,
++  stock_us: TrendingUp,
++  etf: TrendingUp,
++  mutual_fund: PieChart,
++  mutual_fund_debt: PieChart,
++  crypto: Bitcoin,
++  bond: FileText,
++  other: FileText,
++  cash: Banknote,
++  fixed_deposit: PiggyBank,
++  nps: ShieldCheck,
++  ppf: Landmark,
++};
++
++const SECURITY_TYPES: ReadonlySet<AssetType> = new Set(["stock_in", "stock_us", "etf", "mutual_fund", "mutual_fund_debt", "crypto", "bond", "other"]);
++
++function categoryRoute(category: AllocationCategory): string {
++  if (SECURITY_TYPES.has(category as AssetType)) return `${ROUTES.portfolio}?type=${category}`;
++  if (category === "cash") return ROUTES.bankAccounts;
++  if (category === "fixed_deposit") return ROUTES.fixedDeposits;
++  if (category === "nps") return ROUTES.nps;
++  return ROUTES.ppf; // category === "ppf"
++}
++
++function HoldingCard({ href, icon: Icon, label, valueLabel, tone = "default" }: { href: string; icon: LucideIcon; label: string; valueLabel: string; tone?: "default" | "loss" }) {
++  return (
++    <Link href={href}>
++      <Card className="flex h-full flex-col gap-3 p-5 transition-shadow hover:shadow-md">
++        <div className={tone === "loss" ? "flex size-9 items-center justify-center rounded-full bg-loss-soft text-loss" : "flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent"}>
++          <Icon className="size-4.5" />
++        </div>
++        <div className="flex flex-col gap-0.5">
++          <span className="text-sm text-ink-muted">{label}</span>
++          <span className={tone === "loss" ? "font-tabular text-lg font-medium text-loss" : "font-tabular text-lg font-medium text-ink"}>{valueLabel}</span>
++        </div>
++      </Card>
++    </Link>
++  );
++}
++
++export function HoldingsHubView({ allocation, liabilitiesValue, watchlistCount }: { allocation: AllocationSlice[]; liabilitiesValue: number; watchlistCount: number }) {
++  const sorted = [...allocation].sort((a, b) => b.value - a.value);
++
++  return (
++    <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:p-6 lg:grid-cols-4">
++      {sorted.map((slice) => (
++        <HoldingCard
++          key={slice.category}
++          href={categoryRoute(slice.category)}
++          icon={CATEGORY_ICONS[slice.category]}
++          label={ALLOCATION_CATEGORY_LABELS[slice.category]}
++          valueLabel={formatCurrency(slice.value)}
++        />
++      ))}
++
++      {liabilitiesValue > 0 && (
++        <HoldingCard href={ROUTES.liabilities} icon={AlertTriangle} label="Liabilities" valueLabel={formatSignedCurrency(-liabilitiesValue)} tone="loss" />
++      )}
++
++      <HoldingCard href={ROUTES.watchlist} icon={Eye} label="Watchlist" valueLabel={`${watchlistCount} tracked`} />
++    </div>
++  );
++}

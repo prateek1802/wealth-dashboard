@@ -12,6 +12,7 @@ export const ROUTES = {
   nps: "/nps",
   ppf: "/ppf",
   watchlist: "/watchlist",
+  holdings: "/holdings",
   taxHarvesting: "/tax-harvesting",
   backup: "/backup",
 } as const;
