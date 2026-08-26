@@ -1,0 +1,116 @@
+PROMPT FOR NEW CHAT — ANALYTICS PAGE REDESIGN
+(paste this along with PROJECT-STATUS.md and the source zip, per usual workflow)
+
+====================================================================
+CONTEXT
+====================================================================
+Continue work on the wealth-dashboard project. Workflow: single git patch file per
+change (not a zip), verified with tsc/eslint/vitest/next build before delivering.
+
+The current Analytics page (src/app/(app)/analytics/page.tsx) is a flat stat-dump —
+11 numbers in boxes (CAGR, XIRR, Realized/Unrealized P&L, Volatility, Max Drawdown,
+Sharpe, Sortino, Concentration %) plus one donut and a forward-looking growth
+projection. User feedback: doesn't feel understandable, and the risk metrics
+(Volatility/Sharpe/Sortino) were showing implausible values (>500) that eroded trust
+in the whole page.
+
+REAL BUG ALREADY DIAGNOSED, FIX THIS FIRST: Volatility/Sharpe/Sortino are computed
+from variance of period-to-period snapshot returns (risk.ts). With only ~8 snapshots
+required, a single bad data point dominates the whole calculation. This project's
+NPS corpus calculation changed methodology multiple times over its history (a
+corpus-doubling bug that got fixed, a contribution-sync bug that got fixed, a later
+switch to derived units×NAV corpus) — if even one historical snapshot was recorded
+mid-transition between these, it shows an artificial 30-50%+ net worth swing that
+was never a real market move, and that single point is enough to blow these three
+metrics into the hundreds. FIX: add a configurable cutoff (e.g. an env var or a
+constant with today's date as a starting placeholder the user can adjust) so
+risk.ts's calculateVolatility/calculateSharpeRatio/calculateSortinoRatio only
+consider snapshots ON OR AFTER that cutoff — treat anything before it as
+methodology-contaminated, not real portfolio history. Also add basic outlier
+protection as a second layer of defense: if any single period-to-period return
+exceeds a sanity threshold (e.g. ±30% in one gap — implausible for a real diversified
+portfolio's actual day-to-day move), exclude that one return from the variance
+calculation rather than let it dominate, regardless of what caused it. Write a test
+using a fixture with one deliberately extreme outlier snapshot mixed into otherwise
+normal ones, asserting the outlier gets excluded and the resulting Sharpe/Sortino/
+Volatility stay in plausible ranges (Sharpe/Sortino roughly -5 to 5, Volatility
+roughly 0-150%).
+
+====================================================================
+THE REDESIGN
+====================================================================
+Confirmed against the actual current Dashboard (src/app/(app)/dashboard/page.tsx) —
+it already has NetWorthCard with a fixed 3-month sparkline
+(portfolioService.getPortfolioPerformance("3M")), and a TopHoldingsCard with real
+position names, values, and returns. The redesign below is scoped to NOT duplicate
+those — Analytics should be the deeper view, not a second copy of Dashboard's glance.
+
+1. TREND CHART — new, doesn't exist on Analytics today.
+   A larger historical net-worth chart than Dashboard's compact sparkline, with
+   period toggles: 1M / 3M / 1Y / All. Reuse portfolioService.getPortfolioPerformance()
+   but call it per-period based on the selected toggle (client-side state, refetch or
+   pre-fetch all periods server-side and switch client-side — your call on which
+   fits the existing pattern better, but prefer server-fetching all periods up front
+   in one Promise.all rather than a client round-trip per toggle click, consistent
+   with how the rest of this app avoids client-side fetching).
+
+2. PLAIN-LANGUAGE SUMMARY LINE above the chart — e.g. "Up ₹42,000 (2.1%) over the
+   last 3 months" — computed directly from the same net worth series (first vs. last
+   point in the selected period), no jargon, no separate metric.
+
+3. XIRR/CAGR — kept, PLUS a new customizable-XIRR feature:
+   Add a checkbox selector (asset classes or individual holdings — asset-class level
+   is probably the right granularity to start with: Stocks, ETF, Mutual Fund Equity,
+   Mutual Fund Debt, Crypto, NPS, Bonds) that filters which cash flows feed the XIRR
+   calculation shown on this page. DEFAULT: all selected, matching today's pooled
+   Securities+NPS behavior exactly (don't change the default experience). When the
+   user narrows the selection, recompute XIRR from only the selected classes' cash
+   flows. This needs: filtering transactions/npsCashflows by assetType/source before
+   calling calculateXIRR, and a compact checkbox UI component (new, or check if a
+   suitable multi-select component already exists in src/components/ui). Keep this
+   entirely separate from the Dashboard's XIRR card, which should stay as the fixed
+   "everything" figure it already correctly is.
+
+4. ADVANCED / RISK METRICS — collapsed section, off by default.
+   Volatility, Sharpe Ratio, Sortino Ratio, Max Drawdown move here (a
+   <details>/Collapsible component — check src/components/ui for an existing
+   Collapsible/Accordion primitive before adding a new one). Add a one-line
+   plain-language explainer next to each metric, e.g.:
+     - Sharpe Ratio: "Return earned per unit of risk taken — above 1 is generally
+       considered good, above 2 is very good."
+     - Sortino Ratio: "Like Sharpe, but only penalizes downside volatility, not
+       upside swings."
+     - Volatility: "How much your portfolio's value has swung, annualized."
+     - Max Drawdown: "The largest drop from a peak to a subsequent low."
+   Keep the existing "Annualized from irregular snapshots · approximate" captions —
+   still accurate and still worth keeping visible even when collapsed by default.
+
+5. ASSET ALLOCATION DONUT + GROWTH PROJECTION — kept as-is, no changes. Growth
+   Projection doesn't exist anywhere on Dashboard, so it stays uniquely valuable
+   here.
+
+6. CONCENTRATION CARD — REMOVE entirely (not folded into Allocation — just delete
+   it). Dashboard's TopHoldingsCard already covers this better, with real position
+   names and returns rather than just a category percentage.
+
+====================================================================
+WHAT NOT TO CHANGE
+====================================================================
+- Don't touch the Dashboard's XIRRCard, NetWorthCard, or TopHoldingsCard — those
+  are correct and intentionally different in scope from what's being built here.
+- Don't remove the "Returns" card's Realized/Unrealized P&L tiles — not mentioned
+  as a problem, keep as-is.
+- Keep the existing pooled Securities+NPS XIRR as the DEFAULT state of the new
+  checkbox selector — this must not change what a user who ignores the new checkbox
+  UI experiences.
+
+====================================================================
+PRIORITY ORDER
+====================================================================
+1. Fix the risk-metric outlier bug first (it's a real, currently-visible bug
+   independent of the redesign, and the redesign's collapsed section would just be
+   hiding a broken number rather than fixing it if done out of order).
+2. Trend chart + plain-language summary (biggest legibility win).
+3. Move risk metrics into the collapsed section with explainers.
+4. Remove Concentration card.
+5. Customizable XIRR checkbox selector (most new logic, do last).

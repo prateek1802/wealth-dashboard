@@ -79,14 +79,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
     NEEDS A DECISION: add both tables to backup/restore, or explicitly document this as a
     known limitation so a "full backup" claim isn't misleading.
 
-13. Dropdown → clickable-card view for holdings (asset class → card view → individual
-    holdings on click).
-    No dropdown component (Radix Dropdown/Accordion/Collapsible) found by name in
-    portfolio-view.tsx or sidebar layout — likely refers to the sidebar's per-asset-class
-    links per PROJECT-STATUS.md. UI/IA redesign, not a bug.
-    NEEDS: a screenshot or screen-recording of the current interaction before scoping
-    the rebuild.
-
 ====================================================================
 🔵 OPEN — larger feature work (design + multi-file changes)
 ====================================================================

@@ -23,13 +23,41 @@ NPS REWRITE — ALL 8 PARTS COMPLETE, EACH INDEPENDENTLY VERIFIED:
   Part 7: Employer contribution field + per-scheme breakdown UI.
   Part 8: Idempotent statement re-upload, tested.
 
+NPS "NAV DIDN'T CHANGE" INVESTIGATION — RESOLVED, NOT A BUG:
+  Traced end-to-end after a real user report of a growing corpus gap (~₹817 →
+  ~₹4,000) and "refresh does nothing." Root cause was NEVER a code defect —
+  independently verified every layer (fetch logic, cache: "no-store" confirmed
+  correctly set, DB write path, getEffectiveCorpus() derivation, no server-side
+  caching, force-dynamic on page+layout, ROUTES.dashboard unchanged by an
+  unrelated patch). Verified the app's own math against the user's real statement
+  (units × live NAV reproduced the displayed per-scheme values to the rupee) and
+  cross-checked the Dashboard's allocation % against the confirmed-correct NPS
+  value (25.24% computed vs. 25.2% displayed — matched). Final explanation: NAV is
+  published once per trading day, not continuously — "refresh not changing at 4pm"
+  is expected correct behavior, not a stale value. Separately confirmed npsnav.in's
+  own GitHub-Actions-driven sync (11am/11pm IST) can genuinely lag past its
+  scheduled time, which explains why an early-morning refresh may still return the
+  previous day's value.
+
+HOLDINGS HUB (replaces old sidebar dropdown) — DONE, VERIFIED CLEAN:
+  New /holdings page: every category (securities, cash, FDs, NPS, PPF, liabilities,
+  watchlist) shown as a sorted-by-value clickable card, routing to its own detail
+  page. Confirmed the old per-asset-class dropdown/collapsible sidebar logic was
+  genuinely REMOVED (not left dangling alongside the new page) — checked both
+  desktop sidebar and mobile nav, ~50 lines of old per-category logic cleanly
+  replaced with a single "Holdings" link in both places. Correctly excludes a
+  zero-value liabilities card, correctly parallelized data fetch, force-dynamic set.
+  This closes the item that was previously open in Section 4/9 ("dropdown → card
+  view for holdings") — removed from the open-issues list below.
+
 OTHER FIXES CONFIRMED LANDED:
   - Day Change bug fixed. Sharpe/Sortino annualization fixed (real snapshot-gap
     factor, not hardcoded daily). MF labels shortened. "View more" pagination added
     (Transactions table + per-asset history). Bank Account / FD card icon-overlap
     fixed. Zero-holding refresh waste fixed; scoped refresh buttons added.
     Transaction edit UI wired up. Responsive table/resize bug fixed. "Refresh all"
-    button added to Dashboard (scope gap noted in Section 2).
+    button added to Dashboard (scope gap noted in Section 2). Tax-loss harvesting
+    feature added (new /tax-harvesting page + calculations module).
 
 ====================================================================
 2. CONSISTENCY BUGS — "SAME NUMBER, DIFFERENT VALUE IN DIFFERENT PLACES"
@@ -232,3 +260,6 @@ planning/legacy handoff.
 21. Undo window on deletes.
 22. Auto-refresh at market close (cron) — real new infra, not a quick patch.
 23. Feature additions (Section 8) — once trust/correctness items above are settled.
+
+DONE, no longer on this list: NPS live NAV refresh (verified working correctly —
+see Section 1), Holdings dropdown → card view (built and verified clean).

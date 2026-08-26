@@ -1,4 +1,10 @@
 import type { Asset } from "@/types/domain/asset";
+import type { AssetType } from "@/constants/asset-types";
+
+/** Both mutual fund variants (equity-oriented and debt) share the same NAV-based terminology and display conventions, unlike stocks/ETFs/crypto/bonds which are priced per-share. */
+export function isMutualFundType(assetType: AssetType): boolean {
+  return assetType === "mutual_fund" || assetType === "mutual_fund_debt";
+}
 
 /**
  * What to show as the PRIMARY label for an asset, vs. the secondary line.
@@ -9,8 +15,27 @@ import type { Asset } from "@/types/domain/asset";
  * the code shown small as a secondary reference.
  */
 export function getAssetDisplayLabel(asset: Pick<Asset, "assetType" | "symbol" | "name">): { primary: string; secondary: string } {
-  if (asset.assetType === "mutual_fund" || asset.assetType === "mutual_fund_debt") {
+  if (isMutualFundType(asset.assetType)) {
     return { primary: asset.name, secondary: asset.symbol };
   }
   return { primary: asset.symbol, secondary: asset.name };
+}
+
+/**
+ * Mutual funds are priced and held in NAV/units terminology, not
+ * price/quantity — this is purely a labeling difference (the underlying
+ * computed numbers — Holding.quantity, Holding.weightedAverageCost,
+ * Asset.currentPrice — are identical fields used by every asset type; only
+ * what to CALL them differs).
+ */
+export function quantityLabel(assetType: AssetType): string {
+  return isMutualFundType(assetType) ? "Units" : "Qty";
+}
+
+export function avgPriceLabel(assetType: AssetType): string {
+  return isMutualFundType(assetType) ? "Avg. NAV" : "Avg. Cost";
+}
+
+export function currentPriceLabel(assetType: AssetType): string {
+  return isMutualFundType(assetType) ? "Present NAV" : "Current Price";
 }

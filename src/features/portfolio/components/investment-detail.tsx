@@ -14,7 +14,7 @@ import { deleteTransactionAction } from "@/features/transactions/actions";
 import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
-import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
+import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
 import { Pencil, Plus, Trash2, LineChart, Receipt } from "lucide-react";
 import type { Holding } from "@/types/domain/holding";
@@ -42,7 +42,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <h2 className={cn("text-xl font-medium text-ink", asset.assetType !== "mutual_fund" && asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(asset).primary}</h2>
+            <h2 className={cn("text-xl font-medium text-ink", !isMutualFundType(asset.assetType) && "font-mono")}>{getAssetDisplayLabel(asset).primary}</h2>
             <Badge>{ASSET_TYPE_LABELS[asset.assetType]}</Badge>
             {asset.exchange && <Badge>{asset.exchange}</Badge>}
           </div>
@@ -65,15 +65,15 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
           <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(holding.currentValue, asset.currency)}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">
-          <span className="text-xs text-ink-muted">Current Price</span>
+          <span className="text-xs text-ink-muted">{currentPriceLabel(asset.assetType)}</span>
           <span className="font-tabular text-lg font-medium text-ink">{asset.currentPrice ? formatCurrencyPrecise(asset.currentPrice, asset.currency) : "—"}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">
-          <span className="text-xs text-ink-muted">Quantity</span>
+          <span className="text-xs text-ink-muted">{quantityLabel(asset.assetType)}</span>
           <span className="font-tabular text-lg font-medium text-ink">{holding.quantity}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">
-          <span className="text-xs text-ink-muted">Avg. Cost</span>
+          <span className="text-xs text-ink-muted">{avgPriceLabel(asset.assetType)}</span>
           <span className="font-tabular text-lg font-medium text-ink">{formatCurrencyPrecise(holding.weightedAverageCost, asset.currency)}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">

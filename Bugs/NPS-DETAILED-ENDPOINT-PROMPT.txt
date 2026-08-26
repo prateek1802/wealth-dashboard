@@ -1,0 +1,69 @@
+PROMPT FOR NEW CHAT — NPS LIVE NAV: SWITCH TO DETAILED ENDPOINT + STALENESS WARNING
+(paste this along with PROJECT-STATUS.md and the source zip, per usual workflow)
+
+====================================================================
+CONTEXT — why this matters, confirmed with a real incident
+====================================================================
+Workflow: single git patch file, verified with tsc/eslint/vitest/next build.
+
+src/lib/market-data/live-provider.ts's fetchNPSNAVQuote() currently uses npsnav.in's
+"Simple" endpoint (/api/{scheme_code}), which returns ONLY a bare NAV number — no
+date. The function stamps the result with `asOf: new Date().toISOString()` (the
+moment the APP fetched it), not the NAV's real publication date.
+
+THIS JUST CAUSED A REAL, MULTI-DAY DEBUGGING SESSION: npsnav.in's own data was
+stuck/stale for over 2 days (confirmed directly on their site — their own banner
+read "NAV updated: 24-08-2026" while checks were happening on the 26th-27th). The
+app kept showing "as of [today]" the entire time, because that timestamp was always
+just "when I refreshed," never the true NAV date — completely masking a real
+upstream data problem that would have been obvious immediately if the UI showed the
+NAV's actual date instead.
+
+====================================================================
+THE FIX
+====================================================================
+1. Switch fetchNPSNAVQuote() to npsnav.in's "Detailed" endpoint instead of the
+   Simple one — confirm the exact path and response shape from their docs
+   (npsnav.in/nps-api) before wiring it in, since this wasn't independently
+   re-verified this session; last confirmed detail was that a detailed variant
+   exists and returns a genuine "Last Updated" field alongside the NAV, but the
+   exact JSON key names need checking against their current docs directly.
+
+2. Parse and store the REAL last-updated date from that response — this replaces
+   the current asOf: new Date().toISOString() fabrication entirely. Update
+   nps_scheme_holdings.last_nav_date (already exists in schema) to store this real
+   date, not the fetch timestamp.
+
+3. STALENESS WARNING in the UI: on the NPS page, if a connected scheme's
+   last_nav_date is more than ~2 calendar days older than today, show a visible
+   warning state instead of the normal "Live NAV ... as of [date]" — e.g. a
+   yellow/amber treatment with something like "NAV data may be stale — last updated
+   [date], source hasn't synced since." This is the single most valuable part of
+   this fix: it would have caught the exact 2-day-stale incident automatically,
+   the first time it happened, instead of requiring extensive manual
+   cross-referencing against the Protean app and npsnav.in's raw site to even
+   realize something was wrong.
+
+4. Apply the same staleness check to refreshLiveNAVs()'s result summary — if a
+   fetch succeeds (HTTP 200, valid number) but returns a last-updated date that's
+   already stale, the toast/summary should distinguish "updated, but source data is
+   old" from a genuine fresh update, rather than reporting both as equally
+   successful.
+
+====================================================================
+WHAT NOT TO CHANGE
+====================================================================
+- Keep fetchNPSNAVQuote()'s existing fail-soft behavior (return null on any error,
+  never throw) — this fix is about the SUCCESS path returning better information,
+  not about changing error handling.
+- Keep the existing "never auto-guess PFM-to-scheme mapping" design entirely as-is
+  — this fix is orthogonal to that.
+
+====================================================================
+TEST TO ADD
+====================================================================
+A test asserting: given a mocked Detailed-endpoint response with a last-updated
+date more than 2 days old, the staleness warning condition evaluates true; given a
+response from today or yesterday, it evaluates false. Use real boundary cases (2
+days ago exactly, 3 days ago) so the threshold behavior is explicit and tested, not
+just implied by the code.

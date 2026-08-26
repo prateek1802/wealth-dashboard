@@ -10,7 +10,7 @@ import { TransactionDialog } from "@/features/transactions/components/transactio
 import { refreshLivePricesAction } from "../actions";
 import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
 import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
-import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
+import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
 import { Wallet, Plus, LayoutGrid, List, RefreshCw, ChevronDown } from "lucide-react";
 import Link from "next/link";
@@ -98,12 +98,13 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
           </div>
         ) : (
           <div className="overflow-x-auto rounded-[var(--radius-card)] border border-border-subtle">
-            <table className="w-full min-w-[800px] text-sm">
+            <table className="w-full min-w-[880px] text-sm">
               <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
                 <tr>
                   <th className="px-4 py-3">Asset</th>
-                  <th className="px-4 py-3 text-right">Qty</th>
-                  <th className="px-4 py-3 text-right">Avg. Cost</th>
+                  <th className="px-4 py-3 text-right">{quantityLabel(holdings[0].asset.assetType)}</th>
+                  <th className="px-4 py-3 text-right">{avgPriceLabel(holdings[0].asset.assetType)}</th>
+                  <th className="px-4 py-3 text-right">{currentPriceLabel(holdings[0].asset.assetType)}</th>
                   <th className="px-4 py-3 text-right">Value</th>
                   <th className="px-4 py-3 text-right">P&amp;L</th>
                   <th className="px-4 py-3 text-right">XIRR</th>
@@ -114,16 +115,20 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
                 {holdings.map((h) => {
                   const isGain = h.unrealizedPnl >= 0;
                   const label = getAssetDisplayLabel(h.asset).primary;
+                  const isMF = isMutualFundType(h.asset.assetType);
                   return (
                     <tr key={h.asset.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
                       <td className="px-4 py-3">
                         <Link href={ROUTES.investmentDetail(h.asset.id)} className="flex flex-col">
-                          <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{label}</span>
-                          <span className={cn("text-xs text-ink-muted", (h.asset.assetType === "mutual_fund" || h.asset.assetType === "mutual_fund_debt") && "font-mono")}>{getAssetDisplayLabel(h.asset).secondary}</span>
+                          <span className={cn("font-medium text-ink", !isMF && "font-mono")}>{label}</span>
+                          <span className={cn("text-xs text-ink-muted", isMF && "font-mono")}>{getAssetDisplayLabel(h.asset).secondary}</span>
                         </Link>
                       </td>
                       <td className="px-4 py-3 text-right font-tabular">{h.quantity}</td>
                       <td className="px-4 py-3 text-right font-tabular">{formatCurrencyPrecise(h.weightedAverageCost, h.asset.currency)}</td>
+                      <td className="px-4 py-3 text-right font-tabular">
+                        {h.asset.currentPrice != null ? formatCurrencyPrecise(h.asset.currentPrice, h.asset.currency) : "—"}
+                      </td>
                       <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.currentValue, h.asset.currency)}</td>
                       <td className={cn("px-4 py-3 text-right font-tabular", isGain ? "text-gain" : "text-loss")}>
                         {formatSignedCurrency(h.unrealizedPnl, h.asset.currency)} ({formatPercent(h.unrealizedPnlPercent)})

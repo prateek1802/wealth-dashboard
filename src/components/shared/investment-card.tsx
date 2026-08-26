@@ -4,8 +4,8 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
-import { formatCurrency, formatSignedCurrency, formatPercent } from "@/lib/utils/currency";
-import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
+import { formatCurrency, formatCurrencyPrecise, formatSignedCurrency, formatPercent } from "@/lib/utils/currency";
+import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { ROUTES } from "@/constants/routes";
 import { cn } from "@/lib/utils/cn";
 import { TrendingUp, TrendingDown } from "lucide-react";
@@ -14,17 +14,35 @@ import type { Holding } from "@/types/domain/holding";
 export function InvestmentCard({ holding }: { holding: Holding }) {
   const isGain = holding.unrealizedPnl >= 0;
   const { primary, secondary } = getAssetDisplayLabel(holding.asset);
+  const isMF = isMutualFundType(holding.asset.assetType);
   return (
     <Link href={ROUTES.investmentDetail(holding.asset.id)}>
       <Card className="flex h-full flex-col gap-4 p-5 transition-shadow hover:shadow-md">
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-col">
-            <span className={cn("truncate text-sm font-medium text-ink", holding.asset.assetType !== "mutual_fund" && holding.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{primary}</span>
-            <span className={cn("truncate text-xs text-ink-muted", (holding.asset.assetType === "mutual_fund" || holding.asset.assetType === "mutual_fund_debt") && "font-mono")}>{secondary}</span>
+            <span className={cn("truncate text-sm font-medium text-ink", !isMF && "font-mono")}>{primary}</span>
+            <span className={cn("truncate text-xs text-ink-muted", isMF && "font-mono")}>{secondary}</span>
           </div>
           <div className="flex items-center gap-1">
             <Badge>{ASSET_TYPE_LABELS[holding.asset.assetType]}</Badge>
             <AssetRefreshButton assetId={holding.asset.id} assetLabel={primary} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-ink-muted">{quantityLabel(holding.asset.assetType)}</span>
+            <span className="font-tabular text-ink">{holding.quantity}</span>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-ink-muted">{avgPriceLabel(holding.asset.assetType)}</span>
+            <span className="font-tabular text-ink">{formatCurrencyPrecise(holding.weightedAverageCost, holding.asset.currency)}</span>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-ink-muted">{currentPriceLabel(holding.asset.assetType)}</span>
+            <span className="font-tabular text-ink">
+              {holding.asset.currentPrice != null ? formatCurrencyPrecise(holding.asset.currentPrice, holding.asset.currency) : "—"}
+            </span>
           </div>
         </div>
 
