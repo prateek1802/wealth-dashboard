@@ -29,6 +29,7 @@ import {
   Gem,
   LogOut,
   ChevronDown,
+  Scissors,
 } from "lucide-react";
 
 interface NavItem {
@@ -41,6 +42,7 @@ const TOP_ITEMS: NavItem[] = [
   { href: ROUTES.dashboard, label: "Dashboard", icon: LayoutDashboard },
   { href: ROUTES.transactions, label: "Transactions", icon: Receipt },
   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
+  { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
   { href: ROUTES.goals, label: "Goals", icon: Target },
 ];
 

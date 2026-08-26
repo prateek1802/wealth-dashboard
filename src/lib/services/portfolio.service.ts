@@ -10,6 +10,7 @@ import { summarizeAssetPosition } from "@/lib/calculations/pnl";
 import { calculateAllocation } from "@/lib/calculations/allocation";
 import { calculateXIRR } from "@/lib/calculations/returns";
 import { netCashFlow } from "@/lib/calculations/cashflow";
+import { findHarvestableLots, matchRealizedGainEvents, currentIndianFinancialYear, type HarvestableLot } from "@/lib/calculations/tax-harvesting";
 import { todayISO } from "@/lib/utils/date";
 import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { periodToDays } from "@/constants/chart-periods";
@@ -17,6 +18,7 @@ import type { ChartPeriod } from "@/constants/chart-periods";
 import type { AllocationCategory } from "@/constants/asset-types";
 import { ASSET_TYPE_GROUP } from "@/constants/asset-types";
 import type { Holding } from "@/types/domain/holding";
+import type { Asset } from "@/types/domain/asset";
 import type { CalcResult } from "@/lib/calculations/returns";
 import type { PortfolioSummary, AllocationSlice, PerformancePoint, ActivityItem } from "@/types/domain/snapshot";
 
@@ -24,6 +26,19 @@ export interface HoldingWithXIRR extends Holding {
   xirr: CalcResult<number>;
   /** Days since the earliest transaction for this asset — used to flag when a projection would be extrapolating a short-term spike over a much longer horizon (see growth-projection.tsx). */
   holdingPeriodDays: number;
+}
+
+export interface TaxHarvestingSummary {
+  financialYear: { start: string; end: string; label: string };
+  harvestableLots: (HarvestableLot & { asset: Asset })[];
+  totalShortTermLoss: number;
+  totalLongTermLoss: number;
+  /** Crypto/VDA unrealized losses — shown for visibility only, NEVER offsettable against anything under Indian law. See tax-harvesting.ts. */
+  totalVDALoss: number;
+  /** This financial year's realized gains, so harvestable losses can be read against something concrete. */
+  realizedSTCG: number;
+  realizedLTCG: number;
+  realizedVDA: number;
 }
 
 /**
@@ -241,5 +256,58 @@ export const portfolioService = {
     }
 
     return { cash: cashValue, equity, debt, nps: npsValue, ppf: ppfValue, crypto, other };
+  },
+
+  /**
+   * Portfolio-wide tax-loss harvesting summary — see calculations/
+   * tax-harvesting.ts for the classification rules and their caveats. Pulls
+   * together every open lot currently at an unrealized loss across every
+   * security, plus this financial year's realized gains split short/long
+   * term, so the two can be read side by side (a loss is only useful to
+   * harvest if there's a gain of a compatible type to offset it against).
+   */
+  async getTaxHarvestingSummary(): Promise<TaxHarvestingSummary> {
+    const [assets, allTransactions] = await Promise.all([assetsRepository.findAll(), transactionsRepository.findAll()]);
+    const today = todayISO();
+    const fy = currentIndianFinancialYear(today);
+
+    const harvestableLots: (HarvestableLot & { asset: Asset })[] = [];
+    let realizedSTCG = 0;
+    let realizedLTCG = 0;
+    let realizedVDA = 0;
+
+    for (const asset of assets) {
+      const assetTransactions = allTransactions.filter((t) => t.assetId === asset.id);
+      if (assetTransactions.length === 0) continue;
+
+      for (const lot of findHarvestableLots(asset.id, asset.assetType, assetTransactions, asset.currentPrice, today)) {
+        harvestableLots.push({ ...lot, asset });
+      }
+
+      for (const event of matchRealizedGainEvents(asset.assetType, assetTransactions)) {
+        if (event.sellDate < fy.start || event.sellDate > fy.end) continue;
+        if (event.classification === "short_term") realizedSTCG += event.gain;
+        else if (event.classification === "long_term") realizedLTCG += event.gain;
+        else if (event.classification === "flat_rate_vda") realizedVDA += event.gain;
+        // "unsupported" (bonds): deliberately excluded from these totals — see tax-harvesting.ts.
+      }
+    }
+
+    harvestableLots.sort((a, b) => b.lossAmount - a.lossAmount);
+
+    const totalShortTermLoss = harvestableLots.filter((l) => l.classification === "short_term").reduce((s, l) => s + l.lossAmount, 0);
+    const totalLongTermLoss = harvestableLots.filter((l) => l.classification === "long_term").reduce((s, l) => s + l.lossAmount, 0);
+    const totalVDALoss = harvestableLots.filter((l) => l.classification === "flat_rate_vda").reduce((s, l) => s + l.lossAmount, 0);
+
+    return {
+      financialYear: fy,
+      harvestableLots,
+      totalShortTermLoss,
+      totalLongTermLoss,
+      totalVDALoss,
+      realizedSTCG,
+      realizedLTCG,
+      realizedVDA,
+    };
   },
 };

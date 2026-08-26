@@ -29,6 +29,7 @@ import {
   Sun,
   Moon,
   LogOut,
+  Scissors,
 } from "lucide-react";
 
 interface NavItem {
@@ -64,6 +65,7 @@ const OTHER_MORE_ITEMS: NavItem[] = [
   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
   { href: ROUTES.ppf, label: "PPF", icon: Landmark },
   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
+  { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
   { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
 ];
 

@@ -1,0 +1,701 @@
+diff --git a/src/app/(app)/tax-harvesting/page.tsx b/src/app/(app)/tax-harvesting/page.tsx
+new file mode 100644
+index 0000000..b7e5511
+--- /dev/null
++++ b/src/app/(app)/tax-harvesting/page.tsx
+@@ -0,0 +1,180 @@
++import { TopBar } from "@/components/layout/top-bar";
++import { Card } from "@/components/ui/card";
++import { Badge } from "@/components/ui/badge";
++import { EmptyState } from "@/components/shared/empty-state";
++import { StatTile } from "@/features/analytics/components/stat-tile";
++import { portfolioService } from "@/lib/services/portfolio.service";
++import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
++import { formatDate } from "@/lib/utils/date";
++import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
++import { ROUTES } from "@/constants/routes";
++import { cn } from "@/lib/utils/cn";
++import Link from "next/link";
++import { Scissors, AlertTriangle } from "lucide-react";
++import type { GainClassification } from "@/lib/calculations/tax-harvesting";
++
++export const dynamic = "force-dynamic";
++
++const CLASSIFICATION_LABELS: Record<GainClassification, string> = {
++  short_term: "Short-term",
++  long_term: "Long-term",
++  flat_rate_vda: "Crypto (flat 30%)",
++  unsupported: "Rules not modeled",
++};
++
++export default async function TaxHarvestingPage() {
++  const summary = await portfolioService.getTaxHarvestingSummary();
++
++  const offsettableLots = summary.harvestableLots.filter((l) => l.classification === "short_term" || l.classification === "long_term");
++  const cryptoLots = summary.harvestableLots.filter((l) => l.classification === "flat_rate_vda");
++  const unsupportedLots = summary.harvestableLots.filter((l) => l.classification === "unsupported");
++
++  return (
++    <div>
++      <TopBar title="Tax Harvesting" subtitle={`Unrealized losses that could offset ${summary.financialYear.label} capital gains — Indian equity/debt/foreign-share rules`} />
++
++      <div className="flex flex-col gap-6 p-4 md:p-6">
++        <Card className="flex items-start gap-3 border-accent-soft bg-accent-soft/40 p-4">
++          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-accent" />
++          <div className="flex flex-col gap-1 text-xs text-ink-muted">
++            <p>
++              <span className="font-medium text-ink">This is informational, not tax advice.</span> Holding-period math here is a day-count approximation, not
++              exact to tax-authority conventions for every edge case. Nothing here is a recommendation to sell anything. Verify before filing — talk to a CA
++              for anything consequential.
++            </p>
++            <p>
++              A short-term loss can offset both short-term and long-term gains. A <span className="font-medium text-ink">long-term loss can only offset
++              long-term gains</span> — it cannot reduce short-term tax. Crypto losses cannot offset anything at all (see below).
++            </p>
++          </div>
++        </Card>
++
++        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
++          <StatTile
++            label={`${summary.financialYear.label} realized STCG`}
++            result={{ status: "ok", value: summary.realizedSTCG }}
++            format={(v) => formatSignedCurrency(v)}
++            colorByValue
++          />
++          <StatTile
++            label={`${summary.financialYear.label} realized LTCG`}
++            result={{ status: "ok", value: summary.realizedLTCG }}
++            format={(v) => formatSignedCurrency(v)}
++            colorByValue
++          />
++          <StatTile label="Short-term losses available" result={{ status: "ok", value: -summary.totalShortTermLoss }} format={(v) => formatCurrency(-v)} />
++          <StatTile label="Long-term losses available" result={{ status: "ok", value: -summary.totalLongTermLoss }} format={(v) => formatCurrency(-v)} />
++        </div>
++
++        <Card className="p-0">
++          <div className="flex items-center gap-2 border-b border-border-subtle p-4">
++            <Scissors className="size-4 text-ink-muted" />
++            <span className="font-medium text-ink">Harvestable lots</span>
++            <span className="text-xs text-ink-muted">({offsettableLots.length})</span>
++          </div>
++          {offsettableLots.length === 0 ? (
++            <EmptyState
++              icon={Scissors}
++              title="No harvestable losses right now"
++              description="Every open lot in your portfolio is currently at a gain or breakeven — nothing here to offset against realized gains."
++              className="border-none"
++            />
++          ) : (
++            <div className="overflow-x-auto">
++              <table className="w-full min-w-[720px] text-sm">
++                <thead className="border-b border-border-subtle bg-surface-sunken text-left text-xs font-medium text-ink-muted">
++                  <tr>
++                    <th className="px-4 py-3">Asset</th>
++                    <th className="px-4 py-3">Acquired</th>
++                    <th className="px-4 py-3">Type</th>
++                    <th className="px-4 py-3 text-right">Quantity</th>
++                    <th className="px-4 py-3 text-right">Unrealized Loss</th>
++                    <th className="px-4 py-3 text-right">Days to Long-term</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {offsettableLots.map((lot, i) => {
++                    const label = getAssetDisplayLabel(lot.asset);
++                    return (
++                      <tr key={`${lot.assetId}-${lot.acquiredDate}-${i}`} className="border-b border-border-subtle last:border-0 hover:bg-surface-sunken">
++                        <td className="px-4 py-3">
++                          <Link href={ROUTES.investmentDetail(lot.assetId)} className="flex flex-col">
++                            <span className="font-medium text-ink">{label.primary}</span>
++                            <span className="text-xs text-ink-muted">{label.secondary}</span>
++                          </Link>
++                        </td>
++                        <td className="px-4 py-3 text-ink-muted">{formatDate(lot.acquiredDate)}</td>
++                        <td className="px-4 py-3">
++                          <Badge className={cn(lot.classification === "long_term" && "border-gain/30 bg-gain-soft text-gain")}>
++                            {CLASSIFICATION_LABELS[lot.classification]}
++                          </Badge>
++                        </td>
++                        <td className="px-4 py-3 text-right font-tabular">{lot.quantity}</td>
++                        <td className="px-4 py-3 text-right font-tabular text-loss">-{formatCurrency(lot.lossAmount, lot.asset.currency)}</td>
++                        <td className="px-4 py-3 text-right font-tabular text-ink-muted">
++                          {lot.daysUntilLongTerm != null ? `${lot.daysUntilLongTerm}d` : "—"}
++                        </td>
++                      </tr>
++                    );
++                  })}
++                </tbody>
++              </table>
++            </div>
++          )}
++        </Card>
++
++        {cryptoLots.length > 0 && (
++          <Card className="flex flex-col gap-3 border-loss/30 bg-loss-soft/40 p-4">
++            <div className="flex items-center gap-2">
++              <AlertTriangle className="size-4 text-loss" />
++              <span className="font-medium text-ink">Crypto losses — not offsettable</span>
++            </div>
++            <p className="text-xs text-ink-muted">
++              Under Section 115BBH, a Virtual Digital Asset loss cannot be set off against any other gain or income — not even against a gain on a different
++              coin. These are shown for visibility only; they can&apos;t reduce tax on anything else in your portfolio.
++            </p>
++            <div className="flex flex-col gap-2">
++              {cryptoLots.map((lot, i) => {
++                const label = getAssetDisplayLabel(lot.asset);
++                return (
++                  <div key={`${lot.assetId}-${lot.acquiredDate}-${i}`} className="flex items-center justify-between text-xs">
++                    <span className="text-ink">
++                      {label.primary} <span className="text-ink-muted">· acquired {formatDate(lot.acquiredDate)}</span>
++                    </span>
++                    <span className="font-tabular text-loss">-{formatCurrency(lot.lossAmount, lot.asset.currency)}</span>
++                  </div>
++                );
++              })}
++            </div>
++          </Card>
++        )}
++
++        {unsupportedLots.length > 0 && (
++          <Card className="flex flex-col gap-3 p-4">
++            <div className="flex items-center gap-2">
++              <AlertTriangle className="size-4 text-ink-muted" />
++              <span className="font-medium text-ink">Bonds — rules not modeled here</span>
++            </div>
++            <p className="text-xs text-ink-muted">
++              Bond taxation varies a lot by type (zero-coupon, sovereign gold bonds, tax-free bonds, market-linked debentures all differ) — this app
++              doesn&apos;t guess a rate for them. These lots are at a loss but excluded from the totals above; check with a CA for the applicable treatment.
++            </p>
++            <div className="flex flex-col gap-2">
++              {unsupportedLots.map((lot, i) => {
++                const label = getAssetDisplayLabel(lot.asset);
++                return (
++                  <div key={`${lot.assetId}-${lot.acquiredDate}-${i}`} className="flex items-center justify-between text-xs">
++                    <span className="text-ink">
++                      {label.primary} <span className="text-ink-muted">· acquired {formatDate(lot.acquiredDate)}</span>
++                    </span>
++                    <span className="font-tabular text-loss">-{formatCurrency(lot.lossAmount, lot.asset.currency)}</span>
++                  </div>
++                );
++              })}
++            </div>
++          </Card>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/src/components/layout/mobile-nav.tsx b/src/components/layout/mobile-nav.tsx
+index 99d2689..683ff07 100644
+--- a/src/components/layout/mobile-nav.tsx
++++ b/src/components/layout/mobile-nav.tsx
+@@ -29,6 +29,7 @@ import {
+   Sun,
+   Moon,
+   LogOut,
++  Scissors,
+ } from "lucide-react";
+ 
+ interface NavItem {
+@@ -64,6 +65,7 @@ const OTHER_MORE_ITEMS: NavItem[] = [
+   { href: ROUTES.nps, label: "NPS", icon: ShieldCheck },
+   { href: ROUTES.ppf, label: "PPF", icon: Landmark },
+   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
++  { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
+   { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
+ ];
+ 
+diff --git a/src/components/layout/sidebar.tsx b/src/components/layout/sidebar.tsx
+index f0c9af9..64a18df 100644
+--- a/src/components/layout/sidebar.tsx
++++ b/src/components/layout/sidebar.tsx
+@@ -29,6 +29,7 @@ import {
+   Gem,
+   LogOut,
+   ChevronDown,
++  Scissors,
+ } from "lucide-react";
+ 
+ interface NavItem {
+@@ -41,6 +42,7 @@ const TOP_ITEMS: NavItem[] = [
+   { href: ROUTES.dashboard, label: "Dashboard", icon: LayoutDashboard },
+   { href: ROUTES.transactions, label: "Transactions", icon: Receipt },
+   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
++  { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
+   { href: ROUTES.goals, label: "Goals", icon: Target },
+ ];
+ 
+diff --git a/src/constants/routes.ts b/src/constants/routes.ts
+index 7f5c941..c0b9357 100644
+--- a/src/constants/routes.ts
++++ b/src/constants/routes.ts
+@@ -12,5 +12,6 @@ export const ROUTES = {
+   nps: "/nps",
+   ppf: "/ppf",
+   watchlist: "/watchlist",
++  taxHarvesting: "/tax-harvesting",
+   backup: "/backup",
+ } as const;
+diff --git a/src/lib/calculations/tax-harvesting.ts b/src/lib/calculations/tax-harvesting.ts
+new file mode 100644
+index 0000000..b1c7b8f
+--- /dev/null
++++ b/src/lib/calculations/tax-harvesting.ts
+@@ -0,0 +1,186 @@
++import type { AssetType } from "@/constants/asset-types";
++import type { Transaction, Lot } from "@/types/domain/transaction";
++import { matchFIFOLots } from "./lots";
++
++/**
++ * Indian capital gains classification for a single lot/sale, as of this
++ * module's last verification (FY 2025-26 / AY 2026-27 rules — Budget 2024's
++ * July 2024 changes, unchanged by Budget 2025 and Budget 2026).
++ *
++ * - "short_term" / "long_term": the normal STCG/LTCG split. A short-term
++ *   LOSS can be set off against BOTH short-term and long-term GAINS. A
++ *   long-term LOSS can only be set off against long-term GAINS (Sections
++ *   70/71) — this asymmetry is the whole reason "which bucket" matters for
++ *   harvesting, not just "gain or loss".
++ * - "flat_rate_vda": crypto/VDAs (Section 115BBH) — flat 30% tax on any
++ *   gain, NO short/long distinction, and — critically — a VDA LOSS CANNOT
++ *   be set off against any other gain or income, not even another VDA's
++ *   gain. There is no such thing as "harvesting" a crypto loss under
++ *   current Indian law; it simply cannot offset anything. Never grouped
++ *   with the offsettable totals below.
++ * - "unsupported": bonds have their own rules (zero-coupon bonds,
++ *   sovereign gold bonds, market-linked debentures, tax-free bonds, etc.
++ *   are all treated differently) that aren't reliably modeled from a
++ *   simple acquisition date, so this module deliberately does not guess a
++ *   rate for them.
++ *
++ * This is informational, not tax advice — holding-period math here is a
++ * simple day-count and doesn't handle every edge case (e.g. the exact
++ * month-boundary conventions tax authorities use). Verify anything
++ * consequential with a CA before acting on it.
++ */
++export type GainClassification = "short_term" | "long_term" | "flat_rate_vda" | "unsupported";
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++function daysBetween(fromISO: string, toISO: string): number {
++  return Math.round((new Date(toISO).getTime() - new Date(fromISO).getTime()) / DAY_MS);
++}
++
++/** The long-term threshold in days for asset types that have one (crypto and bonds are handled separately, before this is called). */
++function longTermThresholdDays(assetType: AssetType): number {
++  if (assetType === "stock_us") return 730; // foreign/unlisted equity — 24 months, Section 112
++  if (assetType === "mutual_fund_debt") {
++    // Debt MF bought on/after 1 Apr 2023 never gets long-term treatment at
++    // all (see classifyCapitalGainType) — this branch only runs for units
++    // bought before that date, which still get the pre-existing 24-month rule.
++    return 730;
++  }
++  return 365; // stock_in, etf (assumed Indian-listed equity ETF), mutual_fund (equity-oriented) — 12 months, Section 112A
++}
++
++export function classifyCapitalGainType(assetType: AssetType, acquiredDate: string, asOfDate: string): GainClassification {
++  if (assetType === "crypto") return "flat_rate_vda";
++  if (assetType === "bond") return "unsupported";
++
++  if (assetType === "mutual_fund_debt" && acquiredDate >= "2023-04-01") {
++    // Post-1-Apr-2023 debt MF units: always short-term/slab-rate, no LTCG regardless of holding period.
++    return "short_term";
++  }
++
++  const holdingDays = daysBetween(acquiredDate, asOfDate);
++  return holdingDays > longTermThresholdDays(assetType) ? "long_term" : "short_term";
++}
++
++/** How many more days until this lot crosses into long-term treatment — null if already long-term, already flat-rate/unsupported, or (debt MF post-Apr-2023) never will. */
++export function daysUntilLongTerm(assetType: AssetType, acquiredDate: string, asOfDate: string): number | null {
++  const classification = classifyCapitalGainType(assetType, acquiredDate, asOfDate);
++  if (classification !== "short_term") return null;
++  if (assetType === "mutual_fund_debt" && acquiredDate >= "2023-04-01") return null; // will never become long-term
++  const threshold = longTermThresholdDays(assetType);
++  const held = daysBetween(acquiredDate, asOfDate);
++  return threshold - held;
++}
++
++export interface HarvestableLot {
++  assetId: string;
++  quantity: number;
++  costBasisPerUnit: number;
++  currentPrice: number;
++  acquiredDate: string;
++  holdingDays: number;
++  classification: GainClassification;
++  /** Positive number — the unrealized loss on this lot. */
++  lossAmount: number;
++  /** Days until this lot would cross into long-term treatment, if still short-term and applicable. */
++  daysUntilLongTerm: number | null;
++}
++
++/**
++ * Every OPEN lot (from FIFO matching — see lots.ts) currently sitting at an
++ * unrealized LOSS for one asset, as of `asOfDate`. Lots at a gain are
++ * simply omitted — there's nothing to harvest there. Crypto lots ARE
++ * included (with classification "flat_rate_vda") so the UI can show them
++ * explicitly rather than silently hide them, but the caller must not treat
++ * their lossAmount as offsettable against anything — see the type's doc.
++ */
++export function findHarvestableLots(assetId: string, assetType: AssetType, transactions: Transaction[], currentPrice: number | null, asOfDate: string): HarvestableLot[] {
++  if (currentPrice == null) return [];
++  const openLots = matchFIFOLots(transactions);
++
++  const result: HarvestableLot[] = [];
++  for (const lot of openLots) {
++    const lossPerUnit = lot.costBasisPerUnit - currentPrice;
++    if (lossPerUnit <= 0) continue; // at a gain or breakeven — not harvestable
++    const classification = classifyCapitalGainType(assetType, lot.acquiredDate, asOfDate);
++    result.push({
++      assetId,
++      quantity: lot.quantity,
++      costBasisPerUnit: lot.costBasisPerUnit,
++      currentPrice,
++      acquiredDate: lot.acquiredDate,
++      holdingDays: daysBetween(lot.acquiredDate, asOfDate),
++      classification,
++      lossAmount: lossPerUnit * lot.quantity,
++      daysUntilLongTerm: daysUntilLongTerm(assetType, lot.acquiredDate, asOfDate),
++    });
++  }
++  return result;
++}
++
++export interface RealizedGainEvent {
++  sellDate: string;
++  acquiredDate: string;
++  quantity: number;
++  /** Can be negative — a realized loss counts too, for completeness of the FY total. */
++  gain: number;
++  classification: GainClassification;
++}
++
++/**
++ * Every realized gain/loss EVENT for one asset — one entry per FIFO-matched
++ * (lot, sell) pair, each individually classified by ITS OWN matched lot's
++ * acquisition date (a single SELL can span lots bought at different times,
++ * some short-term, some long-term, at the moment of that sale).
++ *
++ * This deliberately duplicates lots.ts's calculateRealizedPnL()'s core FIFO
++ * loop rather than extending it, since that function is a single running
++ * total used elsewhere (P&L totals) and changing its return shape risks
++ * destabilizing already-relied-upon callers; this needs the per-event
++ * detail (dates + classification) that a running total can't expose.
++ */
++export function matchRealizedGainEvents(assetType: AssetType, transactions: Transaction[]): RealizedGainEvent[] {
++  const ordered = [...transactions].sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
++  const openLots: Lot[] = [];
++  const events: RealizedGainEvent[] = [];
++
++  for (const t of ordered) {
++    if (t.transactionType === "BUY") {
++      const costBasisPerUnit = t.price + (t.fees + t.taxes) / t.quantity;
++      openLots.push({ quantity: t.quantity, costBasisPerUnit, acquiredDate: t.transactionDate });
++      continue;
++    }
++
++    const sellProceedsPerUnit = t.price - (t.fees + t.taxes) / t.quantity;
++    let remainingToSell = t.quantity;
++    while (remainingToSell > 1e-9 && openLots.length > 0) {
++      const lot = openLots[0];
++      const consumed = Math.min(lot.quantity, remainingToSell);
++      events.push({
++        sellDate: t.transactionDate,
++        acquiredDate: lot.acquiredDate,
++        quantity: consumed,
++        gain: consumed * (sellProceedsPerUnit - lot.costBasisPerUnit),
++        classification: classifyCapitalGainType(assetType, lot.acquiredDate, t.transactionDate),
++      });
++      lot.quantity -= consumed;
++      remainingToSell -= consumed;
++      if (lot.quantity <= 1e-9) openLots.shift();
++    }
++  }
++
++  return events;
++}
++
++/** The current Indian financial year (1 April – 31 March) as of `today`. */
++export function currentIndianFinancialYear(today: string): { start: string; end: string; label: string } {
++  const d = new Date(today);
++  const year = d.getUTCFullYear();
++  const month = d.getUTCMonth() + 1; // 1-12
++  const startYear = month >= 4 ? year : year - 1;
++  return {
++    start: `${startYear}-04-01`,
++    end: `${startYear + 1}-03-31`,
++    label: `FY ${startYear}-${String(startYear + 1).slice(2)}`,
++  };
++}
+diff --git a/src/lib/services/portfolio.service.ts b/src/lib/services/portfolio.service.ts
+index e083304..05f3b2c 100644
+--- a/src/lib/services/portfolio.service.ts
++++ b/src/lib/services/portfolio.service.ts
+@@ -10,6 +10,7 @@ import { summarizeAssetPosition } from "@/lib/calculations/pnl";
+ import { calculateAllocation } from "@/lib/calculations/allocation";
+ import { calculateXIRR } from "@/lib/calculations/returns";
+ import { netCashFlow } from "@/lib/calculations/cashflow";
++import { findHarvestableLots, matchRealizedGainEvents, currentIndianFinancialYear, type HarvestableLot } from "@/lib/calculations/tax-harvesting";
+ import { todayISO } from "@/lib/utils/date";
+ import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
+ import { periodToDays } from "@/constants/chart-periods";
+@@ -17,6 +18,7 @@ import type { ChartPeriod } from "@/constants/chart-periods";
+ import type { AllocationCategory } from "@/constants/asset-types";
+ import { ASSET_TYPE_GROUP } from "@/constants/asset-types";
+ import type { Holding } from "@/types/domain/holding";
++import type { Asset } from "@/types/domain/asset";
+ import type { CalcResult } from "@/lib/calculations/returns";
+ import type { PortfolioSummary, AllocationSlice, PerformancePoint, ActivityItem } from "@/types/domain/snapshot";
+ 
+@@ -26,6 +28,19 @@ export interface HoldingWithXIRR extends Holding {
+   holdingPeriodDays: number;
+ }
+ 
++export interface TaxHarvestingSummary {
++  financialYear: { start: string; end: string; label: string };
++  harvestableLots: (HarvestableLot & { asset: Asset })[];
++  totalShortTermLoss: number;
++  totalLongTermLoss: number;
++  /** Crypto/VDA unrealized losses — shown for visibility only, NEVER offsettable against anything under Indian law. See tax-harvesting.ts. */
++  totalVDALoss: number;
++  /** This financial year's realized gains, so harvestable losses can be read against something concrete. */
++  realizedSTCG: number;
++  realizedLTCG: number;
++  realizedVDA: number;
++}
++
+ /**
+  * Portfolio Valuation / Aggregation Service.
+  *
+@@ -242,4 +257,57 @@ export const portfolioService = {
+ 
+     return { cash: cashValue, equity, debt, nps: npsValue, ppf: ppfValue, crypto, other };
+   },
++
++  /**
++   * Portfolio-wide tax-loss harvesting summary — see calculations/
++   * tax-harvesting.ts for the classification rules and their caveats. Pulls
++   * together every open lot currently at an unrealized loss across every
++   * security, plus this financial year's realized gains split short/long
++   * term, so the two can be read side by side (a loss is only useful to
++   * harvest if there's a gain of a compatible type to offset it against).
++   */
++  async getTaxHarvestingSummary(): Promise<TaxHarvestingSummary> {
++    const [assets, allTransactions] = await Promise.all([assetsRepository.findAll(), transactionsRepository.findAll()]);
++    const today = todayISO();
++    const fy = currentIndianFinancialYear(today);
++
++    const harvestableLots: (HarvestableLot & { asset: Asset })[] = [];
++    let realizedSTCG = 0;
++    let realizedLTCG = 0;
++    let realizedVDA = 0;
++
++    for (const asset of assets) {
++      const assetTransactions = allTransactions.filter((t) => t.assetId === asset.id);
++      if (assetTransactions.length === 0) continue;
++
++      for (const lot of findHarvestableLots(asset.id, asset.assetType, assetTransactions, asset.currentPrice, today)) {
++        harvestableLots.push({ ...lot, asset });
++      }
++
++      for (const event of matchRealizedGainEvents(asset.assetType, assetTransactions)) {
++        if (event.sellDate < fy.start || event.sellDate > fy.end) continue;
++        if (event.classification === "short_term") realizedSTCG += event.gain;
++        else if (event.classification === "long_term") realizedLTCG += event.gain;
++        else if (event.classification === "flat_rate_vda") realizedVDA += event.gain;
++        // "unsupported" (bonds): deliberately excluded from these totals — see tax-harvesting.ts.
++      }
++    }
++
++    harvestableLots.sort((a, b) => b.lossAmount - a.lossAmount);
++
++    const totalShortTermLoss = harvestableLots.filter((l) => l.classification === "short_term").reduce((s, l) => s + l.lossAmount, 0);
++    const totalLongTermLoss = harvestableLots.filter((l) => l.classification === "long_term").reduce((s, l) => s + l.lossAmount, 0);
++    const totalVDALoss = harvestableLots.filter((l) => l.classification === "flat_rate_vda").reduce((s, l) => s + l.lossAmount, 0);
++
++    return {
++      financialYear: fy,
++      harvestableLots,
++      totalShortTermLoss,
++      totalLongTermLoss,
++      totalVDALoss,
++      realizedSTCG,
++      realizedLTCG,
++      realizedVDA,
++    };
++  },
+ };
+diff --git a/test/tax-harvesting.test.ts b/test/tax-harvesting.test.ts
+new file mode 100644
+index 0000000..0198667
+--- /dev/null
++++ b/test/tax-harvesting.test.ts
+@@ -0,0 +1,168 @@
++import { describe, it, expect } from "vitest";
++import {
++  classifyCapitalGainType,
++  daysUntilLongTerm,
++  findHarvestableLots,
++  matchRealizedGainEvents,
++  currentIndianFinancialYear,
++} from "@/lib/calculations/tax-harvesting";
++import type { Transaction } from "@/types/domain/transaction";
++
++function txn(overrides: Partial<Transaction> = {}): Transaction {
++  return {
++    id: "t1",
++    assetId: "a1",
++    transactionType: "BUY",
++    quantity: 10,
++    price: 100,
++    fees: 0,
++    taxes: 0,
++    transactionDate: "2024-01-01",
++    broker: null,
++    notes: null,
++    createdAt: "2024-01-01T00:00:00.000Z",
++    updatedAt: "2024-01-01T00:00:00.000Z",
++    ...overrides,
++  };
++}
++
++describe("classifyCapitalGainType", () => {
++  it("classifies Indian equity (stock_in) with the 12-month / 365-day threshold", () => {
++    expect(classifyCapitalGainType("stock_in", "2024-01-01", "2024-10-01")).toBe("short_term"); // ~274 days
++    expect(classifyCapitalGainType("stock_in", "2024-01-01", "2025-06-01")).toBe("long_term"); // ~517 days
++  });
++
++  it("classifies equity mutual funds the same as Indian equity (12 months)", () => {
++    expect(classifyCapitalGainType("mutual_fund", "2024-01-01", "2024-06-01")).toBe("short_term");
++    expect(classifyCapitalGainType("mutual_fund", "2024-01-01", "2025-06-01")).toBe("long_term");
++  });
++
++  it("classifies US/foreign stock with the 24-month / 730-day threshold, not 12 months", () => {
++    // ~517 days -- long-term for Indian equity, but still short-term for foreign shares
++    expect(classifyCapitalGainType("stock_us", "2024-01-01", "2025-06-01")).toBe("short_term");
++    expect(classifyCapitalGainType("stock_us", "2024-01-01", "2026-03-01")).toBe("long_term"); // ~789 days
++  });
++
++  it("classifies debt MF units bought before 1 Apr 2023 with the 24-month threshold", () => {
++    expect(classifyCapitalGainType("mutual_fund_debt", "2023-01-01", "2024-06-01")).toBe("short_term"); // ~517 days
++    expect(classifyCapitalGainType("mutual_fund_debt", "2023-01-01", "2025-06-01")).toBe("long_term"); // ~882 days
++  });
++
++  it("classifies debt MF units bought on/after 1 Apr 2023 as ALWAYS short-term, regardless of holding period", () => {
++    expect(classifyCapitalGainType("mutual_fund_debt", "2023-04-01", "2024-01-01")).toBe("short_term");
++    // Even after many years, post-Apr-2023 debt MF units never get long-term treatment.
++    expect(classifyCapitalGainType("mutual_fund_debt", "2023-04-01", "2030-01-01")).toBe("short_term");
++  });
++
++  it("classifies crypto as flat_rate_vda regardless of holding period", () => {
++    expect(classifyCapitalGainType("crypto", "2020-01-01", "2026-01-01")).toBe("flat_rate_vda");
++    expect(classifyCapitalGainType("crypto", "2026-01-01", "2026-01-02")).toBe("flat_rate_vda");
++  });
++
++  it("classifies bonds as unsupported -- deliberately does not guess a rule", () => {
++    expect(classifyCapitalGainType("bond", "2020-01-01", "2026-01-01")).toBe("unsupported");
++  });
++});
++
++describe("daysUntilLongTerm", () => {
++  it("returns the remaining days for a short-term lot", () => {
++    // Held 300 of 365 days for equity -> 65 remaining
++    expect(daysUntilLongTerm("stock_in", "2024-01-01", "2024-10-27")).toBe(65);
++  });
++
++  it("returns null once a lot is already long-term", () => {
++    expect(daysUntilLongTerm("stock_in", "2024-01-01", "2025-06-01")).toBeNull();
++  });
++
++  it("returns null for crypto (no long-term concept exists)", () => {
++    expect(daysUntilLongTerm("crypto", "2024-01-01", "2024-06-01")).toBeNull();
++  });
++
++  it("returns null for post-Apr-2023 debt MF (will never become long-term)", () => {
++    expect(daysUntilLongTerm("mutual_fund_debt", "2023-04-01", "2024-01-01")).toBeNull();
++  });
++});
++
++describe("findHarvestableLots", () => {
++  it("only returns lots currently at a loss, skipping lots at a gain", () => {
++    const transactions = [
++      txn({ id: "t1", transactionType: "BUY", price: 200, quantity: 10, transactionDate: "2024-01-01" }), // will be at a loss
++      txn({ id: "t2", transactionType: "BUY", price: 50, quantity: 10, transactionDate: "2024-02-01" }), // will be at a gain
++    ];
++    const currentPrice = 100;
++
++    const result = findHarvestableLots("a1", "stock_in", transactions, currentPrice, "2025-01-01");
++
++    expect(result).toHaveLength(1);
++    expect(result[0].acquiredDate).toBe("2024-01-01");
++    expect(result[0].lossAmount).toBeCloseTo(1000, 2); // (200-100) * 10
++  });
++
++  it("computes lossAmount and classification correctly for a long-term losing lot", () => {
++    const transactions = [txn({ price: 500, quantity: 5, transactionDate: "2023-01-01" })];
++    const result = findHarvestableLots("a1", "stock_in", transactions, 300, "2025-01-01");
++
++    expect(result).toHaveLength(1);
++    expect(result[0].classification).toBe("long_term");
++    expect(result[0].lossAmount).toBeCloseTo(1000, 2); // (500-300) * 5
++    expect(result[0].daysUntilLongTerm).toBeNull();
++  });
++
++  it("returns nothing when currentPrice is unknown", () => {
++    const transactions = [txn({ price: 500 })];
++    expect(findHarvestableLots("a1", "stock_in", transactions, null, "2025-01-01")).toEqual([]);
++  });
++
++  it("includes crypto lots (tagged flat_rate_vda) rather than silently hiding them", () => {
++    const transactions = [txn({ price: 5_000_000, quantity: 1, transactionDate: "2024-01-01" })];
++    const result = findHarvestableLots("a1", "crypto", transactions, 3_000_000, "2025-01-01");
++    expect(result).toHaveLength(1);
++    expect(result[0].classification).toBe("flat_rate_vda");
++  });
++});
++
++describe("matchRealizedGainEvents", () => {
++  it("splits a single SELL that spans a short-term lot and a long-term lot into two separately-classified events", () => {
++    const transactions = [
++      txn({ id: "b1", transactionType: "BUY", price: 100, quantity: 5, transactionDate: "2023-01-01" }), // will be long-term by the sell date
++      txn({ id: "b2", transactionType: "BUY", price: 150, quantity: 5, transactionDate: "2024-11-01" }), // will still be short-term
++      txn({ id: "s1", transactionType: "SELL", price: 200, quantity: 10, transactionDate: "2025-01-01" }),
++    ];
++
++    const events = matchRealizedGainEvents("stock_in", transactions);
++
++    expect(events).toHaveLength(2);
++    expect(events[0]).toMatchObject({ acquiredDate: "2023-01-01", quantity: 5, classification: "long_term" });
++    expect(events[0].gain).toBeCloseTo(500, 2); // (200-100)*5
++    expect(events[1]).toMatchObject({ acquiredDate: "2024-11-01", quantity: 5, classification: "short_term" });
++    expect(events[1].gain).toBeCloseTo(250, 2); // (200-150)*5
++  });
++
++  it("captures a realized LOSS as a negative gain, correctly classified", () => {
++    const transactions = [
++      txn({ transactionType: "BUY", price: 500, quantity: 10, transactionDate: "2024-06-01" }),
++      txn({ transactionType: "SELL", price: 300, quantity: 10, transactionDate: "2024-12-01" }),
++    ];
++    const events = matchRealizedGainEvents("stock_in", transactions);
++    expect(events).toHaveLength(1);
++    expect(events[0].gain).toBeCloseTo(-2000, 2);
++    expect(events[0].classification).toBe("short_term");
++  });
++});
++
++describe("currentIndianFinancialYear", () => {
++  it("resolves a date in Jan-Mar to the FY that started the PREVIOUS calendar year", () => {
++    const fy = currentIndianFinancialYear("2025-02-15");
++    expect(fy).toEqual({ start: "2024-04-01", end: "2025-03-31", label: "FY 2024-25" });
++  });
++
++  it("resolves a date in Apr-Dec to the FY that started the SAME calendar year", () => {
++    const fy = currentIndianFinancialYear("2025-08-15");
++    expect(fy).toEqual({ start: "2025-04-01", end: "2026-03-31", label: "FY 2025-26" });
++  });
++
++  it("treats April 1st itself as the first day of the new FY", () => {
++    const fy = currentIndianFinancialYear("2025-04-01");
++    expect(fy.start).toBe("2025-04-01");
++  });
++});

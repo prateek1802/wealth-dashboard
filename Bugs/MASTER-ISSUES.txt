@@ -68,14 +68,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
     NEEDS: browser console error, network tab response, or Vercel function logs from an
     actual failed load.
 
-11. Sharpe/Sortino ratios likely distorted.
-    risk.ts hardcodes Math.sqrt(252) (correct only for daily return series), but snapshots
-    are written opportunistically (whenever the dashboard loads), not daily — so real
-    intervals are irregular and usually longer than a day. Numbers on Analytics page are
-    probably inflated/wrong relative to what they claim to represent.
-    NEEDS A DECISION: derive the annualization factor from actual average snapshot
-    interval, or just label these as unreliable until snapshot cadence improves.
-
 12. Backup/Restore silently excludes 2 of 11 data tables — price history and portfolio
     snapshots.
     Checked backup.service.ts's ENTITY_LABELS against all 11 repositories —
