@@ -11,7 +11,7 @@ import { EditAssetDialog } from "./edit-asset-dialog";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
 import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { deleteTransactionAction } from "@/features/transactions/actions";
-import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
 import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
@@ -70,7 +70,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">{quantityLabel(asset.assetType)}</span>
-          <span className="font-tabular text-lg font-medium text-ink">{holding.quantity}</span>
+          <span className="font-tabular text-lg font-medium text-ink">{formatQuantity(holding.quantity)}</span>
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">{avgPriceLabel(asset.assetType)}</span>
@@ -134,7 +134,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
                       <Badge className={t.transactionType === "BUY" ? "bg-gain-soft text-gain" : "bg-loss-soft text-loss"}>
                         {t.transactionType}
                       </Badge>
-                      {t.quantity} @ {formatCurrencyPrecise(t.price, asset.currency)}
+                      {formatQuantity(t.quantity)} @ {formatCurrencyPrecise(t.price, asset.currency)}
                     </span>
                     <span className="text-xs text-ink-muted">
                       {formatDate(t.transactionDate)} {t.broker && `· ${t.broker}`} {(t.fees > 0 || t.taxes > 0) && `· fees/taxes ${formatCurrency(t.fees + t.taxes, asset.currency)}`}

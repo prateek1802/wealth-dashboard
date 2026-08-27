@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { StatTile } from "@/features/analytics/components/stat-tile";
 import { portfolioService } from "@/lib/services/portfolio.service";
-import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatCurrency, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
 import { ROUTES } from "@/constants/routes";
@@ -109,7 +109,7 @@ export default async function TaxHarvestingPage() {
                             {CLASSIFICATION_LABELS[lot.classification]}
                           </Badge>
                         </td>
-                        <td className="px-4 py-3 text-right font-tabular">{lot.quantity}</td>
+                        <td className="px-4 py-3 text-right font-tabular">{formatQuantity(lot.quantity)}</td>
                         <td className="px-4 py-3 text-right font-tabular text-loss">-{formatCurrency(lot.lossAmount, lot.asset.currency)}</td>
                         <td className="px-4 py-3 text-right font-tabular text-ink-muted">
                           {lot.daysUntilLongTerm != null ? `${lot.daysUntilLongTerm}d` : "—"}

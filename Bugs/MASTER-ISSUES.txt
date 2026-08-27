@@ -86,13 +86,6 @@ issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
     Not implemented. The grouping key it needs (ASSET_TYPE_GROUP) already exists in
     constants/asset-types.ts — needs an aggregation function built on top of it.
 
-15. MF-specific detail fields — avg NAV, present NAV, units held — instead of reusing
-    the stock-style "Qty / Avg. Cost / Current Price" format.
-    Confirmed gap in both the card (investment-card.tsx — no qty/price fields shown at
-    all, any asset type) and table (portfolio-view.tsx — generic "Qty"/"Avg. Cost"
-    headers regardless of type). Needs conditional labels/formatting based on assetType,
-    likely also a new MF-specific section on the investment-detail page.
-
 17. Auto-refresh prices at market close daily, whether app is open or not.
     Confirmed no vercel.json, no scheduled workflow anywhere. Currently only refreshes
     opportunistically when someone opens the app (documented V1 trade-off in

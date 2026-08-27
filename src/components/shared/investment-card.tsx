@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
-import { formatCurrency, formatCurrencyPrecise, formatSignedCurrency, formatPercent } from "@/lib/utils/currency";
+import { formatCurrency, formatCurrencyPrecise, formatSignedCurrency, formatPercent, formatQuantity } from "@/lib/utils/currency";
 import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { ROUTES } from "@/constants/routes";
 import { cn } from "@/lib/utils/cn";
@@ -32,7 +32,7 @@ export function InvestmentCard({ holding }: { holding: Holding }) {
         <div className="grid grid-cols-3 gap-2 text-xs">
           <div className="flex flex-col gap-0.5">
             <span className="text-ink-muted">{quantityLabel(holding.asset.assetType)}</span>
-            <span className="font-tabular text-ink">{holding.quantity}</span>
+            <span className="font-tabular text-ink">{formatQuantity(holding.quantity)}</span>
           </div>
           <div className="flex flex-col gap-0.5">
             <span className="text-ink-muted">{avgPriceLabel(holding.asset.assetType)}</span>

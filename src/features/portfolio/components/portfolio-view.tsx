@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
 import { refreshLivePricesAction } from "../actions";
-import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
 import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
 import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
@@ -124,7 +124,7 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
                           <span className={cn("text-xs text-ink-muted", isMF && "font-mono")}>{getAssetDisplayLabel(h.asset).secondary}</span>
                         </Link>
                       </td>
-                      <td className="px-4 py-3 text-right font-tabular">{h.quantity}</td>
+                      <td className="px-4 py-3 text-right font-tabular">{formatQuantity(h.quantity)}</td>
                       <td className="px-4 py-3 text-right font-tabular">{formatCurrencyPrecise(h.weightedAverageCost, h.asset.currency)}</td>
                       <td className="px-4 py-3 text-right font-tabular">
                         {h.asset.currentPrice != null ? formatCurrencyPrecise(h.asset.currentPrice, h.asset.currency) : "—"}
