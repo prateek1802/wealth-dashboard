@@ -1,72 +1,101 @@
 # Wealth Dashboard — Project Status (paste this into a new chat to continue)
 
 **Repo:** github.com/prateek1802/wealth-dashboard · Next.js + Supabase, deployed on Vercel
+**Live:** https://wealth-dashboard-rouge.vercel.app/ — hosted and working
 **Local dev:** `npm run dev`. Demo mode (no `.env.local`) needs no login. Real mode requires Supabase env vars — auth is then required.
 
 ## Workflow (say this to Claude in a new chat)
 > "Continue work on this project. For every change, apply a **single git patch file** (not a zip) — I'll run `git apply <file>.patch` then `npm run dev`. Only tell me to run `npm install` if a dependency actually changed. Verify with `tsc`, `eslint`, `vitest`, and `next build` before giving me the patch."
 
-**Critical recurring gotcha this session:** several patches added or changed Supabase schema, and more than once the code shipped before the DB migration was actually run — causing real crashes (`Could not find column/table`). **After applying any patch that touches `supabase/schema.sql` or `supabase/sync-schema.sql`, always run the full `sync-schema.sql` in the Supabase SQL Editor before testing.** It's idempotent — safe to run in full, every time, even if some of it is already applied.
+**Recurring gotcha to watch for:** patches that touch `supabase/schema.sql` or `supabase/sync-schema.sql` must be followed by running the full `sync-schema.sql` in the Supabase SQL Editor before testing — it's idempotent, safe to run in full every time.
 
-## Architecture (updated)
-- `src/lib/calculations/*` — pure financial math: FIFO realized P&L (kept separate from weighted-avg cost), XIRR, CAGR, growth projections, NPS statement classification, risk metrics (volatility/Sharpe/Sortino)
-- `src/lib/import/*` — **new this session.** `nps-statement-parser.ts`: reads real NSDL/Protean exports (SheetJS for the multi-sheet `.xlsx` consolidated format; a best-effort, unverified CSV parser for the single-period format), classifies each row, pairs scheme switches, plans idempotent import.
+## Architecture
+- `src/lib/calculations/*` — pure financial math: FIFO realized P&L, XIRR, CAGR, growth projections, NPS statement classification, risk metrics (volatility/Sharpe/Sortino), and `tax-harvesting.ts` (new — Indian capital-gains classification: short/long-term, flat-rate VDA/crypto under Section 115BBH, unsupported for bonds; informational only, not tax advice)
+- `src/lib/import/*` — `nps-statement-parser.ts`: reads real NSDL/Protean exports (SheetJS for the multi-sheet `.xlsx` consolidated format, verified end-to-end; a best-effort CSV parser for the single-period format, still unverified — no real sample available)
+- `src/lib/market-data/live-provider.ts` — Yahoo/CoinGecko/mfapi.in for securities; `fetchNPSNAVQuote()` for NPS via npsnav.in's **Simple** endpoint (see Open issue #1 below — this is the known weak point)
 - `src/lib/database/repositories/*` — only layer touching Supabase; each has a demo-mode in-memory fallback
-- `src/lib/services/*` — orchestration; `portfolio.service.ts` is the one aggregation point for cross-asset-class views (dashboard, analytics); `nps.service.ts` now also owns scheme-level import/derivation logic
+- `src/lib/services/*` — orchestration; `portfolio.service.ts` is the one aggregation point for cross-asset-class views; `nps.service.ts` owns scheme-level import/derivation logic
 - `src/features/*` — per-screen components + Server Actions
-- Auth: Supabase Auth + `proxy.ts` (renamed from `middleware.ts` via official Next 16 codemod) + Row Level Security on every table (`user_id uuid default auth.uid()`)
-- Two SQL files in `supabase/`: `schema.sql` (fresh installs) and `sync-schema.sql` (idempotent — safe to rerun on the existing deployed DB any time schema drifts)
-- **New NPS data model:** `nps_accounts` (existing, now with `scheme_preference`) → `nps_scheme_holdings` (one row per E/C/G/A scheme actually held, `units_held` + `last_nav` + optional `npsnav_scheme_code`) → `nps_scheme_transactions` (the real, dated, signed ledger — contribution/switch_in/switch_out/fee/withdrawal). `nps_accounts.current_corpus` is now a **fallback only**, used solely for accounts that have never had a statement imported (see `npsService.getEffectiveCorpus()`).
+- **Holdings hub** (`src/features/holdings/`, route `/holdings`) — replaced the old per-asset-class sidebar dropdown. Every category (securities, cash, FDs, NPS, PPF, liabilities, watchlist) shown as a sorted-by-value clickable card routing to its own detail page. The old dropdown/collapsible sidebar logic was fully removed (not left dangling) from both desktop sidebar and mobile nav — confirmed clean. Correctly excludes zero-value liabilities, parallelized data fetch, `force-dynamic` set.
+- Auth: Supabase Auth + `proxy.ts` (renamed from `middleware.ts`) + Row Level Security on every table (`user_id uuid default auth.uid()`), verified zero RLS gaps
+- Two SQL files in `supabase/`: `schema.sql` (fresh installs) and `sync-schema.sql` (idempotent, safe to rerun any time)
+- **NPS data model:** `nps_accounts` (has `scheme_preference`) → `nps_scheme_holdings` (one row per E/C/G/A scheme, `units_held` + `last_nav` + `last_nav_date` + optional `npsnav_scheme_code`) → `nps_scheme_transactions` (real, dated, signed ledger). `nps_accounts.current_corpus` is a fallback only, for accounts never imported (`npsService.getEffectiveCorpus()`).
+- 25 production dependencies, 12 dev — not bloated. TypeScript strict mode on. 77+ tests, including real-world edge cases, not just happy path.
 
-## Feature checklist
-✅ Core: dashboard, portfolio (grouped by asset class, separate sidebar link per class held, table view shows XIRR not allocation %), transactions (paginated, 50/page with "View more"), analytics, goals, watchlist
-✅ Asset classes: stocks/ETF/MF (labels shortened to "Equity MF" / "Debt MF")/crypto/bonds, Bank Accounts, Fixed Deposits (+edit, +withdraw), NPS (see dedicated section below), PPF (+withdraw, principal/interest split), Liabilities (credit cards/loans, subtracted from net worth)
-✅ CSV import/export for transactions; full JSON backup/restore (Backup page)
-✅ Live price refresh: per-asset, per-asset-class, portfolio-wide, and a dashboard-level "Refresh all" — Yahoo/CoinGecko/mfapi.in, correctly skips zero-holding assets
-✅ FIFO-based average cost for stocks/MF (fixed a bug where an offsetting same-day buy+sell shifted displayed average cost)
-✅ Historical price charts (accumulate from Refresh Prices, never fabricated)
-✅ XIRR-based growth projections (per-asset + portfolio), with a floor: holdings <1yr old don't get a misleading 10yr compound
-✅ Portfolio-wide XIRR is pooled (securities + NPS) and **consistent between Dashboard and Analytics** — both call the same `npsService.getCashflows()` now
-✅ Maturity/reminder bell (FD, PPF's real 15yr rule, NPS retirement year, goal dates)
-✅ Transaction edit (was built but unreachable — now wired into both the main Transactions table and per-asset history)
-✅ Asset display fix: mutual funds show real name, not scheme code (cards/tables/detail/activity)
-✅ Zero-quantity (fully sold-out) holdings no longer appear on Portfolio — realized P&L still counted in totals
-✅ Card icon-overlap UI fix — applied to FD (active + withdrawn sections), Bank Accounts, and NPS account cards (all the same absolute-positioned-button pattern)
-✅ Responsive tables (Transactions, Portfolio, Analytics growth projection) — `min-w` added so they scroll instead of squishing on narrow viewports
-✅ Dashboard "Day Change" bug fixed — was diffing today's net worth against the snapshot it had just written for itself, always showing ~₹0
-✅ Risk metrics (Volatility/Sharpe/Sortino) — annualization factor is now derived from actual snapshot-date gaps instead of a hardcoded `Math.sqrt(252)` (see **Open issue** below — user reports this still isn't producing expected results, not yet resolved)
+## Feature checklist (done)
+✅ Core: dashboard, Holdings hub (`/holdings`), portfolio, transactions (paginated, "View more"), analytics, goals, watchlist, tax-loss harvesting (`/tax-harvesting`)
+✅ Asset classes: stocks/ETF/MF/crypto/bonds, Bank Accounts, Fixed Deposits, NPS (real per-scheme E/C/G/A tracking), PPF (principal/interest split), Liabilities (subtracted from net worth)
+✅ CSV import/export for transactions; JSON backup/restore (see Open issue #4 — incomplete)
+✅ Live price refresh: per-asset/class/portfolio + dashboard "Refresh all" (Yahoo/CoinGecko/mfapi.in — see Open issue #2, doesn't include NPS)
+✅ FIFO-based average cost for stocks/MF; historical price charts; XIRR growth projections with a <1yr floor
+✅ Portfolio-wide pooled XIRR, consistent between Dashboard and Analytics (single source confirmed)
+✅ NPS full rewrite (all 8 parts), validated to the paisa against a real subscriber statement (₹7,70,430 invested / ₹8,82,252 corpus); idempotent import; switch pairing on amount + date window (not same-day — real settlement lag ~2 days); import UI surfaces unrecognized rows/unmatched switches
+✅ NPS live NAV via npsnav.in — search-and-confirm only, never auto-guessed PFM→scheme mapping
+✅ Maturity/reminder bell, transaction edit (main table + per-asset history), asset display fix (MF real name not scheme code), zero-quantity holdings hidden but counted in realized P&L, card icon-overlap fix (FD/Bank/NPS), responsive tables, Dashboard Day Change bug fixed
+✅ Risk metrics annualization now derived from real snapshot-date gaps — this surfaced a **new** bug, see Open issue #3
 
-## NPS — full rewrite this session (was the single largest body of work)
-Real NPS is 3–4 separate sub-funds (E/C/G/A), each with its own unit balance and NAV — not one lump-sum number. This was rebuilt from the ground up, validated against a real subscriber's actual 193-row, 3-scheme consolidated statement at every stage (exact match to the paisa: ₹7,70,430.00 invested, ₹8,82,252.12 corpus).
+## Open issues, ranked (from a full source-level audit — see `Bugs/All Issues.txt` in the repo for complete detail on every item below, plus 2 fully-written patch specs)
 
-- **Schema:** `nps_scheme_holdings` + `nps_scheme_transactions` tables, `scheme_preference` + PFM dropdown on `nps_accounts`
-- **Classification** (`lib/calculations/nps-classification.ts`): pure, tested function that sorts real statement rows into contribution/switch_in/switch_out/fee/withdrawal, and correctly skips one-off unit-reissuance events (e.g. PFRDA's "Multiple NAV Framework" migration) via a units-match heuristic — not a hardcoded string match, so it should survive future differently-worded reissuance events too
-- **Import parser** (`lib/import/nps-statement-parser.ts`): reads the real multi-sheet `.xlsx` export via SheetJS (validated end-to-end against real data); a `.csv` single-period parser exists but is **unverified** — no real sample was available to test against
-- **Switch pairing:** found and corrected a wrong assumption in the original spec — a switch-out and its matching switch-in are **not same-day** in real data, they're ~2 calendar days apart (settlement lag). Pairing matches by amount + a date window instead.
-- **Idempotent import:** re-uploading the same or an overlapping statement never duplicates rows (dedup by exact date+description+units); switch pairs get correctly re-linked even when their two legs arrive in separate imports
-- **Import UI:** "Import statement" button per account, drag/click upload, surfaces unrecognized rows and unmatched switches rather than silently swallowing them
-- **XIRR consistency:** scheme-tracked accounts now feed real dated contribution/withdrawal cash flows into the pooled portfolio XIRR (switches and fees correctly excluded — they're not new money); accounts without an imported statement still use the old contribution-log + "untracked gap" heuristic as a fallback
-- **UI:** per-scheme (E/C/G/A) value breakdown on each account card; employer contribution field (was hardcoded to 0)
-- **Live NAV refresh** (`npsnav.in`, real & verified API): deliberately built as **search-and-confirm, never auto-matched** — PFM name to scheme_code mapping isn't reliable enough to guess without risking a silently-wrong NAV attached to the wrong fund. User searches and picks once per scheme; refresh only fires for confirmed mappings. `npsnav.in`'s dataset is CC BY-NC 4.0 (personal/non-commercial use) — fine for this app, worth knowing.
-- **New dependency:** `xlsx` (SheetJS), npm-registry version — has two known, unpatched vulnerabilities (prototype pollution, ReDoS). Low real risk here (only ever parses the user's own uploaded file, server-side), but flagged and not silently accepted. A patched version exists on SheetJS's own CDN if this ever matters more.
-- **Known limitation, by design:** if an imported statement doesn't cover an account's entire history, XIRR can still overstate itself the same way the old model needed correcting for — there's no equivalent "untracked gap" correction once an account is on scheme-level tracking. Import the full consolidated statement, not just recent years.
-- **Observed in real use (not a code bug):** small residual (~0.1%) differences between this app's corpus/NAV figures and Protean's own live app, even after connecting live NAV — verified this app's DB precision (`numeric(18,4)`/`numeric(12,4)`) matches the source data exactly, so this looks like inherent cross-source noise between `npsnav.in`'s feed and Protean's internal figures, not something further code changes can fully close.
+1. **NPS "as of" timestamp is fetch time, not the NAV's real publication date** — spec'd, not built. This just caused a real 2+ day debugging session: npsnav.in's own upstream data was stuck/stale, but the app kept showing "as of today" the whole time because the timestamp was never the true NAV date. **Fix (fully spec'd in `Bugs/All Issues.txt` under NPS-DETAILED-ENDPOINT-PROMPT):** switch `fetchNPSNAVQuote()` to npsnav.in's "Detailed" endpoint (confirm exact response shape against their current docs first — not re-verified this session), store the real last-updated date in `nps_scheme_holdings.last_nav_date` instead of fetch time, add a visible staleness warning (amber state) on the NPS page if a scheme's data is >~2 days old, apply the same check to `refreshLiveNAVs()`'s toast/summary. Keep fail-soft error handling and the no-auto-guess design unchanged. Add a boundary test (exactly 2 days / 3 days old).
+2. **Audit trail for edits/deletes** — no history kept anywhere. Highest real risk item: silent, irreversible data loss on financial records is currently possible.
+3. **CSV transaction import isn't idempotent** — re-uploading duplicates rows silently. The dedup pattern already exists and is proven in the NPS importer; just needs porting here.
+4. **Analytics risk-metric outlier bug** — Volatility/Sharpe/Sortino sometimes show implausible values (>500). Root cause: computed from variance across only ~8 snapshots, so one bad historical data point (from an NPS corpus-methodology change mid-transition, e.g. the old corpus-doubling bug) dominates the whole metric. Full redesign spec exists in `Bugs/All Issues.txt` (ANALYTICS-REDESIGN-PROMPT) — fix the outlier bug first (cutoff-date filtering + outlier-return exclusion + a test with a deliberately planted extreme snapshot) before building the nicer UI around it.
+5. **"Refresh all" doesn't mean all** — Dashboard's button only refreshes securities, has zero awareness NPS live NAV refresh exists. Either wire NPS in or rename the button.
+6. **Backup/Restore is incomplete** — silently excludes `price_history` and `portfolio_snapshots` (2 of 11 tables), despite being marketed as a full JSON backup.
+7. **Liabilities reported as not loading** — page/service/repository/schema/RLS all checked internally consistent in source; this looks like a live/deployment issue (schema drift, auth session, transient error) rather than a static code bug. Needs a real browser console error or Vercel log to progress.
+8. Goals: same card icon-overlap bug already fixed for Bank Accounts/FDs/NPS, never applied to `goals-view.tsx`.
+9. Goals have no edit — only add/delete.
+10. Watchlist shows no current price at all despite the data already existing on `Asset` — makes the target-price/stop-loss feature hard to use. Also no refresh capability reaches watchlist assets.
+11. Category-wise XIRR (grouped by asset class) not implemented — the grouping key (`ASSET_TYPE_GROUP`) already exists.
+12. MF holdings still show generic "Qty / Avg. Cost" instead of NAV/units terminology (card + table).
+13. Dashboard fetches the same base data ~5x per page load (`getPortfolioSummary`/`getAssetAllocation`/`getTopHoldings`/`getSegregatedBreakdown` each independently recompute holdings). Not a current speed problem (runs concurrently in one `Promise.all`) but compounds as transaction count grows (267+ already). Fix: one shared `getDashboardData()`.
+14. No error boundaries (`error.tsx`) or `loading.tsx` anywhere in the App Router.
+15. No server-side error logging anywhere.
+16. Vercel Analytics / Speed Insights not installed.
+17. CAGR (and the risk metrics in #4) mix old- and new-methodology snapshots invisibly — could show an artificial jump that's really "the math got more correct," not real growth. Needs a caption or documented one-time distortion.
+18. `recharts` not code-split via `next/dynamic` — ships in the initial bundle on every page with a chart.
+19. No freshness indicator for securities prices in the UI (data exists via `currentPriceUpdatedAt`; NPS already does this correctly via `last_nav_date`).
+20. Decimal-safe money math not adopted — plain JS `Number` throughout. Low risk at current volume, worth adopting going forward.
+21. No undo window on deletes (confirm dialog only).
+22. No auto-refresh at market close — needs real new infra (Vercel Cron + protected API route), not a code-only patch.
 
-## Open issue — NOT resolved, needs next session
-- **Risk metric annualization fix didn't work as intended.** The fix (deriving the annualization factor from actual snapshot-date gaps instead of hardcoding `Math.sqrt(252)`) was shipped and unit-tested (confirmed the math scales correctly in isolated tests), but the user reports it "didn't work" in the live app. Needs a fresh look — check what real snapshot dates/gaps actually look like in the live DB, and whether something about how `analytics/page.tsx` calls the updated functions isn't behaving as expected in practice.
-
-## Known issues — NOT yet fixed
-- Portfolio performance graph reflects snapshot-recording dates, not real historical transaction dates — **documented limitation, not a bug** (no historical price data source exists to compute true past values)
-- NPS `.csv` (single-period Format A) import — unverified against a real sample
-- The old (pre-scheme-tracking) NPS withdrawal path still doesn't log a dated ledger event — only matters for accounts that haven't imported a statement yet
-- `npsnav.in`'s "as of" date shown in the UI is stamped at fetch time, not the NAV's true declared date (their lightweight endpoint doesn't return one) — can be misleading if you refresh before the day's NAV is actually published
+**Confirmed NOT bugs, worth knowing:**
+- Net worth itself is consistent everywhere (single source, verified)
+- XIRR is consistent Dashboard vs Analytics
+- DB indexes are thorough (18, all RLS columns + real query patterns)
+- `computeHoldings()` is correctly batched, not N+1
+- Price refresh is deliberately sequential to avoid bursting rate-limited free APIs
+- All 15 page.tsx files use Server Components correctly
+- No `dangerouslySetInnerHTML` anywhere (no XSS risk found)
+- Secrets handling clean
 
 ## Deliberately deferred (explain why if asked)
 - Push notifications / email — no infra for it yet, in-app bell only
 - Multi-currency conversion — not implemented
-- FD/PPF/cash are not included in the pooled portfolio XIRR — each has its own modeling questions worth a separate pass
+- FD/PPF/cash not included in pooled portfolio XIRR — each has its own modeling questions worth a separate pass
 
-## This session's patches, in order
-`fifo-average-cost-fix` → `refresh-scoping-fix` → `per-asset-refresh` → `bank-account-card-overlap-fix` → `transaction-edit-wiring` → `responsive-table-fix` → `table-xirr-column` → `nps-part1-sync-fix` → `nps-part2-3-schema-classification` → `nps-part4-import-parser` → `nps-part8-persistence-import` → `nps-part9-import-ui` → `nps-part6-xirr-consistency` → `nps-part7-ui-gaps` → `nps-part5-live-nav` → `dashboard-xirr-refresh-split` → `dashboard-day-change-fix` → `mf-label-shorten` → `transaction-history-pagination` → `risk-annualization-fix` (shipped, not yet confirmed working)
+## Features worth adding
 
-20 patches this session. All verified with `tsc` + `eslint` + `vitest` + `next build` before delivery; the NPS rewrite specifically validated against a real subscriber's actual statement data at multiple stages, not just synthetic test fixtures.
+No new infra needed:
+- Allocation drift / rebalancing alerts
+- Gold/property as first-class asset types
+- SIP reminder tracking
+- Portfolio benchmarking vs. Nifty/Sensex
+- Rules-based weekly "what changed" recap
+- Cash-flow forecast from existing maturity data
+
+Needs new infra:
+- Index benchmarking data source
+- Push/email delivery
+- An interactive scenario / "fast forward" planner
+
+Biggest single differentiator, its own project:
+- Account Aggregator (RBI framework) auto-sync
+
+Deliberately low fit, skip unless asked:
+- Full budgeting/expense categorization
+- Deep crypto wallet/DeFi scanning
+- Estate planning/legacy handoff
+
+## Full detail
+This file is the condensed working view. `Bugs/All Issues.txt` in the repo root has the full source-level audit (consistency bugs, performance findings, "what's already professional-grade" notes) plus two complete, ready-to-hand-off patch specs (NPS Detailed-endpoint fix, Analytics redesign) verbatim — paste the relevant spec alongside this file when starting a session focused on either.
