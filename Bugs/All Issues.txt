@@ -1,0 +1,1469 @@
+====================================================================================
+PART I — CONSOLIDATED SYNTHESIS (the working view — read this day to day)
+Merges: ANALYTICS-REDESIGN-PROMPT.txt, code_optimization.txt, FEATURE-IDEAS.txt,
+FINAL-AUDIT-REPORT.txt, MASTER-ISSUES.txt, MASTER-REPORT.txt, NPS-DETAILED-ENDPOINT-
+PROMPT.txt. Full verbatim originals preserved in Part II below — nothing here
+replaces them, this is the organized front door.
+
+CORRECTION APPLIED: MASTER-REPORT.txt's NPS NAV section concluded "RESOLVED, NOT A
+BUG." That was accurate at the time it was written, but a later investigation
+(captured in NPS-DETAILED-ENDPOINT-PROMPT.txt) found npsnav.in's own data was
+genuinely stuck for 2+ days — a real upstream issue the app's misleading "as of"
+timestamp was masking. Section 1 below reflects the corrected, complete story.
+====================================================================================
+
+------------------------------------------------------------------------------------
+1. WHAT'S DONE
+------------------------------------------------------------------------------------
+
+NPS REWRITE — ALL 8 PARTS COMPLETE, EACH INDEPENDENTLY VERIFIED:
+  Part 1: Contribution-sync bug fixed.
+  Part 2: Real units×NAV schema, RLS extended, DB-level dedup.
+  Part 3: Classification rules — independently reimplemented and reproduced your
+          exact real numbers (Rs.7,70,430 invested / Rs.8,82,252 corpus).
+  Part 4: Import parser, both statement formats — caught a real spec error
+          (switch settlement lag is ~2 days, not same-day).
+  Part 5: Live NAV refresh via npsnav.in — endpoint URLs verified against real docs;
+          correctly refuses to auto-guess PFM-to-scheme mapping.
+  Part 6: Dashboard/Analytics XIRR inconsistency fixed.
+  Part 7: Employer contribution field + per-scheme breakdown UI.
+  Part 8: Idempotent statement re-upload, tested.
+
+NPS NAV DISCREPANCY INVESTIGATION — FULL STORY, CORRECTED CONCLUSION:
+  Traced end-to-end after a real user report of a growing corpus gap (~₹817 →
+  ~₹4,000 → ~₹1,000 → back up) and "refresh does nothing." Multiple hypotheses were
+  tested and ruled out one by one, all independently verified against actual code
+  and actual data, not assumed:
+    - App-side math: RULED OUT as the cause. Fetch logic confirmed correct
+      (cache: "no-store" set, genuinely re-fetches every time). DB write path,
+      getEffectiveCorpus() derivation, server-side caching (none found),
+      force-dynamic on page+layout (confirmed set), ROUTES.dashboard (confirmed
+      unchanged by an unrelated patch) — all checked clean.
+    - Units-count mismatch from delete+recreate: RULED OUT. Independently compared
+      app's implied units against Protean's real statement units per scheme (E, C,
+      G) — matched to within a rounding difference of ~0.001-0.013 units, i.e.
+      essentially exact. The full-statement re-import correctly captured real
+      holdings; no leftover/orphaned data from the delete.
+    - App's arithmetic: CONFIRMED CORRECT. Cross-checked the Dashboard's allocation
+      % against the confirmed-correct NPS value (25.24% computed vs. 25.2%
+      displayed — matched). Independently recomputed units × live NAV and it
+      reproduced the app's displayed per-scheme values to the rupee.
+    - "NAV should update throughout the day": CLARIFIED, not a bug. NAV is
+      published once per trading day, not continuously — a value unchanged at 4pm
+      vs. that morning is expected correct behavior.
+    - REMAINING GAP, ROOT CAUSE FOUND: fetched npsnav.in's own live site directly
+      and found its own banner read "NAV updated: 24-08-2026" while checks were
+      happening on the 26th-27th — i.e. npsnav.in's OWN data had been stuck/stale
+      for 2+ days, independent of anything in this app. The app was correctly,
+      faithfully reporting exactly what npsnav.in had — the upstream source itself
+      was the problem.
+    - WHY THIS WASN'T OBVIOUS SOONER: the app's "as of" timestamp is the moment the
+      APP fetched, not npsnav.in's real last-updated date (npsnav.in's "Simple"
+      endpoint returns no date at all) — so the app kept showing "as of today" the
+      entire time the underlying data was actually 2 days old. This directly
+      prevented the staleness from being caught earlier.
+  ACTIONS TAKEN: (a) drafted and the user is posting a GitHub issue to npsnav.in's
+  maintainer reporting the stuck sync with specific scheme codes/values as evidence;
+  (b) a fix was spec'd (see NPS-DETAILED-ENDPOINT-PROMPT.txt, full text in Part II)
+  to switch to npsnav.in's "Detailed" endpoint, store the REAL last-updated date
+  instead of fetch time, and add a visible staleness warning in the UI if a
+  connected scheme's data is more than ~2 days old — so this class of issue is
+  caught automatically next time, not via manual multi-day cross-referencing.
+  ALSO EXPLORED: switching away from npsnav.in to Protean's own official NAV portal
+  or individual PFM sites directly. Checked — both are HTML pages built for humans,
+  not documented APIs; scraping them would be more fragile (breaks silently on
+  layout changes) and, for the PFM-specific option, not generic across fund
+  managers. Conclusion: npsnav.in remains the best available free, API-based option
+  despite this incident — the fix is making staleness visible, not switching
+  sources.
+  STATUS: Diagnosis complete and correct. Fix (Detailed endpoint + staleness
+  warning) is spec'd and ready to hand to the coding chat, not yet built as of the
+  files merged here.
+
+HOLDINGS HUB (replaces old sidebar dropdown) — DONE, VERIFIED CLEAN:
+  New /holdings page: every category (securities, cash, FDs, NPS, PPF, liabilities,
+  watchlist) shown as a sorted-by-value clickable card, routing to its own detail
+  page. Confirmed the old per-asset-class dropdown/collapsible sidebar logic was
+  genuinely REMOVED (not left dangling alongside the new page) — checked both
+  desktop sidebar and mobile nav, ~50 lines of old per-category logic cleanly
+  replaced with a single "Holdings" link in both places. Correctly excludes a
+  zero-value liabilities card, correctly parallelized data fetch, force-dynamic set.
+
+OTHER FIXES CONFIRMED LANDED:
+  - Day Change bug fixed. Sharpe/Sortino annualization fixed (real snapshot-gap
+    factor, not hardcoded daily — though see NEW BUG below, this fix had a side
+    effect). MF labels shortened. "View more" pagination added (Transactions table
+    + per-asset history). Bank Account / FD card icon-overlap fixed. Zero-holding
+    refresh waste fixed; scoped refresh buttons added. Transaction edit UI wired
+    up. Responsive table/resize bug fixed. "Refresh all" button added to Dashboard
+    (scope gap noted in Section 2). Tax-loss harvesting feature added (new
+    /tax-harvesting page + calculations module).
+
+------------------------------------------------------------------------------------
+2. CONSISTENCY BUGS — "SAME NUMBER, DIFFERENT VALUE IN DIFFERENT PLACES"
+------------------------------------------------------------------------------------
+
+✅ Net worth itself IS consistent everywhere — single getPortfolioSummary() source,
+   verified across Dashboard and Analytics, NPS uses live derived corpus correctly.
+
+⚠️ CAGR mixes old- and new-methodology numbers invisibly. Compares your oldest
+   stored snapshot (computed under old, less-correct logic — especially old NPS
+   corpus handling) against today's freshly-computed net worth. Could show an
+   artificial jump that's really just "the math got more correct," not real growth.
+   Fix: a caption noting pre-rewrite snapshots may not be directly comparable, or
+   accept as a known one-time distortion. (See also the Analytics redesign spec,
+   Part II, which addresses this page more broadly.)
+
+⚠️ "Refresh all" doesn't mean all. Dashboard's button only calls
+   refreshLivePricesAction() (securities) — zero awareness NPS live NAV refresh
+   exists. Confirmed still the case.
+
+⚠️ NPS "as of" timestamp is misleading — shows fetch time, not the NAV's real date.
+   UPDATED STATUS: this is no longer just a theoretical concern — it's exactly what
+   masked the real 2-day npsnav.in staleness incident described in Section 1. Fix
+   fully spec'd in NPS-DETAILED-ENDPOINT-PROMPT.txt (full text in Part II),
+   promoted to a high-priority item given it just caused a real multi-day
+   debugging session.
+
+CHECKED, FOUND CONSISTENT: XIRR (Dashboard vs Analytics), holdings/currentValue
+(single computeHoldings() source), NPS page has no separate XIRR to conflict.
+
+------------------------------------------------------------------------------------
+3. MAJOR BUGS / GAPS — CORE APP (re-verified against current code)
+------------------------------------------------------------------------------------
+
+❌ No audit trail for financial record edits/deletes. Highest real risk — silent,
+   irreversible data loss on financial history is currently possible.
+
+❌ CSV transaction import isn't idempotent. Re-uploading the same file duplicates
+   transactions silently. Fix pattern already proven in your own NPS importer —
+   just needs porting to this older path.
+
+❌ Backup/Restore silently excludes price_history and portfolio_snapshots — 2 of 11
+   tables never backed up, despite being marketed as a full JSON backup.
+
+❌ Liabilities section reported as not loading. Checked page/service/repository/
+   schema/RLS — all internally consistent in source. Likely a live/deployment issue
+   (schema drift, auth session, transient error), not a code bug visible from static
+   source. Needs a real browser console error or Vercel log to progress further.
+
+❌ Dashboard fetches the same base data ~5x per page load (assets/transactions
+   re-queried independently by getPortfolioSummary/getAssetAllocation/
+   getTopHoldings/getSegregatedBreakdown instead of sharing one computed result).
+   Not currently a speed problem; compounds as transaction history grows.
+
+❌ No error boundaries (error.tsx) anywhere in the App Router — a thrown Server
+   Component shows Next.js's generic crash page.
+
+❌ No loading.tsx anywhere — no route-level streaming; navigation shows a blank
+   screen until a page's full data fetch completes.
+
+❌ No server-side error logging anywhere — zero console.error calls across any
+   service/action file.
+
+❌ Vercel Analytics and Speed Insights not installed — no @vercel/analytics or
+   @vercel/speed-insights in package.json, nothing in layout.tsx.
+
+❌ No auto-refresh at market close (cron). Confirmed no vercel.json, no scheduled
+   workflow — prices only refresh opportunistically when the app is opened. Needs
+   real new infra (Vercel Cron Job + protected API route), not a code-only patch.
+
+🆕 NEW BUG, found while diagnosing Analytics page complaints: Volatility/Sharpe/
+   Sortino were showing implausible values (>500). Root cause: these are computed
+   from variance of period-to-period snapshot returns. With only ~8 snapshots
+   required, a single bad data point dominates. This project's NPS corpus
+   calculation genuinely changed methodology multiple times (corpus-doubling bug
+   fixed, contribution-sync bug fixed, later switch to derived units×NAV corpus) —
+   if even one historical snapshot was recorded mid-transition, it shows an
+   artificial 30-50%+ net worth swing that was never a real market move, and that
+   one point is enough to blow these metrics into the hundreds. This is the SAME
+   root cause as the CAGR methodology-mixing issue above, but hits these three
+   metrics much harder since they're sensitive to every step of the path, not just
+   endpoints. Fix fully spec'd in ANALYTICS-REDESIGN-PROMPT.txt (Part II) —
+   cutoff-date filtering plus outlier-return exclusion, with a test using a
+   deliberately-planted extreme snapshot.
+
+------------------------------------------------------------------------------------
+4. MAJOR BUGS / GAPS — SPECIFIC FEATURES (older backlog, re-verified still present)
+------------------------------------------------------------------------------------
+
+❌ Goals — same card icon-overlap bug already fixed for Bank Accounts/FDs, never
+   applied here. goals-view.tsx still uses an absolutely-positioned delete button
+   that can collide with the card's own "by {targetDate}" label.
+
+❌ Goals have no edit capability — only add/delete. No updateGoalAction exists.
+   Changing a goal's target amount/date means delete-and-recreate.
+
+❌ Watchlist shows no current price at all, despite the data already existing
+   (Asset already has currentPrice/currentPriceUpdatedAt). Makes the target-price/
+   stop-loss feature hard to actually use — nothing to compare against.
+
+❌ Watchlist prices are never refreshed even if the above gets fixed — no
+   AssetRefreshButton or equivalent reaches watchlist assets at all.
+
+❌ Category-wise XIRR (group by asset class, not just per-asset) not implemented.
+   The grouping key it needs (ASSET_TYPE_GROUP) already exists — just needs an
+   aggregation function built on top. (Related: the Analytics redesign spec, Part
+   II, adds a customizable-XIRR checkbox selector — a different but adjacent
+   feature; worth building these together if scoping a session around XIRR.)
+
+❌ MF holdings still show generic stock-style "Qty / Avg. Cost" instead of
+   MF-appropriate NAV/units terminology and precision — confirmed unchanged in both
+   the card and table view.
+
+------------------------------------------------------------------------------------
+5. PERFORMANCE
+------------------------------------------------------------------------------------
+
+✅ Database indexes thorough and well-targeted — every RLS user_id column indexed,
+   plus sensible composite indexes matching real query patterns (18 indexes total).
+✅ computeHoldings() itself correctly batched (one Promise.all, not N+1).
+✅ Price refresh sequential, not parallel — correctly avoids bursting free rate-
+   limited APIs, with per-asset failure isolation.
+✅ Server Components used correctly everywhere for initial data fetch (all 15
+   page.tsx files, at time of that audit).
+✅ No literal N+1 query loops found anywhere.
+✅ revalidatePath usage appropriately scoped, not blanket-revalidating the app.
+
+❌ Dashboard redundant fetching — one page load fires assets.findAll() 5 times and
+   transactions.findAll() 5 times (getPortfolioSummary, getAssetAllocation,
+   getTopHoldings, getSegregatedBreakdown each independently re-run
+   computeHoldings(); getRecentActivity and a direct transactionsRepository.findAll()
+   call add more). Runs concurrently inside one outer Promise.all so it's not
+   multiplying page load TIME, but is real unnecessary data transfer/DB round-trips
+   that compounds as transaction count grows (267+ already at time of that audit).
+   FIX: one shared getDashboardData() that computes holdings once, derives
+   everything else from that single result.
+
+🟡 recharts not code-split via next/dynamic — ships in the initial bundle for every
+   page with a chart (Dashboard/Analytics/NPS). Cheap, low-risk fix:
+   next/dynamic(() => import(...), { ssr: false }).
+
+🟡 No memoization in the two largest tables (transactions-view.tsx up to 267+ rows,
+   portfolio-view.tsx). Not currently noticeable at this data volume; only worth
+   revisiting if actually felt as slow.
+
+------------------------------------------------------------------------------------
+6. MINOR BUGS / POLISH ITEMS
+------------------------------------------------------------------------------------
+
+🟡 Analytics: 3 of 4 Risk-row stat tiles have a caption, Max Drawdown doesn't —
+   likely uneven card heights in that row. Cosmetic. (Superseded in practice by the
+   full Analytics redesign spec in Part II, which moves these into a collapsed
+   section entirely.)
+🟡 No freshness indicator (currentPriceUpdatedAt) shown in UI for stocks/MF/crypto —
+   the data exists, just isn't displayed. NPS already does this correctly via
+   last_nav_date; worth extending the same idea to securities.
+🟡 Money math uses plain JS Number throughout, no decimal-safe library. Low risk at
+   current volumes; worth adopting for new code as history grows over years.
+🟡 No undo window on deletes — confirm dialog only.
+🟡 Very low aria-label usage — found essentially once across the entire component
+   tree. Not blocking for a personal single-user tool; worth knowing if this ever
+   gets used by anyone else or on assistive tech.
+✅ Reasonable dependency footprint: 25 production dependencies, 12 dev — not
+   bloated for what the app does.
+
+------------------------------------------------------------------------------------
+7. MAKING IT MORE "PROFESSIONAL"
+------------------------------------------------------------------------------------
+
+ALREADY GENUINELY STRONG — worth knowing this is a real strength, not just gaps:
+  - RLS on all tables, verified zero gaps.
+  - TypeScript strict mode enabled.
+  - Real test coverage (77+ tests at last count), including edge cases from actual
+    real-world data, not just happy-path.
+  - Secrets handling clean, no exposure risk anywhere. No XSS risk found
+    (zero dangerouslySetInnerHTML usage).
+  - Rate-limit-conscious external API design.
+  - Demo-mode fallback maintained consistently across every repository.
+  - Code comments explain WHY, not just what, consistently across the project.
+
+WHAT WOULD CLOSE THE GAP TO "PRODUCTION-READY":
+  - Sections 3 and 4's items are exactly what a real code review would flag before
+    calling this safe for anyone (including future-you) to fully trust.
+  - Decimal-safe money arithmetic — the other classic "fine until it silently
+    isn't" gap.
+  - Keep ARCHITECTURE.md/DATABASE.md current as a running decisions log — already
+    apparently the right instinct, worth continuing deliberately.
+
+------------------------------------------------------------------------------------
+8. ANALYTICS PAGE — FULL REDESIGN, SPEC'D AND READY TO BUILD
+------------------------------------------------------------------------------------
+(Condensed here; full verbatim prompt in Part II — ANALYTICS-REDESIGN-PROMPT.txt)
+
+Problem: current page is 11 numbers in boxes with no visual trend, plus the >500
+risk-metric bug (Section 3). Confirmed against actual Dashboard code that Dashboard
+already has a 3-month net-worth sparkline and a detailed Top Holdings card — so the
+redesign is scoped to NOT duplicate those; Analytics becomes the deeper view.
+
+Redesign, in priority order:
+  1. Fix the risk-metric outlier bug FIRST (cutoff date + outlier-return exclusion
+     + test with a planted extreme snapshot) — building the nicer UI around a
+     broken number first would just hide the bug, not fix it.
+  2. Bigger historical trend chart with period toggles (1M/3M/1Y/All) — doesn't
+     exist on Analytics today, biggest legibility win.
+  3. Plain-language summary line above the chart ("Up ₹42,000 (2.1%) over the last
+     3 months").
+  4. Keep XIRR/CAGR; add a NEW customizable-XIRR checkbox selector (filter which
+     asset classes feed the XIRR calc, default = all = today's pooled behavior
+     unchanged).
+  5. Move Volatility/Sharpe/Sortino/Max Drawdown into a collapsed "Advanced / Risk
+     metrics" section, off by default, each with a one-line plain-language
+     explainer.
+  6. Keep Asset Allocation donut + Growth Projection as-is.
+  7. Remove the Concentration card entirely — Dashboard's TopHoldingsCard already
+     covers this better with real position names, not just category %.
+
+------------------------------------------------------------------------------------
+9. NPS LIVE NAV — DETAILED ENDPOINT + STALENESS WARNING, SPEC'D AND READY TO BUILD
+------------------------------------------------------------------------------------
+(Condensed here; full verbatim prompt in Part II — NPS-DETAILED-ENDPOINT-PROMPT.txt)
+
+Directly motivated by the real incident in Section 1. Fix:
+  1. Switch fetchNPSNAVQuote() to npsnav.in's "Detailed" endpoint instead of
+     "Simple" — confirm exact response shape against their current docs before
+     wiring in (not independently re-verified in the spec itself).
+  2. Store the REAL last-updated date from that response in
+     nps_scheme_holdings.last_nav_date, replacing the current fetch-timestamp
+     fabrication entirely.
+  3. Add a visible staleness warning in the NPS page UI if a connected scheme's
+     data is more than ~2 days old — the single most valuable part of this fix,
+     since it would have caught the real incident automatically instead of
+     requiring days of manual cross-referencing.
+  4. Apply the same staleness check to refreshLiveNAVs()'s result summary/toast.
+  5. Test: mocked Detailed-endpoint response >2 days old triggers the warning;
+     today/yesterday does not. Explicit boundary cases (exactly 2 days, 3 days).
+  Keep existing fail-soft error handling and the "never auto-guess PFM mapping"
+  design entirely unchanged — this fix is additive, not a rework of those.
+
+------------------------------------------------------------------------------------
+10. FEATURES WORTH ADDING
+------------------------------------------------------------------------------------
+(Full detail with reasoning per item in Part II — FEATURE-IDEAS.txt)
+
+No new infra needed: allocation drift/rebalancing alerts, tax-loss harvesting flags
+(India-relevant — note: tax-loss harvesting itself has since been BUILT, see
+Section 1's "Other fixes confirmed landed"), gold/property as first-class asset
+types, SIP reminder tracking, portfolio benchmarking vs. Nifty/Sensex, rules-based
+"what changed" weekly recap, cash flow forecast from existing maturity data.
+
+Needs new infra: index benchmarking data source, push/email notification delivery,
+an interactive scenario/"fast forward" planner.
+
+Biggest single differentiator, genuinely its own project: Account Aggregator (RBI
+framework) auto-sync.
+
+Low fit for this app's purpose (flagged so skipping is deliberate): full
+budgeting/expense categorization, deep crypto wallet/DeFi scanning, estate
+planning/legacy handoff.
+
+------------------------------------------------------------------------------------
+11. PRIORITY-RANKED ACTION LIST — everything above, one true ranked list
+------------------------------------------------------------------------------------
+1. Audit trail for edits/deletes — highest real risk.
+2. CSV import idempotency — easy now, pattern already proven in NPS importer.
+3. Fix the Analytics risk-metric outlier bug (>500 values) — real, currently
+   visible, user-reported.
+4. Switch NPS live NAV to the Detailed endpoint + staleness warning — just caused
+   a real multi-day debugging session, now fully spec'd.
+5. Goals card icon-overlap fix — trivial, same pattern already used twice
+   elsewhere.
+6. Watchlist price display — data already exists, just needs rendering.
+7. Fix "Refresh all" to actually include NPS, or rename it to be honest about
+   scope.
+8. Fix incomplete backup/restore.
+9. Vercel Analytics/Speed Insights — quick install.
+10. Error boundaries + loading.tsx — cheap, meaningfully improves reliability
+    feel.
+11. Watchlist refresh capability.
+12. Goals edit capability.
+13. Dashboard redundant fetching — real, compounds with data growth.
+14. Server-side error logging.
+15. Category-wise XIRR.
+16. MF-specific NAV/units display (card + table).
+17. Build the full Analytics redesign (trend chart, plain-language summary,
+    collapsed risk section, customizable XIRR, remove Concentration card) — the
+    outlier bug fix (#3) should land first, this is the rest of that same spec.
+18. CAGR caption noting pre-rewrite snapshot methodology differences.
+19. Chart code-splitting (next/dynamic).
+20. Freshness indicators for securities prices in the UI.
+21. Liabilities-not-loading — needs live diagnosis (console error/logs), not more
+    code review, before it can move.
+22. Decimal-safe money math — adopt going forward.
+23. Undo window on deletes.
+24. Auto-refresh at market close (cron) — real new infra, not a quick patch.
+25. Feature additions (Section 10) — once trust/correctness items above are
+    settled.
+
+DONE, no longer open: NPS live NAV refresh mechanism itself (verified working
+correctly — the remaining NPS item is the staleness-visibility fix, #4 above, not
+the refresh mechanism), Holdings dropdown → card view (built and verified clean),
+Day Change bug, Sharpe/Sortino annualization method (though see #3 — the
+annualization approach was fixed, but exposed a separate outlier-sensitivity bug),
+tax-loss harvesting feature.
+
+====================================================================================
+PART II — FULL VERBATIM APPENDIX (every source file, complete, unedited)
+Nothing below has been summarized or altered from the original uploaded files.
+====================================================================================
+
+------------------------------------------------------------------------------------
+APPENDIX 1 — ANALYTICS-REDESIGN-PROMPT.txt (verbatim)
+------------------------------------------------------------------------------------
+PROMPT FOR NEW CHAT — ANALYTICS PAGE REDESIGN
+(paste this along with PROJECT-STATUS.md and the source zip, per usual workflow)
+
+====================================================================
+CONTEXT
+====================================================================
+Continue work on the wealth-dashboard project. Workflow: single git patch file per
+change (not a zip), verified with tsc/eslint/vitest/next build before delivering.
+
+The current Analytics page (src/app/(app)/analytics/page.tsx) is a flat stat-dump —
+11 numbers in boxes (CAGR, XIRR, Realized/Unrealized P&L, Volatility, Max Drawdown,
+Sharpe, Sortino, Concentration %) plus one donut and a forward-looking growth
+projection. User feedback: doesn't feel understandable, and the risk metrics
+(Volatility/Sharpe/Sortino) were showing implausible values (>500) that eroded trust
+in the whole page.
+
+REAL BUG ALREADY DIAGNOSED, FIX THIS FIRST: Volatility/Sharpe/Sortino are computed
+from variance of period-to-period snapshot returns (risk.ts). With only ~8 snapshots
+required, a single bad data point dominates the whole calculation. This project's
+NPS corpus calculation changed methodology multiple times over its history (a
+corpus-doubling bug that got fixed, a contribution-sync bug that got fixed, a later
+switch to derived units×NAV corpus) — if even one historical snapshot was recorded
+mid-transition between these, it shows an artificial 30-50%+ net worth swing that
+was never a real market move, and that single point is enough to blow these three
+metrics into the hundreds. FIX: add a configurable cutoff (e.g. an env var or a
+constant with today's date as a starting placeholder the user can adjust) so
+risk.ts's calculateVolatility/calculateSharpeRatio/calculateSortinoRatio only
+consider snapshots ON OR AFTER that cutoff — treat anything before it as
+methodology-contaminated, not real portfolio history. Also add basic outlier
+protection as a second layer of defense: if any single period-to-period return
+exceeds a sanity threshold (e.g. ±30% in one gap — implausible for a real diversified
+portfolio's actual day-to-day move), exclude that one return from the variance
+calculation rather than let it dominate, regardless of what caused it. Write a test
+using a fixture with one deliberately extreme outlier snapshot mixed into otherwise
+normal ones, asserting the outlier gets excluded and the resulting Sharpe/Sortino/
+Volatility stay in plausible ranges (Sharpe/Sortino roughly -5 to 5, Volatility
+roughly 0-150%).
+
+====================================================================
+THE REDESIGN
+====================================================================
+Confirmed against the actual current Dashboard (src/app/(app)/dashboard/page.tsx) —
+it already has NetWorthCard with a fixed 3-month sparkline
+(portfolioService.getPortfolioPerformance("3M")), and a TopHoldingsCard with real
+position names, values, and returns. The redesign below is scoped to NOT duplicate
+those — Analytics should be the deeper view, not a second copy of Dashboard's glance.
+
+1. TREND CHART — new, doesn't exist on Analytics today.
+   A larger historical net-worth chart than Dashboard's compact sparkline, with
+   period toggles: 1M / 3M / 1Y / All. Reuse portfolioService.getPortfolioPerformance()
+   but call it per-period based on the selected toggle (client-side state, refetch or
+   pre-fetch all periods server-side and switch client-side — your call on which
+   fits the existing pattern better, but prefer server-fetching all periods up front
+   in one Promise.all rather than a client round-trip per toggle click, consistent
+   with how the rest of this app avoids client-side fetching).
+
+2. PLAIN-LANGUAGE SUMMARY LINE above the chart — e.g. "Up ₹42,000 (2.1%) over the
+   last 3 months" — computed directly from the same net worth series (first vs. last
+   point in the selected period), no jargon, no separate metric.
+
+3. XIRR/CAGR — kept, PLUS a new customizable-XIRR feature:
+   Add a checkbox selector (asset classes or individual holdings — asset-class level
+   is probably the right granularity to start with: Stocks, ETF, Mutual Fund Equity,
+   Mutual Fund Debt, Crypto, NPS, Bonds) that filters which cash flows feed the XIRR
+   calculation shown on this page. DEFAULT: all selected, matching today's pooled
+   Securities+NPS behavior exactly (don't change the default experience). When the
+   user narrows the selection, recompute XIRR from only the selected classes' cash
+   flows. This needs: filtering transactions/npsCashflows by assetType/source before
+   calling calculateXIRR, and a compact checkbox UI component (new, or check if a
+   suitable multi-select component already exists in src/components/ui). Keep this
+   entirely separate from the Dashboard's XIRR card, which should stay as the fixed
+   "everything" figure it already correctly is.
+
+4. ADVANCED / RISK METRICS — collapsed section, off by default.
+   Volatility, Sharpe Ratio, Sortino Ratio, Max Drawdown move here (a
+   <details>/Collapsible component — check src/components/ui for an existing
+   Collapsible/Accordion primitive before adding a new one). Add a one-line
+   plain-language explainer next to each metric, e.g.:
+     - Sharpe Ratio: "Return earned per unit of risk taken — above 1 is generally
+       considered good, above 2 is very good."
+     - Sortino Ratio: "Like Sharpe, but only penalizes downside volatility, not
+       upside swings."
+     - Volatility: "How much your portfolio's value has swung, annualized."
+     - Max Drawdown: "The largest drop from a peak to a subsequent low."
+   Keep the existing "Annualized from irregular snapshots · approximate" captions —
+   still accurate and still worth keeping visible even when collapsed by default.
+
+5. ASSET ALLOCATION DONUT + GROWTH PROJECTION — kept as-is, no changes. Growth
+   Projection doesn't exist anywhere on Dashboard, so it stays uniquely valuable
+   here.
+
+6. CONCENTRATION CARD — REMOVE entirely (not folded into Allocation — just delete
+   it). Dashboard's TopHoldingsCard already covers this better, with real position
+   names and returns rather than just a category percentage.
+
+====================================================================
+WHAT NOT TO CHANGE
+====================================================================
+- Don't touch the Dashboard's XIRRCard, NetWorthCard, or TopHoldingsCard — those
+  are correct and intentionally different in scope from what's being built here.
+- Don't remove the "Returns" card's Realized/Unrealized P&L tiles — not mentioned
+  as a problem, keep as-is.
+- Keep the existing pooled Securities+NPS XIRR as the DEFAULT state of the new
+  checkbox selector — this must not change what a user who ignores the new checkbox
+  UI experiences.
+
+====================================================================
+PRIORITY ORDER
+====================================================================
+1. Fix the risk-metric outlier bug first (it's a real, currently-visible bug
+   independent of the redesign, and the redesign's collapsed section would just be
+   hiding a broken number rather than fixing it if done out of order).
+2. Trend chart + plain-language summary (biggest legibility win).
+3. Move risk metrics into the collapsed section with explainers.
+4. Remove Concentration card.
+5. Customizable XIRR checkbox selector (most new logic, do last).
+------------------------------------------------------------------------------------
+APPENDIX 2 — code optimization.txt (verbatim)
+------------------------------------------------------------------------------------
+PERFORMANCE AUDIT — IS THE CODE OPTIMIZED?
+(checked against latest wealth-dashboard.zip — every finding below is from actual
+source inspection, not assumption)
+
+SHORT ANSWER: Mostly yes at the database layer (indexes, RLS, batched fetches within
+a single function are all done correctly), but there's one clear, fixable inefficiency
+at the service layer — the same base data gets fetched from the database multiple
+times per page load — plus a couple of smaller frontend opportunities. Nothing here
+is "broken" or user-visibly slow yet at your current data volume, but the dashboard
+redundancy is worth fixing before transaction/holding counts grow much further.
+
+====================================================================
+✅ GENUINELY WELL OPTIMIZED
+====================================================================
+
+1. Database indexes are thorough and well-targeted.
+   18 indexes total. Every single RLS-filtered user_id column has its own index
+   (critical — RLS applies a WHERE user_id = auth.uid() to every query, so without
+   these indexes every query would silently degrade to a full table scan as data
+   grows). Plus sensible composite indexes matching actual query patterns:
+   transactions (asset_id, transaction_date), price_history (asset_id, recorded_date),
+   nps_contributions (nps_account_id, contribution_date). This is genuinely
+   well-designed, not just "indexes exist."
+
+2. computeHoldings() itself is correctly batched, not N+1.
+   Fetches assets and transactions in one Promise.all (2 queries total), then filters
+   in JS — this is the right pattern. The problem (see below) isn't this function
+   itself, it's that multiple OTHER functions each call it independently instead of
+   sharing one result.
+
+3. Price refresh avoids bursting external rate-limited APIs.
+   Sequential (not parallel) fetches against Yahoo/CoinGecko/mfapi.in, with per-asset
+   failure isolation. Slower per-refresh, but correctly prioritizes not getting
+   rate-limited/IP-banned by a free API over raw speed. Reasonable trade-off for how
+   this is actually used (manually triggered, not high-frequency).
+
+4. Server Components used correctly for initial data fetching.
+   All 15 page.tsx files are async Server Components fetching data server-side before
+   render (not client-side useEffect fetching, which would mean an extra
+   loading-spinner round-trip on every navigation). This is the correct Next.js
+   pattern and it's followed consistently.
+
+====================================================================
+🔴 THE MAIN FINDING: redundant data fetching on the Dashboard
+====================================================================
+dashboard/page.tsx fetches 10 things via one outer Promise.all — good instinct
+(parallel, not sequential). But several of those 10 independently re-fetch the SAME
+underlying tables instead of sharing one result:
+
+   getPortfolioSummary()      -> computeHoldings() -> assets.findAll() + transactions.findAll()
+   getAssetAllocation()       -> computeHoldings() -> assets.findAll() + transactions.findAll()  [duplicate]
+   getTopHoldings(5)          -> computeHoldings() -> assets.findAll() + transactions.findAll()  [duplicate]
+   getSegregatedBreakdown()   -> computeHoldings() -> assets.findAll() + transactions.findAll()  [duplicate]
+   getRecentActivity(6)       -> assets.findAll() + transactions.findRecent()                    [duplicate assets fetch]
+   transactionsRepository.findAll()  <- called directly again in the same Promise.all              [duplicate]
+
+Net effect: one Dashboard page load fires assets.findAll() 5 times and
+transactions.findAll() (or equivalent) 5 times. Because they're all inside one outer
+Promise.all, these execute CONCURRENTLY, not one-after-another — so this isn't
+multiplying your page load TIME the way a truly sequential N+1 would (Supabase
+handles concurrent requests fine at this scale), but it is:
+  - 10 real round-trips to Supabase instead of 2, for data that doesn't change
+    between those calls within the same request
+  - Real, unnecessary data transfer — the full assets and transactions tables get
+    serialized and sent over the wire 5 times each, not once
+  - A cost/scale concern more than a current-latency concern: this gets meaningfully
+    worse as your transaction count grows (267+ already, per an earlier screenshot),
+    and worse again if Supabase billing is ever usage-metered on read volume
+
+FIX: refactor portfolioService so the individual functions (getAssetAllocation,
+getTopHoldings, getSegregatedBreakdown, getPortfolioSummary) accept an already-computed
+Holding[] as a parameter instead of each calling computeHoldings() internally. Add one
+new exported function — e.g. getDashboardData() — that fetches assets+transactions
+ONCE, computes holdings ONCE, and derives all the individual pieces (summary,
+allocation, top holdings, breakdown) from that single shared result. dashboard/page.tsx
+then calls this one function instead of 4-5 separate portfolioService methods. Other
+pages (Portfolio, Analytics) that only need one or two of these can keep calling the
+individual functions as-is — this fix specifically targets the case where MULTIPLE
+derived views are needed in the same request, which today only really happens on the
+Dashboard.
+
+====================================================================
+🟡 SMALLER OPPORTUNITIES
+====================================================================
+
+5. recharts is not code-split.
+   No next/dynamic usage found anywhere in the app. recharts (used in
+   allocation-donut.tsx, sparkline.tsx, performance-line-chart.tsx,
+   nps-projection-chart.tsx) is a genuinely heavy library, and it's currently bundled
+   directly into whatever client component imports it — shipped in the initial JS
+   bundle for every page that includes a chart, rather than lazy-loaded only when
+   that chart actually needs to render.
+   FIX: wrap chart components in next/dynamic(() => import(...), { ssr: false })
+   (charts need browser APIs anyway, so ssr:false is appropriate, not a compromise).
+   Straightforward, low-risk change, meaningfully reduces initial JS payload on pages
+   with charts (Dashboard, Analytics, NPS).
+
+6. No memoization in the two largest table components.
+   transactions-view.tsx (up to 267+ rows currently) and portfolio-view.tsx do
+   grouping/sorting work with zero useMemo. At current data volume this is very
+   unlikely to cause any noticeable jank — a few hundred rows of array grouping is
+   fast even unmemoized — but worth knowing as a "if it ever starts to feel slow, this
+   is the first place to look" note rather than something to fix preemptively right
+   now. Low priority.
+
+====================================================================
+✅ CHECKED, NOT AN ISSUE
+====================================================================
+
+- No literal N+1 query loops found anywhere (i.e. no `for (const x of items) { await db.query(...) }`
+  pattern issuing one DB call per row). The redundancy above is duplicate BULK fetches,
+  not per-row queries — a meaningfully different (and less severe) category of problem.
+- revalidatePath usage in Server Actions looked appropriately scoped, not blanket
+  revalidating the whole app on every mutation.
+
+====================================================================
+BOTTOM LINE
+====================================================================
+Nothing here is currently causing a noticeably slow app — Supabase and Next.js are both
+forgiving enough at your current data volume (a few hundred transactions, a personal
+single-user app) that none of this shows up as a real symptom yet. But #4 (the
+Dashboard's redundant fetching) is worth fixing sooner rather than later specifically
+because it compounds with data growth over time, which — given this is a long-term
+wealth tracker you'll keep adding years of transactions to — is exactly the trajectory
+this app is on. It's also a genuinely clean refactor (one new shared function, a few
+call-site changes), not a risky rewrite.
+
+PRIORITY: #4 (dashboard redundant fetch) first — real and growing. #5 (chart
+code-splitting) second — cheap, safe, immediate bundle-size win. #6 (table
+memoization) — not worth doing until it's actually noticed as slow.
+------------------------------------------------------------------------------------
+APPENDIX 3 — FEATURE-IDEAS.txt (verbatim)
+------------------------------------------------------------------------------------
+WEALTH DASHBOARD — FEATURE IDEAS FROM LEADING WEALTH APPS
+Researched: Empower (Personal Capital), Kubera, Monarch Money, Copilot Money, Quicken
+Simplifi, and India-specific apps (INDmoney, Kuvera, Agni Folio) — Aug 2026.
+Each idea below is mapped to what it would actually take in THIS app's stack
+(Next.js + Supabase, single-user, mostly manual entry + some live price refresh).
+
+====================================================================
+🟢 REALISTIC — fits the current architecture, no new infra needed
+====================================================================
+
+1. Asset allocation drift / rebalancing alerts (Kuvera, Empower)
+   Kuvera flags underperforming holdings against stated targets; Empower shows
+   allocation vs. a target model. You already compute allocation % per holding and
+   per asset-class group (ASSET_TYPE_GROUP). Add: a user-set target allocation per
+   class (e.g. "70% Equity / 20% Debt / 10% Cash"), compare against actual, and
+   surface a "you're 8% overweight Equity" banner on the dashboard.
+
+2. Portfolio benchmarking against an index (Kubera: vs. S&P 500/Bitcoin; most apps: vs. Nifty)
+   Kubera reports IRR per asset and benchmarks it against a chosen ticker/index. You
+   already compute XIRR per holding and portfolio-wide. Add: fetch Nifty 50 / Sensex
+   historical values (same live-provider pattern already used for Yahoo/CoinGecko) and
+   show "Your portfolio: +14.2% XIRR vs. Nifty 50: +11.8%" alongside existing XIRR cards.
+
+3. Recurring/subscription-style SIP reminder & tracking (most budgeting apps track
+   recurring bills; adapted here for SIPs)
+   You already have Maturity/reminder bell for FD/PPF/NPS/goals. Extend the same
+   mechanism: let a mutual fund holding be flagged as "active SIP" with a day-of-month,
+   and the bell reminds if that month's SIP transaction hasn't been logged yet by, say,
+   the 5th of the month — catches missed/forgotten manual SIP entries, which matters a
+   lot in a manual-entry app like this one.
+
+4. "What changed" summary / weekly recap (Monarch's Weekly Recap, AI-powered Insights)
+   Monarch auto-summarizes net worth/cash flow changes in plain language. A
+   non-AI version fits easily here: a simple rules-based summary card — "Net worth up
+   ₹42,000 this week, driven by SBI Contra Fund (+₹18,000) and NIFTYIETF (+₹9,000)" —
+   computed straight from existing snapshot + holdings data, no LLM needed. Could later
+   be upgraded to a real AI summary via the Anthropic API if desired.
+
+5. Tax-loss / tax-gain harvesting flags (Kuvera's standout feature)
+   Kuvera automatically flags underperforming direct-plan holdings for tax-loss
+   harvesting. You already track cost basis and unrealized P&L per lot (FIFO). Add: a
+   view that surfaces holdings with unrealized losses eligible to offset short/long-term
+   gains elsewhere in the portfolio, with the relevant Indian STCG/LTCG holding-period
+   rules (1 year for equity) already computable from existing lot dates.
+
+6. Family / household multi-portfolio view (Kuvera, Kubera's sharing/collaboration)
+   Kuvera supports family account management under one dashboard; Kubera has granular
+   sharing. Given Supabase RLS is already per-user_id, this is a schema-level feature:
+   add a "household" or "linked accounts" concept so someone can view (read-only)
+   a spouse/parent's portfolio for a combined net-worth number — without merging the
+   actual account data.
+
+7. Physical/alternative asset tracking — gold, property, vehicles (Kubera's breadth;
+   very relevant in India specifically — physical gold is a huge asset class here)
+   Kubera tracks real estate, vehicles, precious metals, collectibles as manually-entered
+   line items alongside synced accounts. Your schema already supports an "other" asset
+   type loosely — this would formalize it: dedicated asset types for Physical Gold
+   (with weight + purity), Real Estate (with a manual value + optional appreciation
+   assumption), similar to how FD/PPF/NPS already get their own dedicated schema/UI
+   rather than being crammed into the generic securities table.
+
+8. Insurance & document vault (Safebox's differentiator vs. INDmoney/Kuvera —
+   explicitly built for exactly the gap those "investor-first" apps have)
+   A simple new feature area: policy name, type, premium due date, sum assured, renewal
+   reminder (reuses the existing maturity/reminder bell pattern) — doesn't require
+   actual document storage/encryption to start, just tracking dates and amounts.
+
+9. Cash flow forecast (Quicken Simplifi's "Spending Plan" — forward-looking, not
+   backward-looking)
+   You already have XIRR-based growth projections. A simpler, more immediately useful
+   version: project next month's contributions based on the "active SIP" data from #3,
+   forecast known FD/PPF maturities in the next N months from existing maturity data —
+   giving a "here's what's coming due/contributing in the next 90 days" view, purely
+   computed from data you already store.
+
+====================================================================
+🟡 REALISTIC BUT NEEDS NEW INFRASTRUCTURE (cron, external APIs, or storage)
+====================================================================
+
+10. Automated bank/broker account sync via Account Aggregator framework (INDmoney,
+    Kuvera, all major India apps use this — RBI's AA framework, e.g. via Setu/Finvu)
+    This is the single biggest capability gap vs. every competitor researched — all of
+    them auto-sync transactions instead of manual entry. It's also the biggest lift:
+    needs AA-licensed aggregator integration (Setu, Finvu, OneMoney, etc.), consent flow,
+    webhook handling. Large, dedicated project — not a patch. Worth flagging as the
+    highest-value, highest-effort item on this whole list.
+
+11. IRR/XIRR benchmarking against live index data (extends #2) needs a reliable Nifty/
+    Sensex historical data source — same live-provider pattern as Yahoo/CoinGecko, but
+    a new source needs identifying/testing (NSE doesn't have a simple free API; may
+    need a Yahoo Finance ticker like ^NSEI).
+
+12. Push/email notifications for maturity reminders, SIP reminders, target price hits
+    (already deliberately deferred per PROJECT-STATUS.md — "no infra for it yet, in-app
+    bell only"). Needs an email provider (Resend/SendGrid) or web push setup. The
+    reminder DATA already exists (maturity bell, and #3/#9 above would add more) — this
+    is purely a delivery-channel gap, not a data gap.
+
+13. Scenario / "Fast Forward" planner (Kubera's unique feature — project net worth N
+    years out under different assumptions: extra SIP, one-time withdrawal, market
+    correction)
+    You already have growth-projection.tsx doing XIRR-based projections. Extending it
+    to an interactive "what if I invest ₹5,000 more/month" or "what if the market drops
+    20% tomorrow" slider is mostly frontend work on top of existing calculation
+    functions — moderate effort, no new infra.
+
+====================================================================
+🔵 WORTH KNOWING ABOUT, BUT LOW FIT FOR THIS APP'S PURPOSE
+====================================================================
+
+14. Full budgeting / category-level expense tracking (Monarch, Copilot, YNAB, Simplifi's
+    core focus)
+    All of the global leaders researched are budgeting-first apps with investment
+    tracking bolted on — the opposite of this app, which is investment/net-worth-first
+    by design. Bank Accounts already exist for cash tracking, but building out granular
+    category-level expense budgeting would be a significant scope change, not a small
+    addition. Flagging so it's a deliberate decision, not an oversight, if it's ever
+    considered — same treatment PROJECT-STATUS.md already gives multi-currency and
+    push notifications as "deliberately deferred."
+
+15. Crypto wallet / DeFi / NFT tracking (Kubera's specialty)
+    Asset type "crypto" already exists with CoinGecko live pricing for manually-entered
+    holdings. Kubera's version — auto-detecting wallet balances from on-chain addresses,
+    DeFi protocol positions, NFT floor prices — is a much deeper integration (wallet
+    address scanning, multiple chains). Low priority unless crypto is a meaningful part
+    of the actual portfolio being tracked.
+
+16. Estate planning / legacy handoff / beneficiary notification (Kubera's "inactivity
+    monitoring" + trusted-contact handoff; Agni Folio's similar nominee system for NRIs)
+    Genuinely novel differentiator among competitors, but needs recurring "are you still
+    there?" check-ins (cron-dependent) and a secure handoff mechanism — meaningful new
+    infrastructure for a feature that's more about peace-of-mind than daily usefulness.
+    Worth keeping in mind for later, not a near-term priority.
+
+====================================================================
+SUMMARY — best next moves if this list gets acted on
+====================================================================
+Highest value-to-effort, no new infra: #1 (rebalancing alerts), #3 (SIP reminders),
+#5 (tax-loss harvesting flags — very India-relevant), #7 (gold/property as first-class
+assets — very India-relevant given how much household wealth sits in physical gold here).
+
+Sets up the future: #13 (scenario planner) builds cleanly on what growth-projection.tsx
+already does.
+
+Biggest single differentiator, but a real project of its own: #10 (Account Aggregator
+auto-sync) — this is the one feature that separates every "big" competitor (INDmoney,
+Kuvera, Empower) from a manual-entry tool. Worth a dedicated planning session on its own
+rather than folding into a regular patch cycle.
+------------------------------------------------------------------------------------
+APPENDIX 4 — FINAL-AUDIT-REPORT.txt (verbatim)
+------------------------------------------------------------------------------------
+WEALTH DASHBOARD — FINAL CONSOLIDATED AUDIT REPORT
+(full codebase re-checked against latest zip; consolidates every prior audit — best
+practices, performance, NPS status, open bugs — into one report, with fresh findings
+added this pass. Everything below is verified against actual source, not assumption.)
+
+====================================================================
+PART A — SCORECARD (at a glance)
+====================================================================
+✅ Genuinely well done (9): RLS on every table, secrets never exposed, rate-limited
+   external API handling, TypeScript strict mode, test coverage for calculations,
+   database indexes, Server Components used correctly, no XSS risk found, no literal
+   N+1 query loops.
+
+⚠️ Partial (2): float-based money math (works today, real long-term risk), derived-vs-
+   cached values (one instance already found+fixed in NPS; pattern now avoided there).
+
+❌ Not done (10): audit trail, CSV import idempotency, undo window, backup completeness,
+   freshness indicators in UI, server-side error logging, dashboard redundant data
+   fetching, chart code-splitting, error boundaries (NEW finding), loading states (NEW
+   finding).
+
+🟡 In progress, tracked separately: NPS rewrite — Parts 1-4 and 6 done and verified
+   working; Parts 5, 7 (employer field, per-scheme UI) still open. See Part D.
+
+====================================================================
+PART B — SECURITY & DATA INTEGRITY
+====================================================================
+
+✅ Row Level Security: fully followed. All tables in schema.sql have RLS enabled,
+   verified programmatically — zero gaps. Every RLS-relevant user_id column is also
+   indexed (matters — without the index, every RLS-filtered query degrades toward a
+   full table scan as data grows).
+
+✅ Secrets: no NEXT_PUBLIC_ variable exposes anything sensitive; .env* gitignored;
+   nothing committed that shouldn't be.
+
+✅ No XSS risk found: zero dangerouslySetInnerHTML usage anywhere in the app.
+
+✅ TypeScript strict mode: enabled (tsconfig.json). Good baseline discipline.
+
+❌ No audit trail for financial record edits/deletes. Transactions, contributions,
+   and NPS scheme transactions are edited/deleted in-place with no history retained.
+   updated_at tells you SOMETHING changed, never WHAT. Highest real-risk item on this
+   whole list — irreversible data loss on financial history with no recovery path.
+   Cheapest real fix: a simple {table, record_id, old_value, changed_at} log table.
+
+❌ CSV transaction import is not idempotent. No dedup logic found in
+   import-csv-dialog.tsx / transactions/actions.ts — re-uploading the same CSV twice
+   silently creates duplicate transactions. Notably, this is EXACTLY the bug class the
+   NPS statement importer was specifically built to avoid (see Part D) — the fix
+   pattern already exists in this codebase, it just hasn't been applied to the older
+   CSV import path yet.
+
+❌ Destructive actions (delete transaction/contribution/goal/watchlist item/etc.) have
+   only a confirm dialog, no undo window. A confirm dialog stops accidental double-
+   clicks, not a genuine mistake made with full intent (wrong row selected).
+
+====================================================================
+PART C — PERFORMANCE
+====================================================================
+
+✅ computeHoldings() itself is correctly batched — one Promise.all for
+   assets+transactions, not N+1 per row. The problem below is about OTHER functions
+   each re-calling it independently, not this function itself.
+
+✅ Price refresh (external API calls) is deliberately sequential, not parallel —
+   correctly prioritizes not getting rate-limited by free APIs (Yahoo/CoinGecko/
+   mfapi.in) over raw speed. Per-asset failure isolation; a failed fetch doesn't wipe
+   the old price or break the whole refresh.
+
+✅ No literal N+1 query loops anywhere (no per-row DB call inside a for-loop).
+
+❌ RE-VERIFIED STILL PRESENT: Dashboard fetches the same base data repeatedly.
+   dashboard/page.tsx's Promise.all calls getPortfolioSummary(), getAssetAllocation(),
+   getTopHoldings(), and getSegregatedBreakdown() — each independently re-runs
+   computeHoldings() (2 fresh DB queries) instead of sharing one result. Net: assets
+   and transactions tables get queried ~5x each for one page load. Not a current-
+   latency problem (Supabase handles concurrent reads fine at this scale) but it's
+   real unnecessary data transfer that compounds as your transaction count grows
+   (267+ already). FIX: one shared getDashboardData() that computes holdings once,
+   derives everything else from that single result.
+
+❌ RE-VERIFIED STILL PRESENT: recharts (a genuinely heavy library, used across
+   Dashboard/Analytics/NPS charts) is never code-split via next/dynamic — ships in
+   the initial JS bundle for every page with a chart. Cheap, low-risk fix.
+
+🟡 Table components (transactions-view.tsx, portfolio-view.tsx) do grouping/sorting
+   with zero memoization. Not an issue at current row counts (a few hundred); flagged
+   only as "check here first" if it's ever actually noticed as slow. Not urgent.
+
+====================================================================
+PART D — CODE QUALITY / ARCHITECTURE (fresh findings this pass)
+====================================================================
+
+❌ NEW FINDING: No error boundaries anywhere in the App Router.
+   Zero error.tsx, global-error.tsx, or not-found.tsx files found across all of
+   src/app. If any Server Component throws (a bad Supabase query, a calculation
+   throwing on unexpected data, etc.), the user sees Next.js's generic default error
+   page instead of anything branded or actionable. For a personal finance app where
+   trust in the numbers matters, "something went wrong, here's what you can do" is
+   worth more than a generic crash screen. Cheap to add — a single error.tsx at
+   src/app/(app)/error.tsx would already cover the whole authenticated section.
+
+❌ NEW FINDING: No loading.tsx anywhere — no route-level streaming/Suspense.
+   Since every page is an async Server Component fetching data before render (a good
+   pattern for correctness), the flip side is: without loading.tsx, navigating to a
+   page shows nothing until ALL of that page's data has been fetched — no instant
+   skeleton, no perceived-performance cushion. This compounds with Part C's dashboard
+   redundant-fetch issue specifically, since more redundant queries = more time spent
+   staring at a blank page before anything renders. Straightforward Next.js feature to
+   add — a loading.tsx per route directory renders instantly while the page.tsx data
+   fetch is in flight.
+
+⚠️ NEW FINDING (minor): very low aria-label usage — found essentially once across the
+   entire component tree. Not a blocking issue for a personal single-user tool, but
+   worth knowing if this ever gets used by anyone besides you, or on assistive tech.
+   Low priority given the app's actual usage pattern.
+
+✅ Reasonable dependency footprint: 25 production dependencies, 12 dev — not bloated
+   for what the app does.
+
+❌ Backup/Restore still silently excludes price_history and portfolio_snapshots
+   (re-confirmed this pass, unchanged from earlier review). Undermines the "full JSON
+   backup" claim in the feature checklist.
+
+❌ No server-side error logging anywhere (zero console.error/console.warn across
+   services/actions). Errors are caught and returned to the UI as {ok:false, error},
+   which is fine for the user-facing message, but nothing gets logged server-side — a
+   silently-failing price refresh or calculation error is only ever discoverable by
+   you noticing a wrong number, with no log trail to check.
+
+⚠️ Money math uses plain JS Number throughout (no decimal.js/big.js). Works fine at
+   current transaction volumes; a latent precision-drift risk as history grows over
+   years. Not urgent, but the earlier this convention changes for NEW code the less
+   retrofitting needed later.
+
+====================================================================
+PART E — NPS REWRITE STATUS (tracked separately, since it's mid-flight)
+====================================================================
+Consolidating status across all prior NPS-specific reviews:
+
+✅ DONE AND VERIFIED WORKING (not just "looks right" — independently re-tested):
+   - Part 1: contribution-sync bug fixed.
+   - Part 2: real units×NAV schema (nps_scheme_holdings, nps_scheme_transactions),
+     RLS extended correctly, dedup enforced at the DATABASE level (unique index), not
+     just app-level.
+   - Part 3: classification rules — I independently reimplemented the logic in
+     Python and ran it against your real fixture data: reproduced Rs.7,70,430
+     invested / Rs.8,82,252 corpus exactly. Genuinely correct, not just tested by its
+     own test suite.
+   - Part 4: import parser for both statement formats, including a real correction to
+     my own original spec (switch pairs settle ~2 days apart, not same-day — caught
+     and fixed by the actual implementation).
+   - Part 6: Dashboard/Analytics XIRR inconsistency fixed — both now call the same
+     shared function, can't silently drift apart again.
+   - Import UI: built, with honest result reporting (shows unrecognized rows and
+     switch-pairing warnings rather than hiding them).
+   - Bonus beyond spec: getEffectiveCorpus() (derived corpus, preferring real
+     units×NAV over the old manual field) and buildSchemeTransactionCashflows() (real
+     dated XIRR cashflows for imported accounts, correctly excluding switches/fees).
+
+🟡 KNOWN, SELF-DOCUMENTED LIMITATION (not a bug — worth remembering): partial/
+   incremental statement uploads are now MOSTLY safe (idempotent insert, cross-import
+   switch relinking) but two narrow things still assume full-history imports: the
+   reissuance-detection heuristic has no memory of prior uploads, and
+   buildSchemeTransactionCashflows() will overstate XIRR if the imported history isn't
+   complete. Both point the same direction: keep uploading the FULL consolidated
+   statement each time, not incremental slices.
+
+❌ STILL OPEN: employer contribution field (hardcoded to 0 in the Log Contribution
+   dialog), live NAV refresh via npsnav.in (Part 5), per-scheme (E/C/G/A) breakdown
+   display in the UI (data fully exists via getSchemeHoldings(), just not rendered).
+
+====================================================================
+PART F — PRIORITY-RANKED ACTION LIST (everything above, one ranked list)
+====================================================================
+Ranked by real risk/value, not by which part of the report it came from:
+
+1. Audit trail for financial record edits/deletes (Part B) — highest risk, silent
+   irreversible data loss currently possible.
+2. CSV import idempotency (Part B) — real, easy-to-trigger bug right now; fix pattern
+   already exists in the codebase (NPS importer), just needs porting over.
+3. Fix incomplete backup/restore (Part B/D) — already known, straightforward,
+   high trust-value.
+4. Employer contribution field + per-scheme UI breakdown (Part E) — both small, both
+   just need to render/collect data that already fully exists.
+5. Error boundaries + loading.tsx (Part D, new this pass) — cheap Next.js features,
+   meaningfully improves perceived reliability and speed.
+6. Dashboard redundant data fetching (Part C) — real, compounds with data growth,
+   clean refactor available.
+7. Server-side error logging (Part D) — cheap, disproportionately useful for a
+   solo-maintained app.
+8. Chart code-splitting via next/dynamic (Part C) — cheap, safe, immediate bundle win.
+9. Freshness indicators (currentPriceUpdatedAt) in the UI (Part B) — small effort,
+   improves trust in every displayed number.
+10. Undo window on deletes (Part B) — nice-to-have, lower urgency than a confirm
+    dialog already provides.
+11. Decimal-safe money math (Part D) — not urgent today; adopt for new code going
+    forward rather than retrofitting everything now.
+12. Live NAV refresh for NPS (Part E) — the one remaining NPS item that needs new
+    external integration work, not just wiring existing pieces together.
+
+Everything else already checked and confirmed genuinely solid: RLS, secrets handling,
+rate limiting, indexes, test coverage, dependency footprint, Server Component usage,
+TypeScript strictness.
+------------------------------------------------------------------------------------
+APPENDIX 5 — MASTER-ISSUES.txt (verbatim)
+------------------------------------------------------------------------------------
+WEALTH DASHBOARD — CONSOLIDATED ISSUE LIST (master, de-duplicated)
+Verified against source (wealth-dashboard.zip, latest upload). Supersedes
+issues-verified.txt, issues-verified-v2.txt, and additional-findings.txt.
+
+====================================================================
+✅ CONFIRMED FIXED (verified in latest source — nothing to do)
+====================================================================
+- Refresh no longer touches zero-holding (fully sold-out) assets — scoped to
+  portfolioService.getHoldings() (quantity > 0) instead of assetsRepository.findAll().
+- Per-asset-class / per-asset scoped refresh buttons — refreshLivePricesAction() now
+  accepts an optional assetIds filter; AssetRefreshButton wired on portfolio/detail pages.
+- Bank Account card icon overlap — delete icon moved into the header flex row
+  (same fix pattern as the earlier FD card fix), no longer absolutely positioned.
+- Transaction edit — Pencil button + editingTransaction now wired into
+  transactions-view.tsx; previously the dialog supported it but nothing triggered it.
+- Window resize / responsive tables — all three tables (transactions, portfolio,
+  growth-projection) now have min-w-[...] on the <table>, so overflow-x-auto correctly
+  engages horizontal scroll instead of cells shrinking and text wrapping.
+- Table view now shows XIRR as a column (portfolio-view.tsx).
+- FIFO average-cost logic — investigated, no asset-class-specific bug found;
+  matchFIFOLots()/calculateWeightedAverageCost() are generic across stocks, ETFs, MF,
+  crypto, bonds. If a discrepancy is still seen, needs concrete numbers to trace further.
+
+====================================================================
+🔴 OPEN — ready to patch directly (small, contained)
+====================================================================
+3. Vercel Analytics and Speed Insights not enabled.
+   CONFIRMED: no @vercel/analytics / @vercel/speed-insights in package.json, no
+   <Analytics/>/<SpeedInsights/> in src/app/layout.tsx.
+   FIX: install both packages, add both components to root layout.
+
+5. Goals — same icon-overlap bug as the already-fixed Bank Account/FD cards.
+   CAUSE: goals-view.tsx wraps GoalCard in a relative div with an absolutely-positioned
+   delete button; GoalCard's own header can render a "by {targetDate}" label in that same
+   top-right spot, so they can collide.
+   FIX: same pattern already used for FD/bank account cards — move delete into the card's
+   own header flex row instead of absolute positioning.
+
+6. Watchlist shows no current price, despite the data already existing.
+   CAUSE: Asset already has currentPrice/currentPriceUpdatedAt; WatchlistItem includes
+   the full asset — it's just never rendered on the watchlist card. Only target
+   price/stop-loss are shown, with nothing to compare them against.
+   FIX: display item.asset.currentPrice + currentPriceUpdatedAt on each card.
+
+====================================================================
+🟡 OPEN — needs a small amount of new logic (still contained)
+====================================================================
+7. Goals have no edit capability, only add/delete.
+   No updateGoalAction exists anywhere. To change targetAmount/currentAmount/targetDate,
+   the only option is delete-and-recreate. Same class of gap "transaction edit" was
+   before it got fixed — mirror that pattern.
+
+8. Watchlist prices are never refreshed even after #6 is fixed.
+   No refresh mechanism reaches watchlist assets — refreshLivePricesAction is scoped to
+   actual holdings (quantity > 0) only, no AssetRefreshButton anywhere in the watchlist
+   feature.
+   FIX: add a per-item or page-level refresh button calling refreshLivePricesAction()
+   scoped to the watchlist's asset IDs.
+
+====================================================================
+🟠 OPEN — needs live diagnosis or a decision before scoping
+====================================================================
+10. Liabilities section not loading.
+    Checked page, service, repository, schema (both schema.sql and sync-schema.sql), RLS
+    policy, and view component — everything is internally consistent in source. Likely a
+    live/deployment issue (schema drift not yet synced, an RLS/auth session issue, or a
+    transient error), not a code bug visible from static source.
+    NEEDS: browser console error, network tab response, or Vercel function logs from an
+    actual failed load.
+
+12. Backup/Restore silently excludes 2 of 11 data tables — price history and portfolio
+    snapshots.
+    Checked backup.service.ts's ENTITY_LABELS against all 11 repositories —
+    price-history.repository.ts and snapshots.repository.ts are never referenced in
+    backup export/import. A "full" restore on a new device would silently lose the entire
+    price chart history (documented elsewhere as never re-fabricated once lost) and the
+    snapshot history that Day Change, the performance graph, and Sharpe/Sortino all
+    depend on.
+    NEEDS A DECISION: add both tables to backup/restore, or explicitly document this as a
+    known limitation so a "full backup" claim isn't misleading.
+
+====================================================================
+🔵 OPEN — larger feature work (design + multi-file changes)
+====================================================================
+14. Category-wise XIRR (group by asset class, not just per-asset).
+    Not implemented. The grouping key it needs (ASSET_TYPE_GROUP) already exists in
+    constants/asset-types.ts — needs an aggregation function built on top of it.
+
+17. Auto-refresh prices at market close daily, whether app is open or not.
+    Confirmed no vercel.json, no scheduled workflow anywhere. Currently only refreshes
+    opportunistically when someone opens the app (documented V1 trade-off in
+    ARCHITECTURE.md). Needs genuine new infra — a Vercel Cron Job (vercel.json + a
+    protected API route) scheduled for IST market close — not a code-only patch.
+
+====================================================================
+QUICK REFERENCE — patch order suggestion
+====================================================================
+Fastest wins first: #1 (Day Change), #2 (MF labels), #3 (Vercel Analytics), #5 (Goals
+overlap), #6 (Watchlist price display) — all small, independent, no design decisions needed.
+Then: #4 (pagination), #7 (goal edit), #8 (watchlist refresh).
+Then resolve the three decisions (#9, #11, #12) so #10 and #13 can be diagnosed live.
+Save #14-17 for dedicated sessions — each is multi-file feature work.
+------------------------------------------------------------------------------------
+APPENDIX 6 — MASTER-REPORT.txt (verbatim — the previous merge, now itself merged in)
+------------------------------------------------------------------------------------
+WEALTH DASHBOARD — MASTER REPORT (single source of truth)
+Consolidates and de-duplicates: code_optimization.txt, COMPREHENSIVE-FINAL-REPORT.txt,
+FEATURE-IDEAS.txt, FINAL-AUDIT-REPORT.txt, and MASTER-ISSUES.txt. Every item
+re-verified against the current codebase before inclusion — nothing carried forward
+on trust alone. Older items that had quietly dropped out of the more recent reports
+(Goals overlap, Watchlist gaps, Vercel Analytics, category-wise XIRR, etc.) have been
+re-checked and restored here so nothing gets lost again.
+
+====================================================================
+1. WHAT'S DONE
+====================================================================
+
+NPS REWRITE — ALL 8 PARTS COMPLETE, EACH INDEPENDENTLY VERIFIED:
+  Part 1: Contribution-sync bug fixed.
+  Part 2: Real units×NAV schema, RLS extended, DB-level dedup.
+  Part 3: Classification rules — independently reimplemented and reproduced your
+          exact real numbers (Rs.7,70,430 invested / Rs.8,82,252 corpus).
+  Part 4: Import parser, both statement formats — caught a real spec error
+          (switch settlement lag is ~2 days, not same-day).
+  Part 5: Live NAV refresh via npsnav.in — endpoint URLs verified against real docs;
+          correctly refuses to auto-guess PFM-to-scheme mapping.
+  Part 6: Dashboard/Analytics XIRR inconsistency fixed.
+  Part 7: Employer contribution field + per-scheme breakdown UI.
+  Part 8: Idempotent statement re-upload, tested.
+
+NPS "NAV DIDN'T CHANGE" INVESTIGATION — RESOLVED, NOT A BUG:
+  [NOTE FROM MERGE: this conclusion was later updated — see Part I, Section 1 of the
+  merged file this appendix lives inside, for the corrected, complete story
+  involving npsnav.in's own data being found genuinely stale for 2+ days. Preserved
+  verbatim below exactly as originally written for the record.]
+  Traced end-to-end after a real user report of a growing corpus gap (~₹817 →
+  ~₹4,000) and "refresh does nothing." Root cause was NEVER a code defect —
+  independently verified every layer (fetch logic, cache: "no-store" confirmed
+  correctly set, DB write path, getEffectiveCorpus() derivation, no server-side
+  caching, force-dynamic on page+layout, ROUTES.dashboard unchanged by an
+  unrelated patch). Verified the app's own math against the user's real statement
+  (units × live NAV reproduced the displayed per-scheme values to the rupee) and
+  cross-checked the Dashboard's allocation % against the confirmed-correct NPS
+  value (25.24% computed vs. 25.2% displayed — matched). Final explanation: NAV is
+  published once per trading day, not continuously — "refresh not changing at 4pm"
+  is expected correct behavior, not a stale value. Separately confirmed npsnav.in's
+  own GitHub-Actions-driven sync (11am/11pm IST) can genuinely lag past its
+  scheduled time, which explains why an early-morning refresh may still return the
+  previous day's value.
+
+HOLDINGS HUB (replaces old sidebar dropdown) — DONE, VERIFIED CLEAN:
+  New /holdings page: every category (securities, cash, FDs, NPS, PPF, liabilities,
+  watchlist) shown as a sorted-by-value clickable card, routing to its own detail
+  page. Confirmed the old per-asset-class dropdown/collapsible sidebar logic was
+  genuinely REMOVED (not left dangling alongside the new page) — checked both
+  desktop sidebar and mobile nav, ~50 lines of old per-category logic cleanly
+  replaced with a single "Holdings" link in both places. Correctly excludes a
+  zero-value liabilities card, correctly parallelized data fetch, force-dynamic set.
+  This closes the item that was previously open in Section 4/9 ("dropdown → card
+  view for holdings") — removed from the open-issues list below.
+
+OTHER FIXES CONFIRMED LANDED:
+  - Day Change bug fixed. Sharpe/Sortino annualization fixed (real snapshot-gap
+    factor, not hardcoded daily). MF labels shortened. "View more" pagination added
+    (Transactions table + per-asset history). Bank Account / FD card icon-overlap
+    fixed. Zero-holding refresh waste fixed; scoped refresh buttons added.
+    Transaction edit UI wired up. Responsive table/resize bug fixed. "Refresh all"
+    button added to Dashboard (scope gap noted in Section 2). Tax-loss harvesting
+    feature added (new /tax-harvesting page + calculations module).
+
+====================================================================
+2. CONSISTENCY BUGS — "SAME NUMBER, DIFFERENT VALUE IN DIFFERENT PLACES"
+====================================================================
+
+✅ Net worth itself IS consistent everywhere — single getPortfolioSummary() source,
+   verified across Dashboard and Analytics, NPS uses live derived corpus correctly.
+
+⚠️ CAGR mixes old- and new-methodology numbers invisibly. Compares your oldest
+   stored snapshot (computed under old, less-correct logic — especially old NPS
+   corpus handling) against today's freshly-computed net worth. Could show an
+   artificial jump that's really just "the math got more correct," not real growth.
+   Fix: a caption noting pre-rewrite snapshots may not be directly comparable, or
+   accept as a known one-time distortion.
+
+⚠️ "Refresh all" doesn't mean all. Dashboard's button only calls
+   refreshLivePricesAction() (securities) — zero awareness NPS live NAV refresh
+   exists. Confirmed still the case.
+
+⚠️ NPS "as of" timestamp is misleading — shows fetch time, not the NAV's real date
+   (npsnav.in's "Simple" endpoint returns no date at all). A "Detailed" endpoint
+   exists (/api/detailed/{scheme_code}) with a genuine "Last Updated" field — switching
+   would make the displayed date trustworthy instead of always looking fresh.
+
+CHECKED, FOUND CONSISTENT: XIRR (Dashboard vs Analytics), holdings/currentValue
+(single computeHoldings() source), NPS page has no separate XIRR to conflict.
+
+====================================================================
+3. MAJOR BUGS / GAPS — CORE APP (re-verified against current code)
+====================================================================
+
+❌ No audit trail for financial record edits/deletes. Highest real risk — silent,
+   irreversible data loss on financial history is currently possible.
+
+❌ CSV transaction import isn't idempotent. Re-uploading the same file duplicates
+   transactions silently. Fix pattern already proven in your own NPS importer —
+   just needs porting to this older path.
+
+❌ Backup/Restore silently excludes price_history and portfolio_snapshots — 2 of 11
+   tables never backed up, despite being marketed as a full JSON backup.
+
+❌ Liabilities section reported as not loading. Checked page/service/repository/
+   schema/RLS — all internally consistent in source. Likely a live/deployment issue
+   (schema drift, auth session, transient error), not a code bug visible from static
+   source. Needs a real browser console error or Vercel log to progress further.
+
+❌ Dashboard fetches the same base data ~5x per page load (assets/transactions
+   re-queried independently by getPortfolioSummary/getAssetAllocation/
+   getTopHoldings/getSegregatedBreakdown instead of sharing one computed result).
+   Not currently a speed problem; compounds as transaction history grows.
+
+❌ No error boundaries (error.tsx) anywhere in the App Router — a thrown Server
+   Component shows Next.js's generic crash page.
+
+❌ No loading.tsx anywhere — no route-level streaming; navigation shows a blank
+   screen until a page's full data fetch completes.
+
+❌ No server-side error logging anywhere — zero console.error calls across any
+   service/action file.
+
+❌ Vercel Analytics and Speed Insights not installed — no @vercel/analytics or
+   @vercel/speed-insights in package.json, nothing in layout.tsx.
+
+❌ No auto-refresh at market close (cron). Confirmed no vercel.json, no scheduled
+   workflow — prices only refresh opportunistically when the app is opened. Needs
+   real new infra (Vercel Cron Job + protected API route), not a code-only patch.
+
+====================================================================
+4. MAJOR BUGS / GAPS — SPECIFIC FEATURES (from the older backlog, re-verified
+   still present, previously at risk of being lost between reports)
+====================================================================
+
+❌ Goals — same card icon-overlap bug already fixed for Bank Accounts/FDs, never
+   applied here. goals-view.tsx still uses an absolutely-positioned delete button
+   that can collide with the card's own "by {targetDate}" label.
+
+❌ Goals have no edit capability — only add/delete. No updateGoalAction exists.
+   Changing a goal's target amount/date means delete-and-recreate.
+
+❌ Watchlist shows no current price at all, despite the data already existing
+   (Asset already has currentPrice/currentPriceUpdatedAt). Makes the target-price/
+   stop-loss feature hard to actually use — nothing to compare against.
+
+❌ Watchlist prices are never refreshed even if the above gets fixed — no
+   AssetRefreshButton or equivalent reaches watchlist assets at all.
+
+❌ Category-wise XIRR (group by asset class, not just per-asset) not implemented.
+   The grouping key it needs (ASSET_TYPE_GROUP) already exists — just needs an
+   aggregation function built on top.
+
+❌ MF holdings still show generic stock-style "Qty / Avg. Cost" instead of
+   MF-appropriate NAV/units terminology and precision — confirmed unchanged in both
+   the card and table view.
+
+====================================================================
+5. PERFORMANCE (full detail — see original code_optimization.txt content, condensed
+   here with nothing lost)
+====================================================================
+
+✅ Database indexes thorough and well-targeted — every RLS user_id column indexed,
+   plus sensible composite indexes matching real query patterns.
+✅ computeHoldings() itself correctly batched (one Promise.all, not N+1).
+✅ Price refresh sequential, not parallel — correctly avoids bursting free rate-
+   limited APIs, with per-asset failure isolation.
+✅ Server Components used correctly everywhere for initial data fetch.
+✅ No literal N+1 query loops found anywhere.
+
+❌ Dashboard redundant fetching (same issue as Section 3 — assets/transactions
+   queried ~5x per load instead of once, shared). FIX: one shared getDashboardData()
+   that computes holdings once and derives summary/allocation/top-holdings/breakdown
+   from that single result.
+
+🟡 recharts not code-split via next/dynamic — ships in the initial bundle for every
+   page with a chart (Dashboard/Analytics/NPS). Cheap, low-risk fix.
+
+🟡 No memoization in the two largest tables (transactions, portfolio). Not currently
+   noticeable at your data volume; only worth revisiting if actually felt as slow.
+
+====================================================================
+6. MINOR BUGS / POLISH ITEMS
+====================================================================
+
+🟡 Analytics: 3 of 4 Risk-row stat tiles have a caption, Max Drawdown doesn't —
+   likely uneven card heights in that row. Cosmetic.
+🟡 No freshness indicator (currentPriceUpdatedAt) shown in UI for stocks/MF/crypto —
+   the data exists, just isn't displayed. NPS already does this correctly via
+   last_nav_date; worth extending the same idea to securities.
+🟡 Money math uses plain JS Number throughout, no decimal-safe library. Low risk at
+   current volumes; worth adopting for new code as history grows over years.
+🟡 No undo window on deletes — confirm dialog only.
+
+====================================================================
+7. MAKING IT MORE "PROFESSIONAL"
+====================================================================
+
+ALREADY GENUINELY STRONG — worth knowing this is a real strength:
+  - RLS on all 13 tables, verified zero gaps.
+  - TypeScript strict mode enabled.
+  - Real test coverage (77+ tests), including edge cases from actual real-world
+    data, not just happy-path.
+  - Secrets handling clean, no exposure risk anywhere.
+  - Rate-limit-conscious external API design.
+  - Demo-mode fallback maintained consistently across every repository.
+  - Code comments explain WHY, not just what, consistently across the project.
+
+WHAT WOULD CLOSE THE GAP TO "PRODUCTION-READY":
+  - Sections 3 and 4's items are exactly what a real code review would flag before
+    calling this safe for anyone (including future-you) to fully trust.
+  - Decimal-safe money arithmetic — the other classic "fine until it silently isn't"
+    gap.
+  - Keep ARCHITECTURE.md/DATABASE.md current as a running decisions log — already
+    apparently the right instinct, worth continuing deliberately.
+
+====================================================================
+8. FEATURES WORTH ADDING (full detail in FEATURE-IDEAS.txt — condensed here)
+====================================================================
+No new infra needed: allocation drift/rebalancing alerts, tax-loss harvesting flags
+(very India-relevant), gold/property as first-class asset types (large share of real
+Indian household wealth, no proper home currently), SIP reminder tracking (reuses
+existing maturity-bell mechanism), portfolio benchmarking vs. Nifty/Sensex, a
+rules-based "what changed" weekly recap, cash flow forecast from existing maturity
+data.
+
+Needs new infra: index benchmarking data source, push/email notification delivery,
+an interactive scenario/"fast forward" planner (builds cleanly on existing
+growth-projection.tsx).
+
+Biggest single differentiator, genuinely its own project: Account Aggregator (RBI
+framework) auto-sync — the one feature separating every major competitor
+(INDmoney/Kuvera/Empower) from a manual-entry tool.
+
+Low fit for this app's purpose (flagged so skipping is deliberate, not an oversight):
+full budgeting/expense categorization, deep crypto wallet/DeFi scanning, estate
+planning/legacy handoff.
+
+====================================================================
+9. PRIORITY-RANKED ACTION LIST — everything above, one true ranked list
+====================================================================
+1. Audit trail for edits/deletes — highest real risk.
+2. CSV import idempotency — easy now, pattern already proven in NPS importer.
+3. Goals card icon-overlap fix — trivial, same pattern already used twice elsewhere.
+4. Watchlist price display — data already exists, just needs rendering.
+5. Fix "Refresh all" to actually include NPS, or rename it to be honest about scope.
+6. Fix incomplete backup/restore.
+7. Vercel Analytics/Speed Insights — quick install.
+8. Error boundaries + loading.tsx — cheap, meaningfully improves reliability feel.
+9. Switch NPS live NAV to the "Detailed" endpoint for a trustworthy NAV date.
+10. Watchlist refresh capability.
+11. Goals edit capability.
+12. Dashboard redundant fetching — real, compounds with data growth.
+13. Server-side error logging.
+14. Category-wise XIRR.
+15. MF-specific NAV/units display (card + table).
+16. CAGR caption noting pre-rewrite snapshot methodology differences.
+17. Chart code-splitting (next/dynamic).
+18. Freshness indicators for securities prices in the UI.
+19. Liabilities-not-loading — needs live diagnosis (console error/logs), not more
+    code review, before it can move.
+20. Decimal-safe money math — adopt going forward.
+21. Undo window on deletes.
+22. Auto-refresh at market close (cron) — real new infra, not a quick patch.
+23. Feature additions (Section 8) — once trust/correctness items above are settled.
+
+DONE, no longer on this list: NPS live NAV refresh (verified working correctly —
+see Section 1), Holdings dropdown → card view (built and verified clean).
+------------------------------------------------------------------------------------
+APPENDIX 7 — NPS-DETAILED-ENDPOINT-PROMPT.txt (verbatim)
+------------------------------------------------------------------------------------
+PROMPT FOR NEW CHAT — NPS LIVE NAV: SWITCH TO DETAILED ENDPOINT + STALENESS WARNING
+(paste this along with PROJECT-STATUS.md and the source zip, per usual workflow)
+
+====================================================================
+CONTEXT — why this matters, confirmed with a real incident
+====================================================================
+Workflow: single git patch file, verified with tsc/eslint/vitest/next build.
+
+src/lib/market-data/live-provider.ts's fetchNPSNAVQuote() currently uses npsnav.in's
+"Simple" endpoint (/api/{scheme_code}), which returns ONLY a bare NAV number — no
+date. The function stamps the result with `asOf: new Date().toISOString()` (the
+moment the APP fetched it), not the NAV's real publication date.
+
+THIS JUST CAUSED A REAL, MULTI-DAY DEBUGGING SESSION: npsnav.in's own data was
+stuck/stale for over 2 days (confirmed directly on their site — their own banner
+read "NAV updated: 24-08-2026" while checks were happening on the 26th-27th). The
+app kept showing "as of [today]" the entire time, because that timestamp was always
+just "when I refreshed," never the true NAV date — completely masking a real
+upstream data problem that would have been obvious immediately if the UI showed the
+NAV's actual date instead.
+
+====================================================================
+THE FIX
+====================================================================
+1. Switch fetchNPSNAVQuote() to npsnav.in's "Detailed" endpoint instead of the
+   Simple one — confirm the exact path and response shape from their docs
+   (npsnav.in/nps-api) before wiring it in, since this wasn't independently
+   re-verified this session; last confirmed detail was that a detailed variant
+   exists and returns a genuine "Last Updated" field alongside the NAV, but the
+   exact JSON key names need checking against their current docs directly.
+
+2. Parse and store the REAL last-updated date from that response — this replaces
+   the current asOf: new Date().toISOString() fabrication entirely. Update
+   nps_scheme_holdings.last_nav_date (already exists in schema) to store this real
+   date, not the fetch timestamp.
+
+3. STALENESS WARNING in the UI: on the NPS page, if a connected scheme's
+   last_nav_date is more than ~2 calendar days older than today, show a visible
+   warning state instead of the normal "Live NAV ... as of [date]" — e.g. a
+   yellow/amber treatment with something like "NAV data may be stale — last updated
+   [date], source hasn't synced since." This is the single most valuable part of
+   this fix: it would have caught the exact 2-day-stale incident automatically,
+   the first time it happened, instead of requiring extensive manual
+   cross-referencing against the Protean app and npsnav.in's raw site to even
+   realize something was wrong.
+
+4. Apply the same staleness check to refreshLiveNAVs()'s result summary — if a
+   fetch succeeds (HTTP 200, valid number) but returns a last-updated date that's
+   already stale, the toast/summary should distinguish "updated, but source data is
+   old" from a genuine fresh update, rather than reporting both as equally
+   successful.
+
+====================================================================
+WHAT NOT TO CHANGE
+====================================================================
+- Keep fetchNPSNAVQuote()'s existing fail-soft behavior (return null on any error,
+  never throw) — this fix is about the SUCCESS path returning better information,
+  not about changing error handling.
+- Keep the existing "never auto-guess PFM-to-scheme mapping" design entirely as-is
+  — this fix is orthogonal to that.
+
+====================================================================
+TEST TO ADD
+====================================================================
+A test asserting: given a mocked Detailed-endpoint response with a last-updated
+date more than 2 days old, the staleness warning condition evaluates true; given a
+response from today or yesterday, it evaluates false. Use real boundary cases (2
+days ago exactly, 3 days ago) so the threshold behavior is explicit and tested, not
+just implied by the code.
