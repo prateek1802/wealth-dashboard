@@ -135,3 +135,15 @@ export async function refreshNPSLiveNAVsAction(npsAccountId: string): Promise<{ 
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
+
+/** Refreshes live NAV for every connected scheme across every NPS account — used by the Dashboard's "Refresh all" button. */
+export async function refreshAllNPSLiveNAVsAction(): Promise<{ ok: true; updated: number; skipped: number; failed: number } | { ok: false; error: string }> {
+  try {
+    const result = await npsService.refreshAllLiveNAVs();
+    revalidatePath(ROUTES.nps);
+    revalidatePath(ROUTES.dashboard);
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}

@@ -189,6 +189,25 @@ export const npsService = {
   },
 
   /**
+   * Refreshes live NAV for every connected scheme across EVERY NPS
+   * account — the counterpart to the Dashboard's "Refresh all" button,
+   * which previously only refreshed securities and had no awareness NPS
+   * live NAV refresh existed at all. Reuses refreshLiveNAVs() per account
+   * and sums the results.
+   */
+  async refreshAllLiveNAVs(): Promise<{ updated: number; skipped: number; failed: number }> {
+    const accounts = await npsRepository.findAll();
+    const totals = { updated: 0, skipped: 0, failed: 0 };
+    for (const account of accounts) {
+      const result = await this.refreshLiveNAVs(account.id);
+      totals.updated += result.updated;
+      totals.skipped += result.skipped;
+      totals.failed += result.failed;
+    }
+    return totals;
+  },
+
+  /**
    * Cash flows for the portfolio-wide XIRR, routed per account:
    *  - Accounts with scheme-level data (a statement has been imported) use
    *    buildSchemeTransactionCashflows() — real, dated contribution/

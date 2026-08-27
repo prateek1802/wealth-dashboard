@@ -4,28 +4,42 @@ import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { refreshLivePricesAction } from "@/features/portfolio/actions";
+import { refreshAllNPSLiveNAVsAction } from "@/features/nps/actions";
 import { RefreshCw } from "lucide-react";
 
 /**
- * One-click refresh for every current holding's price, in one go — the
- * dashboard-level counterpart to the per-asset-class and per-asset refresh
- * buttons on the Portfolio page. Calls refreshLivePricesAction() with no
- * assetIds filter, which already means "every current holding".
+ * One-click refresh for every current holding's price AND every connected
+ * NPS scheme's live NAV, in one go — the dashboard-level counterpart to
+ * the per-asset-class/per-asset refresh buttons on Portfolio and the
+ * per-account "Refresh live NAVs" button on the NPS page.
+ *
+ * BUGFIX: this used to call only refreshLivePricesAction() (securities) —
+ * zero awareness NPS live NAV refresh existed at all, so "Refresh all"
+ * didn't actually mean all. Now pools both, and reports a combined count.
  */
 export function RefreshAllCard() {
   const [isRefreshing, startRefresh] = useTransition();
 
   function handleRefresh() {
     startRefresh(async () => {
-      const result = await refreshLivePricesAction();
-      if ("error" in result) {
-        toast.error(result.error);
+      const [pricesResult, npsResult] = await Promise.all([refreshLivePricesAction(), refreshAllNPSLiveNAVsAction()]);
+
+      if ("error" in pricesResult) {
+        toast.error(pricesResult.error);
         return;
       }
-      if (result.updated === 0) {
-        toast.info("No live prices available for your current holdings.");
+      if (!npsResult.ok) {
+        toast.error(npsResult.error);
+        return;
+      }
+
+      const totalUpdated = pricesResult.updated + npsResult.updated;
+      const totalSkipped = pricesResult.skipped.length + npsResult.failed;
+
+      if (totalUpdated === 0) {
+        toast.info("No live prices or connected NPS schemes to refresh.");
       } else {
-        toast.success(`Updated ${result.updated} price${result.updated === 1 ? "" : "s"}${result.skipped.length ? ` · ${result.skipped.length} skipped (no live source)` : ""}`);
+        toast.success(`Updated ${totalUpdated} price${totalUpdated === 1 ? "" : "s"}${totalSkipped ? ` · ${totalSkipped} skipped (no live source)` : ""}`);
       }
     });
   }
