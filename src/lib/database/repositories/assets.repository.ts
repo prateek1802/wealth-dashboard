@@ -1,10 +1,18 @@
 import { isDemoMode } from "@/lib/database/client";
 import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoAssets, nextId } from "@/lib/database/demo-data";
+import { sanitizePrice } from "@/lib/utils/sanitize-price";
 import type { Asset, NewAsset, AssetUpdate } from "@/types/domain/asset";
 import type { AssetRow } from "@/types/database";
 import type { AssetType } from "@/constants/asset-types";
 
+export { sanitizePrice };
+
+/**
+ * See sanitizePrice()'s doc comment in lib/utils/sanitize-price.ts for why
+ * this exists — sanitized here on every READ so an already-corrupted row
+ * displays safely everywhere the app renders an Asset.
+ */
 function rowToAsset(row: AssetRow): Asset {
   return {
     id: row.id,
@@ -16,7 +24,7 @@ function rowToAsset(row: AssetRow): Asset {
     sector: row.sector,
     country: row.country,
     isin: row.isin,
-    currentPrice: row.current_price,
+    currentPrice: sanitizePrice(row.current_price),
     currentPriceUpdatedAt: row.current_price_updated_at,
     isActive: row.is_active,
     notes: row.notes,
@@ -35,7 +43,10 @@ function assetToRow(a: NewAsset) {
     sector: a.sector,
     country: a.country,
     isin: a.isin,
-    current_price: a.currentPrice,
+    // sanitizePrice() here too — upsertBySymbol's INSERT path (used by CSV
+    // import and backup restore, the latter trusting an uploaded file) goes
+    // straight to assetToRow(), bypassing update()'s guard above.
+    current_price: sanitizePrice(a.currentPrice),
     current_price_updated_at: a.currentPriceUpdatedAt,
     is_active: a.isActive,
     notes: a.notes,
@@ -80,7 +91,7 @@ export const assetsRepository = {
     if (existing) return existing;
 
     if (isDemoMode()) {
-      const asset: Asset = { ...input, id: nextId("asset"), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      const asset: Asset = { ...input, currentPrice: sanitizePrice(input.currentPrice), id: nextId("asset"), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       demoAssets.push(asset);
       return asset;
     }
@@ -91,6 +102,9 @@ export const assetsRepository = {
   },
 
   async update(id: string, update: AssetUpdate): Promise<Asset> {
+    if (update.currentPrice !== undefined && update.currentPrice !== null && !Number.isFinite(update.currentPrice)) {
+      throw new Error(`Refusing to write a non-finite currentPrice (${update.currentPrice}) for asset ${id}.`);
+    }
     if (isDemoMode()) {
       const asset = demoAssets.find((a) => a.id === id);
       if (!asset) throw new Error("Asset not found");

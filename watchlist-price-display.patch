@@ -1,42 +1,133 @@
-diff --git a/src/features/watchlist/components/watchlist-view.tsx b/src/features/watchlist/components/watchlist-view.tsx
-index 9c619ad..4bc6442 100644
---- a/src/features/watchlist/components/watchlist-view.tsx
-+++ b/src/features/watchlist/components/watchlist-view.tsx
-@@ -14,6 +14,7 @@ import { SymbolCombobox } from "@/features/transactions/components/symbol-combob
- import { addWatchlistItemAction, removeWatchlistItemAction } from "../actions";
- import { SECURITY_ASSET_TYPES, ASSET_TYPE_LABELS } from "@/constants/asset-types";
- import { formatCurrency } from "@/lib/utils/currency";
-+import { formatDate } from "@/lib/utils/date";
- import { Eye, Plus, Trash2 } from "lucide-react";
- import type { WatchlistItem } from "@/types/domain/watchlist";
+diff --git a/src/lib/database/repositories/assets.repository.ts b/src/lib/database/repositories/assets.repository.ts
+index 2c2f927..11a18bf 100644
+--- a/src/lib/database/repositories/assets.repository.ts
++++ b/src/lib/database/repositories/assets.repository.ts
+@@ -1,10 +1,18 @@
+ import { isDemoMode } from "@/lib/database/client";
+ import { getServerSupabaseClient } from "@/lib/database/server-client";
+ import { demoAssets, nextId } from "@/lib/database/demo-data";
++import { sanitizePrice } from "@/lib/utils/sanitize-price";
+ import type { Asset, NewAsset, AssetUpdate } from "@/types/domain/asset";
+ import type { AssetRow } from "@/types/database";
  import type { AssetType } from "@/constants/asset-types";
-@@ -77,9 +78,27 @@ export function WatchlistView({ items }: { items: WatchlistItem[] }) {
-                 <span className="font-mono font-medium text-ink">{item.asset.symbol}</span>
-                 <span className="text-xs text-ink-muted">{item.asset.name}</span>
-               </div>
-+              {item.asset.currentPrice !== null ? (
-+                <div className="flex flex-col">
-+                  <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(item.asset.currentPrice, item.asset.currency)}</span>
-+                  {item.asset.currentPriceUpdatedAt && (
-+                    <span className="text-xs text-ink-muted">as of {formatDate(item.asset.currentPriceUpdatedAt)}</span>
-+                  )}
-+                </div>
-+              ) : (
-+                <span className="text-xs text-ink-muted">No price yet — refresh to fetch one.</span>
-+              )}
-               <div className="flex justify-between text-xs text-ink-muted">
--                {item.targetPrice && <span>Target {formatCurrency(item.targetPrice, item.asset.currency)}</span>}
--                {item.stopLoss && <span>Stop-loss {formatCurrency(item.stopLoss, item.asset.currency)}</span>}
-+                {item.targetPrice && (
-+                  <span className={item.asset.currentPrice !== null && item.asset.currentPrice >= item.targetPrice ? "text-gain" : undefined}>
-+                    Target {formatCurrency(item.targetPrice, item.asset.currency)}
-+                  </span>
-+                )}
-+                {item.stopLoss && (
-+                  <span className={item.asset.currentPrice !== null && item.asset.currentPrice <= item.stopLoss ? "text-loss" : undefined}>
-+                    Stop-loss {formatCurrency(item.stopLoss, item.asset.currency)}
-+                  </span>
-+                )}
-               </div>
-               {item.note && <p className="text-sm text-ink">{item.note}</p>}
-               <button onClick={() => setDeleteTarget(item)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
+ 
++export { sanitizePrice };
++
++/**
++ * See sanitizePrice()'s doc comment in lib/utils/sanitize-price.ts for why
++ * this exists — sanitized here on every READ so an already-corrupted row
++ * displays safely everywhere the app renders an Asset.
++ */
+ function rowToAsset(row: AssetRow): Asset {
+   return {
+     id: row.id,
+@@ -16,7 +24,7 @@ function rowToAsset(row: AssetRow): Asset {
+     sector: row.sector,
+     country: row.country,
+     isin: row.isin,
+-    currentPrice: row.current_price,
++    currentPrice: sanitizePrice(row.current_price),
+     currentPriceUpdatedAt: row.current_price_updated_at,
+     isActive: row.is_active,
+     notes: row.notes,
+@@ -35,7 +43,10 @@ function assetToRow(a: NewAsset) {
+     sector: a.sector,
+     country: a.country,
+     isin: a.isin,
+-    current_price: a.currentPrice,
++    // sanitizePrice() here too — upsertBySymbol's INSERT path (used by CSV
++    // import and backup restore, the latter trusting an uploaded file) goes
++    // straight to assetToRow(), bypassing update()'s guard above.
++    current_price: sanitizePrice(a.currentPrice),
+     current_price_updated_at: a.currentPriceUpdatedAt,
+     is_active: a.isActive,
+     notes: a.notes,
+@@ -80,7 +91,7 @@ export const assetsRepository = {
+     if (existing) return existing;
+ 
+     if (isDemoMode()) {
+-      const asset: Asset = { ...input, id: nextId("asset"), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
++      const asset: Asset = { ...input, currentPrice: sanitizePrice(input.currentPrice), id: nextId("asset"), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+       demoAssets.push(asset);
+       return asset;
+     }
+@@ -91,6 +102,9 @@ export const assetsRepository = {
+   },
+ 
+   async update(id: string, update: AssetUpdate): Promise<Asset> {
++    if (update.currentPrice !== undefined && update.currentPrice !== null && !Number.isFinite(update.currentPrice)) {
++      throw new Error(`Refusing to write a non-finite currentPrice (${update.currentPrice}) for asset ${id}.`);
++    }
+     if (isDemoMode()) {
+       const asset = demoAssets.find((a) => a.id === id);
+       if (!asset) throw new Error("Asset not found");
+diff --git a/src/lib/utils/sanitize-price.ts b/src/lib/utils/sanitize-price.ts
+new file mode 100644
+index 0000000..4bba505
+--- /dev/null
++++ b/src/lib/utils/sanitize-price.ts
+@@ -0,0 +1,23 @@
++/**
++ * Postgres's `numeric` type (assets.current_price is numeric(18,4)) can
++ * actually store the literal value NaN — unusual among databases, but true
++ * for Postgres. When Supabase/PostgREST serializes a numeric NaN to JSON,
++ * it comes back as the STRING "NaN" (JSON has no native NaN token), which
++ * then flows straight into the UI as e.g. "₹NaN" if not caught.
++ *
++ * Every app code path that WRITES a price is already guarded (zod rejects
++ * NaN in updateAssetPriceAction, the live-quote fetchers check
++ * typeof/isFinite before returning a Quote) — so a NaN sitting in this
++ * column almost certainly predates those guards, or was written directly
++ * via SQL. assets.repository.ts calls this on every READ (rowToAsset) so
++ * any already-corrupted row displays safely everywhere from one place, and
++ * on every WRITE (assetToRow, update()'s guard) so it can't recur.
++ */
++export function sanitizePrice(value: unknown): number | null {
++  if (typeof value === "number" && Number.isFinite(value)) return value;
++  if (typeof value === "string") {
++    const parsed = Number(value);
++    if (Number.isFinite(parsed)) return parsed;
++  }
++  return null;
++}
+diff --git a/test/asset-price-sanitize.test.ts b/test/asset-price-sanitize.test.ts
+new file mode 100644
+index 0000000..303b3ad
+--- /dev/null
++++ b/test/asset-price-sanitize.test.ts
+@@ -0,0 +1,35 @@
++import { describe, it, expect } from "vitest";
++import { sanitizePrice } from "@/lib/utils/sanitize-price";
++
++describe("sanitizePrice", () => {
++  it("passes through a normal finite number unchanged", () => {
++    expect(sanitizePrice(1725.4)).toBe(1725.4);
++  });
++
++  it("passes through null unchanged", () => {
++    expect(sanitizePrice(null)).toBeNull();
++  });
++
++  it("converts a literal NaN number to null", () => {
++    expect(sanitizePrice(NaN)).toBeNull();
++  });
++
++  it('converts the string "NaN" to null — what a Postgres numeric NaN column looks like once PostgREST serializes it to JSON', () => {
++    expect(sanitizePrice("NaN")).toBeNull();
++  });
++
++  it("parses a valid numeric string (defensive — in case a numeric column ever comes back stringified)", () => {
++    expect(sanitizePrice("1725.4")).toBe(1725.4);
++  });
++
++  it("converts Infinity/-Infinity to null", () => {
++    expect(sanitizePrice(Infinity)).toBeNull();
++    expect(sanitizePrice(-Infinity)).toBeNull();
++  });
++
++  it("converts undefined and other garbage to null rather than throwing", () => {
++    expect(sanitizePrice(undefined)).toBeNull();
++    expect(sanitizePrice({})).toBeNull();
++    expect(sanitizePrice("abc")).toBeNull();
++  });
++});
