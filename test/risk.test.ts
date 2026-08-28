@@ -99,3 +99,89 @@ describe("calculateMaxDrawdown — unaffected by the annualization fix (not a ra
     if (result.status === "ok") expect(result.value).toBeCloseTo(25, 5); // (120-90)/120
   });
 });
+
+// A plausible alternating ~1%/-0.4% trend (same shape as noisyValues), except
+// one snapshot spikes +80% then snaps back on the next one — simulating
+// exactly the scenario this project's NPS corpus-methodology changes could
+// produce: one snapshot recorded mid-transition shows an artificial swing
+// that was never a real market move.
+function valuesWithOutlier(count: number = 10): number[] {
+  const values = noisyValues(count);
+  const spikeSource = values[4];
+  const nextTrendValue = values[6]; // preserved so the series returns to its original trend after the snap-back
+  values[5] = spikeSource * 1.8; // +80% in one gap — implausible
+  values[6] = nextTrendValue; // snaps back to trend, ignoring the spike
+  return values;
+}
+
+function oldBuggyVolatility(values: number[]): number {
+  const returns: number[] = [];
+  for (let i = 1; i < values.length; i++) returns.push((values[i] - values[i - 1]) / values[i - 1]);
+  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+  return Math.sqrt(variance) * Math.sqrt(52) * 100; // ~weekly cadence, matching weeklyDates()
+}
+
+describe("outlier-return exclusion — real bug from mid-series NPS methodology contamination", () => {
+  it("keeps Volatility in a plausible range even with one extreme snapshot mixed in, and well below what the old unprotected math would have produced", () => {
+    const values = valuesWithOutlier(10);
+    const dates = weeklyDates(10);
+
+    const result = calculateVolatility(values, dates);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+
+    expect(result.value).toBeGreaterThanOrEqual(0);
+    expect(result.value).toBeLessThan(150); // spec's "roughly 0-150%" plausible range
+    expect(result.value).toBeLessThan(oldBuggyVolatility(values) * 0.2); // old math blows past 500+ on this fixture
+  });
+
+  it("keeps Sharpe and Sortino in a plausible range (roughly -5 to 5) with the same contaminated fixture", () => {
+    const values = valuesWithOutlier(10);
+    const dates = weeklyDates(10);
+
+    const sharpe = calculateSharpeRatio(values, dates, 7);
+    const sortino = calculateSortinoRatio(values, dates, 7);
+
+    expect(sharpe.status).toBe("ok");
+    expect(sortino.status).toBe("ok");
+    if (sharpe.status === "ok") expect(Math.abs(sharpe.value)).toBeLessThan(5);
+    if (sortino.status === "ok") expect(Math.abs(sortino.value)).toBeLessThan(5);
+  });
+
+  it("falls back to insufficient_data if excluding outliers leaves too few periods to compare", () => {
+    // Every gap here is an extreme swing, so ALL periods get excluded as outliers.
+    const result = calculateVolatility([100, 300, 90, 400, 80, 500, 70, 600], weeklyDates(8));
+    expect(result.status).toBe("insufficient_data");
+  });
+});
+
+describe("cutoff date — the other, independent line of defense", () => {
+  it("excludes snapshots before the cutoff entirely, even ones that aren't single-period outliers", () => {
+    // 12 contaminated-era snapshots (large jump baked into the whole level,
+    // not just one gap) followed by 8 clean post-cutoff snapshots.
+    const contaminated = Array.from({ length: 12 }, (_, i) => 5_000_000 * (1 + i * 0.2)); // wildly volatile throughout
+    const clean = Array.from({ length: 8 }, (_, i) => 1_000_000 * (1 + i * 0.005)); // steady ~0.5%
+    const values = [...contaminated, ...clean];
+    const dates = weeklyDates(20);
+    const cutoff = dates[12]; // first "clean" date
+
+    const withoutCutoff = calculateVolatility(values, dates);
+    const withCutoff = calculateVolatility(values, dates, cutoff);
+
+    expect(withoutCutoff.status).toBe("ok");
+    expect(withCutoff.status).toBe("ok");
+    if (withoutCutoff.status === "ok" && withCutoff.status === "ok") {
+      expect(withCutoff.value).toBeLessThan(withoutCutoff.value);
+      expect(withCutoff.value).toBeLessThan(150);
+    }
+  });
+
+  it("reports insufficient_data (mentioning the cutoff) when too few snapshots remain on or after it", () => {
+    const dates = weeklyDates(10);
+    const values = valuesWithOutlier(10);
+    const result = calculateVolatility(values, dates, dates[9]); // only the last snapshot qualifies
+    expect(result.status).toBe("insufficient_data");
+    if (result.status === "insufficient_data") expect(result.reason).toContain("cutoff");
+  });
+});

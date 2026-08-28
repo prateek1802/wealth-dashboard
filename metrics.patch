@@ -1,0 +1,282 @@
+diff --git a/src/app/(app)/analytics/page.tsx b/src/app/(app)/analytics/page.tsx
+index 000dd18..3075a31 100644
+--- a/src/app/(app)/analytics/page.tsx
++++ b/src/app/(app)/analytics/page.tsx
+@@ -8,7 +8,8 @@ import { npsService } from "@/lib/services/nps.service";
+ import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
+ import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
+ import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
+-import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
++import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
++import { RISK_METRICS_CUTOFF_DATE } from "@/constants/risk";
+ import { netCashFlow } from "@/lib/calculations/cashflow";
+ import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
+ import { todayISO } from "@/lib/utils/date";
+@@ -48,10 +49,10 @@ export default async function AnalyticsPage() {
+     : 0;
+   const cagr = firstSnapshot ? calculateCAGR(firstSnapshot.netWorth, summary.netWorth, years) : { status: "insufficient_data" as const, reason: "Need at least one prior snapshot to compute CAGR." };
+ 
+-  const volatility = calculateVolatility(netWorthSeries, snapshotDates);
++  const volatility = calculateVolatility(netWorthSeries, snapshotDates, RISK_METRICS_CUTOFF_DATE);
+   const maxDrawdown = calculateMaxDrawdown(netWorthSeries);
+-  const sharpe = calculateSharpeRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE);
+-  const sortino = calculateSortinoRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE);
++  const sharpe = calculateSharpeRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE, RISK_METRICS_CUTOFF_DATE);
++  const sortino = calculateSortinoRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE, RISK_METRICS_CUTOFF_DATE);
+ 
+   const topHolding = allocation[0];
+   const concentration = topHolding
+diff --git a/src/constants/risk.ts b/src/constants/risk.ts
+new file mode 100644
+index 0000000..ec8f5d6
+--- /dev/null
++++ b/src/constants/risk.ts
+@@ -0,0 +1,28 @@
++/**
++ * Snapshots dated before this are excluded from Volatility, Sharpe Ratio,
++ * and Sortino Ratio (NOT Max Drawdown — peak-to-trough, much less sensitive
++ * to a single bad point, and not part of the bug this fixes).
++ *
++ * This project's NPS corpus calculation changed methodology multiple times
++ * (a corpus-doubling bug, a contribution-sync bug, a later switch to
++ * derived units×NAV) — a portfolio_snapshots row recorded mid-transition
++ * between any of those can show an artificial 30-50%+ net worth swing that
++ * was never a real market move. With only ~8 snapshots required for these
++ * metrics, one such point was enough to blow Volatility/Sharpe/Sortino into
++ * implausible values (>500).
++ *
++ * Defaults to today's date as a placeholder — meaning NO historical
++ * snapshot currently qualifies until you change this. That's deliberate:
++ * only you know which of your own snapshots predate your NPS methodology
++ * fully stabilizing. Set this to the earliest date you're confident every
++ * snapshot from then on reflects the FINAL corpus logic (no further
++ * corpus-doubling / contribution-sync / switch-to-derived-units transitions
++ * after that date) — e.g. "2025-06-01".
++ *
++ * This is one of two independent safeguards — calculateVolatility() /
++ * calculateSharpeRatio() / calculateSortinoRatio() in calculations/risk.ts
++ * also drop any single period-to-period return over ±30% regardless of
++ * this cutoff, so a stray bad point already before this date is set is
++ * still caught.
++ */
++export const RISK_METRICS_CUTOFF_DATE = "2026-08-28";
+diff --git a/src/lib/calculations/risk.ts b/src/lib/calculations/risk.ts
+index 7b770de..41773dd 100644
+--- a/src/lib/calculations/risk.ts
++++ b/src/lib/calculations/risk.ts
+@@ -2,6 +2,20 @@ import type { CalcResult } from "./returns";
+ 
+ const MIN_SNAPSHOTS_FOR_RISK = 8;
+ 
++/**
++ * A single snapshot-to-snapshot return this large is implausible for a real
++ * diversified portfolio's actual move — this project's NPS corpus
++ * calculation changed methodology multiple times over its history (a
++ * corpus-doubling bug, a contribution-sync bug, a later switch to derived
++ * units×NAV), and a snapshot recorded mid-transition between those can show
++ * an artificial 30-50%+ net worth swing that was never a real market move.
++ * With only MIN_SNAPSHOTS_FOR_RISK snapshots required, one such point is
++ * enough to blow Volatility/Sharpe/Sortino into implausible values (>500).
++ * This is the second, cutoff-independent line of defense — see
++ * RISK_METRICS_CUTOFF_DATE in constants/risk.ts for the first.
++ */
++const OUTLIER_RETURN_THRESHOLD = 0.3; // ±30% in a single gap
++
+ function periodicReturns(values: number[]): number[] {
+   const returns: number[] = [];
+   for (let i = 1; i < values.length; i++) {
+@@ -11,6 +25,30 @@ function periodicReturns(values: number[]): number[] {
+   return returns;
+ }
+ 
++/** Drops any single period-to-period return whose magnitude exceeds OUTLIER_RETURN_THRESHOLD. See that constant's doc comment for why. */
++function excludeOutlierReturns(returns: number[]): number[] {
++  return returns.filter((r) => Math.abs(r) <= OUTLIER_RETURN_THRESHOLD);
++}
++
++/**
++ * Drops values/dates before cutoffDate. Pure, no I/O. Passing "" (the
++ * default on every risk.ts function below) is a no-op — every ISO date
++ * string is >= "" — so existing callers that don't pass a cutoff see
++ * unchanged behavior; only the Analytics page passes the real
++ * RISK_METRICS_CUTOFF_DATE.
++ */
++function filterFromCutoff(values: number[], dates: string[], cutoffDate: string): { values: number[]; dates: string[] } {
++  const filteredValues: number[] = [];
++  const filteredDates: string[] = [];
++  for (let i = 0; i < dates.length; i++) {
++    if (dates[i] >= cutoffDate) {
++      filteredValues.push(values[i]);
++      filteredDates.push(dates[i]);
++    }
++  }
++  return { values: filteredValues, dates: filteredDates };
++}
++
+ /**
+  * How many "periods" (at the observed snapshot cadence) make up a year,
+  * derived from the ACTUAL average gap between consecutive snapshot dates —
+@@ -44,14 +82,18 @@ function periodsPerYear(dates: string[]): number {
+   return 365 / avgIntervalDays;
+ }
+ 
+-export function calculateVolatility(values: number[], dates: string[]): CalcResult<number> {
+-  if (values.length < MIN_SNAPSHOTS_FOR_RISK) {
+-    return { status: "insufficient_data", reason: `Need at least ${MIN_SNAPSHOTS_FOR_RISK} snapshots to estimate volatility.` };
++export function calculateVolatility(values: number[], dates: string[], cutoffDate: string = ""): CalcResult<number> {
++  const filtered = filterFromCutoff(values, dates, cutoffDate);
++  if (filtered.values.length < MIN_SNAPSHOTS_FOR_RISK) {
++    return { status: "insufficient_data", reason: `Need at least ${MIN_SNAPSHOTS_FOR_RISK} snapshots${cutoffDate ? " on or after the configured cutoff date" : ""} to estimate volatility.` };
++  }
++  const returns = excludeOutlierReturns(periodicReturns(filtered.values));
++  if (returns.length < 2) {
++    return { status: "insufficient_data", reason: "Not enough stable (non-outlier) periods to estimate volatility." };
+   }
+-  const returns = periodicReturns(values);
+   const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+   const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+-  return { status: "ok", value: Math.sqrt(variance) * Math.sqrt(periodsPerYear(dates)) * 100 };
++  return { status: "ok", value: Math.sqrt(variance) * Math.sqrt(periodsPerYear(filtered.dates)) * 100 };
+ }
+ 
+ export function calculateMaxDrawdown(values: number[]): CalcResult<number> {
+@@ -70,27 +112,35 @@ export function calculateMaxDrawdown(values: number[]): CalcResult<number> {
+   return { status: "ok", value: maxDrawdown * 100 };
+ }
+ 
+-export function calculateSharpeRatio(values: number[], dates: string[], riskFreeRateAnnual: number): CalcResult<number> {
+-  if (values.length < MIN_SNAPSHOTS_FOR_RISK) {
+-    return { status: "insufficient_data", reason: `Need at least ${MIN_SNAPSHOTS_FOR_RISK} snapshots to estimate Sharpe ratio.` };
++export function calculateSharpeRatio(values: number[], dates: string[], riskFreeRateAnnual: number, cutoffDate: string = ""): CalcResult<number> {
++  const filtered = filterFromCutoff(values, dates, cutoffDate);
++  if (filtered.values.length < MIN_SNAPSHOTS_FOR_RISK) {
++    return { status: "insufficient_data", reason: `Need at least ${MIN_SNAPSHOTS_FOR_RISK} snapshots${cutoffDate ? " on or after the configured cutoff date" : ""} to estimate Sharpe ratio.` };
++  }
++  const returns = excludeOutlierReturns(periodicReturns(filtered.values));
++  if (returns.length < 2) {
++    return { status: "insufficient_data", reason: "Not enough stable (non-outlier) periods to estimate Sharpe ratio." };
+   }
+-  const returns = periodicReturns(values);
+   const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+   const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+   const stdDev = Math.sqrt(variance);
+   if (stdDev === 0) return { status: "insufficient_data", reason: "No volatility observed yet." };
+-  const perYear = periodsPerYear(dates);
++  const perYear = periodsPerYear(filtered.dates);
+   const periodicRiskFree = riskFreeRateAnnual / 100 / perYear;
+   return { status: "ok", value: ((mean - periodicRiskFree) / stdDev) * Math.sqrt(perYear) };
+ }
+ 
+-export function calculateSortinoRatio(values: number[], dates: string[], riskFreeRateAnnual: number): CalcResult<number> {
+-  if (values.length < MIN_SNAPSHOTS_FOR_RISK) {
+-    return { status: "insufficient_data", reason: `Need at least ${MIN_SNAPSHOTS_FOR_RISK} snapshots to estimate Sortino ratio.` };
++export function calculateSortinoRatio(values: number[], dates: string[], riskFreeRateAnnual: number, cutoffDate: string = ""): CalcResult<number> {
++  const filtered = filterFromCutoff(values, dates, cutoffDate);
++  if (filtered.values.length < MIN_SNAPSHOTS_FOR_RISK) {
++    return { status: "insufficient_data", reason: `Need at least ${MIN_SNAPSHOTS_FOR_RISK} snapshots${cutoffDate ? " on or after the configured cutoff date" : ""} to estimate Sortino ratio.` };
+   }
+-  const returns = periodicReturns(values);
+-  const perYear = periodsPerYear(dates);
++  const perYear = periodsPerYear(filtered.dates);
+   const periodicRiskFree = riskFreeRateAnnual / 100 / perYear;
++  const returns = excludeOutlierReturns(periodicReturns(filtered.values));
++  if (returns.length < 2) {
++    return { status: "insufficient_data", reason: "Not enough stable (non-outlier) periods to estimate Sortino ratio." };
++  }
+   const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+   const downside = returns.filter((r) => r < periodicRiskFree);
+   if (downside.length === 0) return { status: "insufficient_data", reason: "No downside periods observed yet." };
+diff --git a/test/risk.test.ts b/test/risk.test.ts
+index 9c3c012..eb2b9d3 100644
+--- a/test/risk.test.ts
++++ b/test/risk.test.ts
+@@ -99,3 +99,89 @@ describe("calculateMaxDrawdown — unaffected by the annualization fix (not a ra
+     if (result.status === "ok") expect(result.value).toBeCloseTo(25, 5); // (120-90)/120
+   });
+ });
++
++// A plausible alternating ~1%/-0.4% trend (same shape as noisyValues), except
++// one snapshot spikes +80% then snaps back on the next one — simulating
++// exactly the scenario this project's NPS corpus-methodology changes could
++// produce: one snapshot recorded mid-transition shows an artificial swing
++// that was never a real market move.
++function valuesWithOutlier(count: number = 10): number[] {
++  const values = noisyValues(count);
++  const spikeSource = values[4];
++  const nextTrendValue = values[6]; // preserved so the series returns to its original trend after the snap-back
++  values[5] = spikeSource * 1.8; // +80% in one gap — implausible
++  values[6] = nextTrendValue; // snaps back to trend, ignoring the spike
++  return values;
++}
++
++function oldBuggyVolatility(values: number[]): number {
++  const returns: number[] = [];
++  for (let i = 1; i < values.length; i++) returns.push((values[i] - values[i - 1]) / values[i - 1]);
++  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
++  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
++  return Math.sqrt(variance) * Math.sqrt(52) * 100; // ~weekly cadence, matching weeklyDates()
++}
++
++describe("outlier-return exclusion — real bug from mid-series NPS methodology contamination", () => {
++  it("keeps Volatility in a plausible range even with one extreme snapshot mixed in, and well below what the old unprotected math would have produced", () => {
++    const values = valuesWithOutlier(10);
++    const dates = weeklyDates(10);
++
++    const result = calculateVolatility(values, dates);
++    expect(result.status).toBe("ok");
++    if (result.status !== "ok") return;
++
++    expect(result.value).toBeGreaterThanOrEqual(0);
++    expect(result.value).toBeLessThan(150); // spec's "roughly 0-150%" plausible range
++    expect(result.value).toBeLessThan(oldBuggyVolatility(values) * 0.2); // old math blows past 500+ on this fixture
++  });
++
++  it("keeps Sharpe and Sortino in a plausible range (roughly -5 to 5) with the same contaminated fixture", () => {
++    const values = valuesWithOutlier(10);
++    const dates = weeklyDates(10);
++
++    const sharpe = calculateSharpeRatio(values, dates, 7);
++    const sortino = calculateSortinoRatio(values, dates, 7);
++
++    expect(sharpe.status).toBe("ok");
++    expect(sortino.status).toBe("ok");
++    if (sharpe.status === "ok") expect(Math.abs(sharpe.value)).toBeLessThan(5);
++    if (sortino.status === "ok") expect(Math.abs(sortino.value)).toBeLessThan(5);
++  });
++
++  it("falls back to insufficient_data if excluding outliers leaves too few periods to compare", () => {
++    // Every gap here is an extreme swing, so ALL periods get excluded as outliers.
++    const result = calculateVolatility([100, 300, 90, 400, 80, 500, 70, 600], weeklyDates(8));
++    expect(result.status).toBe("insufficient_data");
++  });
++});
++
++describe("cutoff date — the other, independent line of defense", () => {
++  it("excludes snapshots before the cutoff entirely, even ones that aren't single-period outliers", () => {
++    // 12 contaminated-era snapshots (large jump baked into the whole level,
++    // not just one gap) followed by 8 clean post-cutoff snapshots.
++    const contaminated = Array.from({ length: 12 }, (_, i) => 5_000_000 * (1 + i * 0.2)); // wildly volatile throughout
++    const clean = Array.from({ length: 8 }, (_, i) => 1_000_000 * (1 + i * 0.005)); // steady ~0.5%
++    const values = [...contaminated, ...clean];
++    const dates = weeklyDates(20);
++    const cutoff = dates[12]; // first "clean" date
++
++    const withoutCutoff = calculateVolatility(values, dates);
++    const withCutoff = calculateVolatility(values, dates, cutoff);
++
++    expect(withoutCutoff.status).toBe("ok");
++    expect(withCutoff.status).toBe("ok");
++    if (withoutCutoff.status === "ok" && withCutoff.status === "ok") {
++      expect(withCutoff.value).toBeLessThan(withoutCutoff.value);
++      expect(withCutoff.value).toBeLessThan(150);
++    }
++  });
++
++  it("reports insufficient_data (mentioning the cutoff) when too few snapshots remain on or after it", () => {
++    const dates = weeklyDates(10);
++    const values = valuesWithOutlier(10);
++    const result = calculateVolatility(values, dates, dates[9]); // only the last snapshot qualifies
++    expect(result.status).toBe("insufficient_data");
++    if (result.status === "insufficient_data") expect(result.reason).toContain("cutoff");
++  });
++});

@@ -9,6 +9,7 @@ import { transactionsRepository } from "@/lib/database/repositories/transactions
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
 import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
 import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
+import { RISK_METRICS_CUTOFF_DATE } from "@/constants/risk";
 import { netCashFlow } from "@/lib/calculations/cashflow";
 import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
 import { todayISO } from "@/lib/utils/date";
@@ -48,10 +49,10 @@ export default async function AnalyticsPage() {
     : 0;
   const cagr = firstSnapshot ? calculateCAGR(firstSnapshot.netWorth, summary.netWorth, years) : { status: "insufficient_data" as const, reason: "Need at least one prior snapshot to compute CAGR." };
 
-  const volatility = calculateVolatility(netWorthSeries, snapshotDates);
+  const volatility = calculateVolatility(netWorthSeries, snapshotDates, RISK_METRICS_CUTOFF_DATE);
   const maxDrawdown = calculateMaxDrawdown(netWorthSeries);
-  const sharpe = calculateSharpeRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE);
-  const sortino = calculateSortinoRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE);
+  const sharpe = calculateSharpeRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE, RISK_METRICS_CUTOFF_DATE);
+  const sortino = calculateSortinoRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE, RISK_METRICS_CUTOFF_DATE);
 
   const topHolding = allocation[0];
   const concentration = topHolding
