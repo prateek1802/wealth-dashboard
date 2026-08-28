@@ -210,15 +210,6 @@ CHECKED, FOUND CONSISTENT: XIRR (Dashboard vs Analytics), holdings/currentValue
 ✅ No literal N+1 query loops found anywhere.
 ✅ revalidatePath usage appropriately scoped, not blanket-revalidating the app.
 
-❌ Dashboard redundant fetching — one page load fires assets.findAll() 5 times and
-   transactions.findAll() 5 times (getPortfolioSummary, getAssetAllocation,
-   getTopHoldings, getSegregatedBreakdown each independently re-run
-   computeHoldings(); getRecentActivity and a direct transactionsRepository.findAll()
-   call add more). Runs concurrently inside one outer Promise.all so it's not
-   multiplying page load TIME, but is real unnecessary data transfer/DB round-trips
-   that compounds as transaction count grows (267+ already at time of that audit).
-   FIX: one shared getDashboardData() that computes holdings once, derives
-   everything else from that single result.
 
 🟡 recharts not code-split via next/dynamic — ships in the initial bundle for every
    page with a chart (Dashboard/Analytics/NPS). Cheap, low-risk fix:

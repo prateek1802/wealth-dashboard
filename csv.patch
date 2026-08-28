@@ -1,0 +1,176 @@
+diff --git a/src/features/transactions/actions.ts b/src/features/transactions/actions.ts
+index 2f5b538..d24ca67 100644
+--- a/src/features/transactions/actions.ts
++++ b/src/features/transactions/actions.ts
+@@ -95,6 +95,8 @@ export async function importTransactionsCSVAction(
+ ): Promise<{ ok: true; summary: import("@/lib/validation/transaction-import.schema").TransactionImportSummary } | { ok: false; error: string }> {
+   const { transactionImportRowSchema } = await import("@/lib/validation/transaction-import.schema");
+   const { assetsRepository: assetsRepo } = await import("@/lib/database/repositories/assets.repository");
++  const { transactionsRepository } = await import("@/lib/database/repositories/transactions.repository");
++  const { buildTransactionDedupKey } = await import("@/lib/import/transaction-dedup");
+ 
+   if (rawRows.length === 0) {
+     return { ok: false, error: "No rows found in the file — check it has a header row and at least one data row." };
+@@ -124,7 +126,18 @@ export async function importTransactionsCSVAction(
+     .filter((r) => r.data === null)
+     .map((r) => ({ rowNumber: r.rowNumber, ok: false, error: r.error }));
+ 
++  // Dedup — see buildTransactionDedupKey()'s doc comment for why this
++  // exists and isn't a DB-level constraint. Seeded from every transaction
++  // already persisted (any source, not just prior imports), then grown as
++  // rows are inserted below so within-file duplicates are caught too, not
++  // just duplicates against a previous import.
++  const existingTransactions = await transactionsRepository.findAll();
++  const seenKeys = new Set(
++    existingTransactions.map((t) => buildTransactionDedupKey(t.assetId, t.transactionType, t.transactionDate, t.quantity, t.price, t.fees, t.taxes))
++  );
++
+   let imported = 0;
++  let duplicates = 0;
+   for (const { rowNumber, data } of valid) {
+     try {
+       const asset = await assetsRepo.upsertBySymbol({
+@@ -141,6 +154,13 @@ export async function importTransactionsCSVAction(
+         isActive: true,
+         notes: null,
+       });
++
++      const key = buildTransactionDedupKey(asset.id, data.type, data.date, data.quantity, data.price, data.fees, data.taxes);
++      if (seenKeys.has(key)) {
++        duplicates += 1;
++        continue;
++      }
++
+       await transactionsService.recordTransaction(
+         { symbol: asset.symbol, name: asset.name, assetType: asset.assetType, currency: asset.currency, exchange: asset.exchange, sector: asset.sector, country: asset.country, isin: asset.isin, currentPrice: asset.currentPrice, currentPriceUpdatedAt: asset.currentPriceUpdatedAt, isActive: asset.isActive, notes: asset.notes },
+         {
+@@ -154,6 +174,7 @@ export async function importTransactionsCSVAction(
+           notes: data.notes,
+         }
+       );
++      seenKeys.add(key);
+       imported += 1;
+     } catch (err) {
+       failed.push({ rowNumber, ok: false, symbol: data.symbol, error: err instanceof Error ? err.message : "Failed to import" });
+@@ -167,6 +188,6 @@ export async function importTransactionsCSVAction(
+   failed.sort((a, b) => a.rowNumber - b.rowNumber);
+   return {
+     ok: true,
+-    summary: { totalRows: rawRows.length, imported, failed },
++    summary: { totalRows: rawRows.length, imported, duplicates, failed },
+   };
+ }
+diff --git a/src/features/transactions/components/import-csv-dialog.tsx b/src/features/transactions/components/import-csv-dialog.tsx
+index 34a656e..32ec918 100644
+--- a/src/features/transactions/components/import-csv-dialog.tsx
++++ b/src/features/transactions/components/import-csv-dialog.tsx
+@@ -36,6 +36,8 @@ export function ImportCSVDialog({ open, onOpenChange }: { open: boolean; onOpenC
+           setSummary(result.summary);
+           if (result.summary.imported > 0) {
+             toast.success(`Imported ${result.summary.imported} of ${result.summary.totalRows} transaction${result.summary.totalRows === 1 ? "" : "s"}`);
++          } else if (result.summary.duplicates > 0 && result.summary.failed.length === 0) {
++            toast.info("Nothing new to import — every row was already imported.");
+           }
+         } else {
+           setError(result.error);
+@@ -104,6 +106,11 @@ export function ImportCSVDialog({ open, onOpenChange }: { open: boolean; onOpenC
+                 <CheckCircle2 className="size-4 text-gain" />
+                 Imported {summary.imported} of {summary.totalRows} row{summary.totalRows === 1 ? "" : "s"}.
+               </div>
++              {summary.duplicates > 0 && (
++                <p className="text-xs text-ink-muted">
++                  {summary.duplicates} row{summary.duplicates === 1 ? "" : "s"} already imported — skipped, not duplicated.
++                </p>
++              )}
+               {summary.failed.length > 0 && (
+                 <div className="flex flex-col gap-1.5 rounded-[var(--radius-control)] border border-loss/30 bg-loss-soft p-3 text-xs text-loss">
+                   <div className="flex items-center gap-1.5 font-medium">
+diff --git a/src/lib/import/transaction-dedup.ts b/src/lib/import/transaction-dedup.ts
+new file mode 100644
+index 0000000..0a5b83a
+--- /dev/null
++++ b/src/lib/import/transaction-dedup.ts
+@@ -0,0 +1,38 @@
++import type { TransactionType } from "@/constants/asset-types";
++
++/**
++ * Dedup key for one imported transaction row, used to make CSV re-import
++ * idempotent — same pattern already proven in the NPS statement importer
++ * (see buildNPSTransactionDedupKey in calculations/nps.ts and
++ * selectTransactionsToImport in import/nps-statement-parser.ts).
++ *
++ * Deliberately NOT enforced as a DB-level unique constraint the way NPS's
++ * dedup key is: NPS scheme transactions only ever enter the DB through
++ * statement import (no manual single-entry path exists for them), so a hard
++ * uniqueness constraint there is safe. `transactions` has manual entry
++ * (Add Transaction / Add Investment) as its PRIMARY path — a user placing
++ * two genuinely separate real-world trades that happen to match on every
++ * field below is possible and should never be silently rejected. This key
++ * is checked only at CSV-import time, against rows already persisted (from
++ * any source) plus rows already inserted earlier in the same import run.
++ *
++ * Includes fees/taxes (unlike the NPS key, which has no equivalent field)
++ * since they're present in every import row and identical across a re-
++ * upload of the same file — including them narrows what counts as "the same
++ * transaction" without weakening idempotency for the actual use case this
++ * fixes (re-uploading an unchanged CSV). Deliberately excludes broker/notes:
++ * free-text fields are the most likely to carry trivial formatting/encoding
++ * differences across "the same" re-upload, which would break the exact
++ * de-dup this exists for.
++ */
++export function buildTransactionDedupKey(
++  assetId: string,
++  transactionType: TransactionType,
++  transactionDate: string,
++  quantity: number,
++  price: number,
++  fees: number,
++  taxes: number
++): string {
++  return `${assetId}|${transactionType}|${transactionDate}|${quantity.toFixed(6)}|${price.toFixed(4)}|${fees.toFixed(4)}|${taxes.toFixed(4)}`;
++}
+diff --git a/src/lib/validation/transaction-import.schema.ts b/src/lib/validation/transaction-import.schema.ts
+index 352a68c..48c391a 100644
+--- a/src/lib/validation/transaction-import.schema.ts
++++ b/src/lib/validation/transaction-import.schema.ts
+@@ -49,5 +49,7 @@ export interface TransactionImportRowResult {
+ export interface TransactionImportSummary {
+   totalRows: number;
+   imported: number;
++  /** Rows that matched an already-persisted (or already-inserted-this-run) transaction and were skipped — see buildTransactionDedupKey. Not an error: this is what makes re-uploading the same file safe. */
++  duplicates: number;
+   failed: TransactionImportRowResult[];
+ }
+diff --git a/test/transaction-dedup.test.ts b/test/transaction-dedup.test.ts
+new file mode 100644
+index 0000000..f5589b8
+--- /dev/null
++++ b/test/transaction-dedup.test.ts
+@@ -0,0 +1,27 @@
++import { describe, it, expect } from "vitest";
++import { buildTransactionDedupKey } from "@/lib/import/transaction-dedup";
++
++describe("buildTransactionDedupKey", () => {
++  it("produces the same key for identical rows (re-uploading the same file)", () => {
++    const a = buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 500, 62.4, 0, 0);
++    const b = buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 500, 62.4, 0, 0);
++    expect(a).toBe(b);
++  });
++
++  it("differs when any field differs", () => {
++    const base = buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 500, 62.4, 0, 0);
++    expect(buildTransactionDedupKey("asset-2", "BUY", "2024-01-10", 500, 62.4, 0, 0)).not.toBe(base);
++    expect(buildTransactionDedupKey("asset-1", "SELL", "2024-01-10", 500, 62.4, 0, 0)).not.toBe(base);
++    expect(buildTransactionDedupKey("asset-1", "BUY", "2024-01-11", 500, 62.4, 0, 0)).not.toBe(base);
++    expect(buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 501, 62.4, 0, 0)).not.toBe(base);
++    expect(buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 500, 62.5, 0, 0)).not.toBe(base);
++    expect(buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 500, 62.4, 5, 0)).not.toBe(base);
++    expect(buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 500, 62.4, 0, 5)).not.toBe(base);
++  });
++
++  it("is stable across trivial floating-point representation differences", () => {
++    const a = buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 30, 1420, 45, 12);
++    const b = buildTransactionDedupKey("asset-1", "BUY", "2024-01-10", 30.0, 1420.0, 45.0, 12.0);
++    expect(a).toBe(b);
++  });
++});

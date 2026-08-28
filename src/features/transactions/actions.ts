@@ -95,6 +95,8 @@ export async function importTransactionsCSVAction(
 ): Promise<{ ok: true; summary: import("@/lib/validation/transaction-import.schema").TransactionImportSummary } | { ok: false; error: string }> {
   const { transactionImportRowSchema } = await import("@/lib/validation/transaction-import.schema");
   const { assetsRepository: assetsRepo } = await import("@/lib/database/repositories/assets.repository");
+  const { transactionsRepository } = await import("@/lib/database/repositories/transactions.repository");
+  const { buildTransactionDedupKey } = await import("@/lib/import/transaction-dedup");
 
   if (rawRows.length === 0) {
     return { ok: false, error: "No rows found in the file — check it has a header row and at least one data row." };
@@ -124,7 +126,18 @@ export async function importTransactionsCSVAction(
     .filter((r) => r.data === null)
     .map((r) => ({ rowNumber: r.rowNumber, ok: false, error: r.error }));
 
+  // Dedup — see buildTransactionDedupKey()'s doc comment for why this
+  // exists and isn't a DB-level constraint. Seeded from every transaction
+  // already persisted (any source, not just prior imports), then grown as
+  // rows are inserted below so within-file duplicates are caught too, not
+  // just duplicates against a previous import.
+  const existingTransactions = await transactionsRepository.findAll();
+  const seenKeys = new Set(
+    existingTransactions.map((t) => buildTransactionDedupKey(t.assetId, t.transactionType, t.transactionDate, t.quantity, t.price, t.fees, t.taxes))
+  );
+
   let imported = 0;
+  let duplicates = 0;
   for (const { rowNumber, data } of valid) {
     try {
       const asset = await assetsRepo.upsertBySymbol({
@@ -141,6 +154,13 @@ export async function importTransactionsCSVAction(
         isActive: true,
         notes: null,
       });
+
+      const key = buildTransactionDedupKey(asset.id, data.type, data.date, data.quantity, data.price, data.fees, data.taxes);
+      if (seenKeys.has(key)) {
+        duplicates += 1;
+        continue;
+      }
+
       await transactionsService.recordTransaction(
         { symbol: asset.symbol, name: asset.name, assetType: asset.assetType, currency: asset.currency, exchange: asset.exchange, sector: asset.sector, country: asset.country, isin: asset.isin, currentPrice: asset.currentPrice, currentPriceUpdatedAt: asset.currentPriceUpdatedAt, isActive: asset.isActive, notes: asset.notes },
         {
@@ -154,6 +174,7 @@ export async function importTransactionsCSVAction(
           notes: data.notes,
         }
       );
+      seenKeys.add(key);
       imported += 1;
     } catch (err) {
       failed.push({ rowNumber, ok: false, symbol: data.symbol, error: err instanceof Error ? err.message : "Failed to import" });
@@ -167,6 +188,6 @@ export async function importTransactionsCSVAction(
   failed.sort((a, b) => a.rowNumber - b.rowNumber);
   return {
     ok: true,
-    summary: { totalRows: rawRows.length, imported, failed },
+    summary: { totalRows: rawRows.length, imported, duplicates, failed },
   };
 }

@@ -49,5 +49,7 @@ export interface TransactionImportRowResult {
 export interface TransactionImportSummary {
   totalRows: number;
   imported: number;
+  /** Rows that matched an already-persisted (or already-inserted-this-run) transaction and were skipped — see buildTransactionDedupKey. Not an error: this is what makes re-uploading the same file safe. */
+  duplicates: number;
   failed: TransactionImportRowResult[];
 }

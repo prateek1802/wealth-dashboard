@@ -36,6 +36,8 @@ export function ImportCSVDialog({ open, onOpenChange }: { open: boolean; onOpenC
           setSummary(result.summary);
           if (result.summary.imported > 0) {
             toast.success(`Imported ${result.summary.imported} of ${result.summary.totalRows} transaction${result.summary.totalRows === 1 ? "" : "s"}`);
+          } else if (result.summary.duplicates > 0 && result.summary.failed.length === 0) {
+            toast.info("Nothing new to import — every row was already imported.");
           }
         } else {
           setError(result.error);
@@ -104,6 +106,11 @@ export function ImportCSVDialog({ open, onOpenChange }: { open: boolean; onOpenC
                 <CheckCircle2 className="size-4 text-gain" />
                 Imported {summary.imported} of {summary.totalRows} row{summary.totalRows === 1 ? "" : "s"}.
               </div>
+              {summary.duplicates > 0 && (
+                <p className="text-xs text-ink-muted">
+                  {summary.duplicates} row{summary.duplicates === 1 ? "" : "s"} already imported — skipped, not duplicated.
+                </p>
+              )}
               {summary.failed.length > 0 && (
                 <div className="flex flex-col gap-1.5 rounded-[var(--radius-control)] border border-loss/30 bg-loss-soft p-3 text-xs text-loss">
                   <div className="flex items-center gap-1.5 font-medium">
