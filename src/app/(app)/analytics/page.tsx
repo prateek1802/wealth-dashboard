@@ -65,7 +65,7 @@ export default async function AnalyticsPage() {
         <Card>
           <CardHeader><CardTitle>Returns</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatTile label="CAGR" result={cagr} />
+            <StatTile label="CAGR" result={cagr} caption="Vs. oldest snapshot · pre-rewrite snapshots may not be directly comparable" />
             <StatTile label="XIRR" result={xirr} caption="Securities + NPS · excludes FD, PPF, cash" />
             <Card className="flex flex-col gap-1.5 p-5">
               <span className="text-xs font-medium text-ink-muted">Realized P&amp;L</span>
