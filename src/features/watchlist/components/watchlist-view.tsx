@@ -14,6 +14,7 @@ import { SymbolCombobox } from "@/features/transactions/components/symbol-combob
 import { addWatchlistItemAction, removeWatchlistItemAction } from "../actions";
 import { SECURITY_ASSET_TYPES, ASSET_TYPE_LABELS } from "@/constants/asset-types";
 import { formatCurrency } from "@/lib/utils/currency";
+import { formatDate } from "@/lib/utils/date";
 import { Eye, Plus, Trash2 } from "lucide-react";
 import type { WatchlistItem } from "@/types/domain/watchlist";
 import type { AssetType } from "@/constants/asset-types";
@@ -77,9 +78,27 @@ export function WatchlistView({ items }: { items: WatchlistItem[] }) {
                 <span className="font-mono font-medium text-ink">{item.asset.symbol}</span>
                 <span className="text-xs text-ink-muted">{item.asset.name}</span>
               </div>
+              {item.asset.currentPrice !== null ? (
+                <div className="flex flex-col">
+                  <span className="font-tabular text-lg font-medium text-ink">{formatCurrency(item.asset.currentPrice, item.asset.currency)}</span>
+                  {item.asset.currentPriceUpdatedAt && (
+                    <span className="text-xs text-ink-muted">as of {formatDate(item.asset.currentPriceUpdatedAt)}</span>
+                  )}
+                </div>
+              ) : (
+                <span className="text-xs text-ink-muted">No price yet — refresh to fetch one.</span>
+              )}
               <div className="flex justify-between text-xs text-ink-muted">
-                {item.targetPrice && <span>Target {formatCurrency(item.targetPrice, item.asset.currency)}</span>}
-                {item.stopLoss && <span>Stop-loss {formatCurrency(item.stopLoss, item.asset.currency)}</span>}
+                {item.targetPrice && (
+                  <span className={item.asset.currentPrice !== null && item.asset.currentPrice >= item.targetPrice ? "text-gain" : undefined}>
+                    Target {formatCurrency(item.targetPrice, item.asset.currency)}
+                  </span>
+                )}
+                {item.stopLoss && (
+                  <span className={item.asset.currentPrice !== null && item.asset.currentPrice <= item.stopLoss ? "text-loss" : undefined}>
+                    Stop-loss {formatCurrency(item.stopLoss, item.asset.currency)}
+                  </span>
+                )}
               </div>
               {item.note && <p className="text-sm text-ink">{item.note}</p>}
               <button onClick={() => setDeleteTarget(item)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
