@@ -10,7 +10,7 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { GoalCard } from "@/components/shared/goal-card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { addGoalAction, deleteGoalAction } from "../actions";
-import { Target, Plus, Trash2 } from "lucide-react";
+import { Target, Plus } from "lucide-react";
 import type { Goal } from "@/types/domain/goal";
 
 export function GoalsView({ goals }: { goals: Goal[] }) {
@@ -63,12 +63,7 @@ export function GoalsView({ goals }: { goals: Goal[] }) {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {goals.map((g) => (
-            <div key={g.id} className="relative">
-              <GoalCard goal={g} />
-              <button onClick={() => setDeleteTarget(g)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
-                <Trash2 className="size-4" />
-              </button>
-            </div>
+            <GoalCard key={g.id} goal={g} onDelete={() => setDeleteTarget(g)} />
           ))}
         </div>
       )}
