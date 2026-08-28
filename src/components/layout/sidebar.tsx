@@ -5,7 +5,7 @@ import { ROUTES } from "@/constants/routes";
 import { cn } from "@/lib/utils/cn";
 import { useTheme } from "./theme-provider";
 import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
-import { LayoutDashboard, Receipt, LineChart, Target, DatabaseBackup, Wallet, Sun, Moon, Gem, LogOut, Scissors } from "lucide-react";
+import { LayoutDashboard, Receipt, LineChart, Target, DatabaseBackup, Wallet, Sun, Moon, Gem, LogOut, Scissors, History } from "lucide-react";
 
 interface NavItem {
   href: string;
@@ -22,7 +22,10 @@ const TOP_ITEMS: NavItem[] = [
   { href: ROUTES.goals, label: "Goals", icon: Target },
 ];
 
-const BOTTOM_ITEMS: NavItem[] = [{ href: ROUTES.backup, label: "Backup", icon: DatabaseBackup }];
+const BOTTOM_ITEMS: NavItem[] = [
+  { href: ROUTES.auditLog, label: "Audit Log", icon: History },
+  { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
+];
 
 function SidebarNav() {
   const pathname = usePathname();

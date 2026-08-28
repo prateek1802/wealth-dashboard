@@ -351,3 +351,59 @@ begin
     execute format('create policy "owner_only" on %I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)', t);
   end loop;
 end $$;
+
+-- ---- audit_log ---- (see supabase/schema.sql for the full rationale comment)
+create table if not exists audit_log (
+  id uuid primary key default gen_random_uuid()
+);
+alter table audit_log add column if not exists user_id uuid not null references auth.users(id) on delete cascade;
+alter table audit_log add column if not exists table_name text not null default '';
+alter table audit_log add column if not exists record_id uuid;
+alter table audit_log add column if not exists action text;
+alter table audit_log add column if not exists old_data jsonb;
+alter table audit_log add column if not exists new_data jsonb;
+alter table audit_log add column if not exists changed_at timestamptz not null default now();
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'audit_log_action_check') then
+    alter table audit_log add constraint audit_log_action_check check (action in ('update', 'delete'));
+  end if;
+end $$;
+create index if not exists audit_log_user_id_idx on audit_log (user_id);
+create index if not exists audit_log_table_record_idx on audit_log (table_name, record_id);
+create index if not exists audit_log_changed_at_idx on audit_log (changed_at desc);
+alter table audit_log enable row level security;
+drop policy if exists "owner_can_read" on audit_log;
+create policy "owner_can_read" on audit_log for select using (auth.uid() = user_id);
+
+create or replace function fn_audit_log()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if (tg_op = 'DELETE') then
+    insert into audit_log (user_id, table_name, record_id, action, old_data, new_data)
+    values (old.user_id, tg_table_name, old.id, 'delete', to_jsonb(old), null);
+    return old;
+  elsif (tg_op = 'UPDATE') then
+    insert into audit_log (user_id, table_name, record_id, action, old_data, new_data)
+    values (new.user_id, tg_table_name, new.id, 'update', to_jsonb(old), to_jsonb(new));
+    return new;
+  end if;
+  return null;
+end;
+$$;
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['transactions', 'assets', 'fixed_deposits', 'bank_accounts', 'ppf_accounts', 'liabilities', 'goals', 'nps_accounts', 'nps_contributions', 'nps_scheme_transactions']
+  loop
+    execute format('drop trigger if exists %I_audit_update on %I', t, t);
+    execute format('create trigger %I_audit_update after update on %I for each row when (old is distinct from new) execute function fn_audit_log()', t, t);
+    execute format('drop trigger if exists %I_audit_delete on %I', t, t);
+    execute format('create trigger %I_audit_delete after delete on %I for each row execute function fn_audit_log()', t, t);
+  end loop;
+end $$;

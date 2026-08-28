@@ -20,6 +20,7 @@ import {
   Moon,
   LogOut,
   Scissors,
+  History,
 } from "lucide-react";
 
 interface NavItem {
@@ -40,6 +41,7 @@ const MORE_ITEMS: NavItem[] = [
   { href: ROUTES.goals, label: "Goals", icon: Target },
   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
   { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
+  { href: ROUTES.auditLog, label: "Audit Log", icon: History },
   { href: ROUTES.backup, label: "Backup", icon: DatabaseBackup },
 ];
 

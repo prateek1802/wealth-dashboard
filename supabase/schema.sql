@@ -381,3 +381,78 @@ create policy "owner_only" on bank_accounts for all using (auth.uid() = user_id)
 create policy "owner_only" on ppf_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on price_history for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on watchlist_items for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- =========================================================================
+-- audit_log — append-only history of edits/deletes to financial records.
+-- Highest-priority gap from the source-level audit: silent, irreversible
+-- data loss on financial history was previously possible (no history kept
+-- anywhere). Populated entirely by DB triggers (fn_audit_log below), not
+-- app code — this is deliberate: a trigger-based log can't be silently
+-- skipped by a future code path that forgets to call a logging function,
+-- the way an app-layer log could be. Read-only from the app's perspective:
+-- RLS grants SELECT to the owning user but no INSERT/UPDATE/DELETE policy
+-- exists for the authenticated role, so a user (or a bug in the app) can
+-- never edit or erase their own audit trail — only the SECURITY DEFINER
+-- trigger function can write to it.
+-- =========================================================================
+create table audit_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  table_name text not null,
+  record_id uuid not null,
+  action text not null check (action in ('update', 'delete')),
+  old_data jsonb,
+  new_data jsonb,
+  changed_at timestamptz not null default now()
+);
+create index audit_log_user_id_idx on audit_log (user_id);
+create index audit_log_table_record_idx on audit_log (table_name, record_id);
+create index audit_log_changed_at_idx on audit_log (changed_at desc);
+alter table audit_log enable row level security;
+create policy "owner_can_read" on audit_log for select using (auth.uid() = user_id);
+
+-- security definer: needs to write to audit_log even under the RLS of the
+-- table being audited, which only grants that user SELECT on audit_log
+-- itself (not insert) — the whole point being that app code, running as
+-- the authenticated user, cannot write or tamper with entries directly.
+create or replace function fn_audit_log()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if (tg_op = 'DELETE') then
+    insert into audit_log (user_id, table_name, record_id, action, old_data, new_data)
+    values (old.user_id, tg_table_name, old.id, 'delete', to_jsonb(old), null);
+    return old;
+  elsif (tg_op = 'UPDATE') then
+    insert into audit_log (user_id, table_name, record_id, action, old_data, new_data)
+    values (new.user_id, tg_table_name, new.id, 'update', to_jsonb(old), to_jsonb(new));
+    return new;
+  end if;
+  return null;
+end;
+$$;
+
+-- Attached to every table holding user-entered financial history where a
+-- silent edit/delete would mean real data loss. Deliberately NOT attached
+-- to: nps_scheme_holdings (purely derived/rebuilt from nps_scheme_transactions
+-- on every import, per recomputeSchemeHoldings() — logging its rebuilds
+-- would be noise, not history), portfolio_snapshots and price_history
+-- (system-written market/valuation data, not user-entered records), and
+-- watchlist_items (a tracked list, not financial history). UPDATE triggers
+-- use `when (old is distinct from new)` so a no-op update (e.g. re-saving
+-- a form without changing anything) doesn't create a log entry.
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['transactions', 'assets', 'fixed_deposits', 'bank_accounts', 'ppf_accounts', 'liabilities', 'goals', 'nps_accounts', 'nps_contributions', 'nps_scheme_transactions']
+  loop
+    execute format('drop trigger if exists %I_audit_update on %I', t, t);
+    execute format('create trigger %I_audit_update after update on %I for each row when (old is distinct from new) execute function fn_audit_log()', t, t);
+    execute format('drop trigger if exists %I_audit_delete on %I', t, t);
+    execute format('create trigger %I_audit_delete after delete on %I for each row execute function fn_audit_log()', t, t);
+  end loop;
+end $$;

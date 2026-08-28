@@ -15,4 +15,5 @@ export const ROUTES = {
   holdings: "/holdings",
   taxHarvesting: "/tax-harvesting",
   backup: "/backup",
+  auditLog: "/audit-log",
 } as const;

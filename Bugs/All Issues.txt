@@ -106,18 +106,6 @@ OTHER FIXES CONFIRMED LANDED:
 ✅ Net worth itself IS consistent everywhere — single getPortfolioSummary() source,
    verified across Dashboard and Analytics, NPS uses live derived corpus correctly.
 
-⚠️ CAGR mixes old- and new-methodology numbers invisibly. Compares your oldest
-   stored snapshot (computed under old, less-correct logic — especially old NPS
-   corpus handling) against today's freshly-computed net worth. Could show an
-   artificial jump that's really just "the math got more correct," not real growth.
-   Fix: a caption noting pre-rewrite snapshots may not be directly comparable, or
-   accept as a known one-time distortion. (See also the Analytics redesign spec,
-   Part II, which addresses this page more broadly.)
-
-⚠️ "Refresh all" doesn't mean all. Dashboard's button only calls
-   refreshLivePricesAction() (securities) — zero awareness NPS live NAV refresh
-   exists. Confirmed still the case.
-
 ⚠️ NPS "as of" timestamp is misleading — shows fetch time, not the NAV's real date.
    UPDATED STATUS: this is no longer just a theoretical concern — it's exactly what
    masked the real 2-day npsnav.in staleness incident described in Section 1. Fix
