@@ -4,7 +4,6 @@ import { snapshotService } from "@/lib/services/snapshot.service";
 import { fdService } from "@/lib/services/fd.service";
 import { npsService } from "@/lib/services/nps.service";
 import { goalsRepository } from "@/lib/database/repositories/goals.repository";
-import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { calculateXIRR } from "@/lib/calculations/returns";
 import { netCashFlow } from "@/lib/calculations/cashflow";
 import { todayISO } from "@/lib/utils/date";
@@ -27,16 +26,16 @@ export default async function DashboardPage() {
   // Opportunistic snapshot write — see ARCHITECTURE.md trade-off #2 (no cron in V1).
   await snapshotService.recordTodaysSnapshot().catch(() => {});
 
-  const [summary, allocation, topHoldings, activity, goals, fds, performance, transactions, breakdown, npsCashflows] = await Promise.all([
-    portfolioService.getPortfolioSummary(),
-    portfolioService.getAssetAllocation(),
-    portfolioService.getTopHoldings(5),
-    portfolioService.getRecentActivity(6),
+  // Single shared fetch — see portfolioService.getDashboardData()'s doc
+  // comment. Previously this page independently called
+  // getPortfolioSummary/getAssetAllocation/getTopHoldings/
+  // getSegregatedBreakdown (each re-running computeHoldings() from
+  // scratch) plus getRecentActivity and a direct transactions fetch here —
+  // 5x assets.findAll() and 5x transactions.findAll() per page load.
+  const [{ summary, allocation, topHoldings, recentActivity: activity, breakdown, performance, transactions }, goals, fds, npsCashflows] = await Promise.all([
+    portfolioService.getDashboardData("3M", 6, 5),
     goalsRepository.findAll(),
     fdService.listWithProjections(),
-    portfolioService.getPortfolioPerformance("3M"),
-    transactionsRepository.findAll(),
-    portfolioService.getSegregatedBreakdown(),
     npsService.getCashflows(),
   ]);
 

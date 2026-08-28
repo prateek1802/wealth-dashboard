@@ -41,6 +41,28 @@ export interface TaxHarvestingSummary {
   realizedVDA: number;
 }
 
+export interface SegregatedBreakdown {
+  cash: number;
+  equity: number;
+  debt: number;
+  nps: number;
+  ppf: number;
+  crypto: number;
+  other: number;
+}
+
+/** Everything the Dashboard page needs, computed from ONE fetch of each underlying source. See getDashboardData() below for why this exists. */
+export interface DashboardData {
+  summary: PortfolioSummary;
+  allocation: AllocationSlice[];
+  topHoldings: Holding[];
+  breakdown: SegregatedBreakdown;
+  recentActivity: ActivityItem[];
+  performance: PerformancePoint[];
+  /** All transactions, already fetched — dashboard/page.tsx needs these for its own XIRR cashflow calc and previously re-fetched them separately. */
+  transactions: Awaited<ReturnType<typeof transactionsRepository.findAll>>;
+}
+
 /**
  * Portfolio Valuation / Aggregation Service.
  *
@@ -51,9 +73,8 @@ export interface TaxHarvestingSummary {
  * `nps.repository` directly. See ARCHITECTURE.md section D.
  */
 
-async function computeHoldings(): Promise<Holding[]> {
-  const [assets, allTransactions] = await Promise.all([assetsRepository.findAll(), transactionsRepository.findAll()]);
-
+/** Pure — no I/O. Extracted from computeHoldings() so getDashboardData() can build holdings from data it already fetched, instead of re-fetching. */
+function computeHoldingsFrom(assets: Asset[], allTransactions: Awaited<ReturnType<typeof transactionsRepository.findAll>>): Holding[] {
   // "cash" as an asset_type is a legacy V1 path — Bank Accounts (bank-accounts.service.ts)
   // is the intended way to track cash now; any leftover cash-type assets are
   // excluded from holdings here so they're not double-counted.
@@ -89,6 +110,121 @@ async function computeHoldings(): Promise<Holding[]> {
   }
 
   return holdings.sort((a, b) => b.currentValue - a.currentValue);
+}
+
+async function computeHoldings(): Promise<Holding[]> {
+  const [assets, allTransactions] = await Promise.all([assetsRepository.findAll(), transactionsRepository.findAll()]);
+  return computeHoldingsFrom(assets, allTransactions);
+}
+
+/** Pure — no I/O. Shared by getPortfolioSummary() and getDashboardData(). */
+function deriveSummary(
+  holdings: Holding[],
+  cashValue: number,
+  fdValue: number,
+  npsValue: number,
+  ppfValue: number,
+  liabilitiesValue: number,
+  snapshots: Awaited<ReturnType<typeof snapshotsRepository.findAll>>
+): PortfolioSummary {
+  const investedCapital = holdings.reduce((s, h) => s + h.investedAmount, 0);
+  const currentValue = holdings.reduce((s, h) => s + h.currentValue, 0);
+  const realizedPnl = holdings.reduce((s, h) => s + h.realizedPnl, 0);
+  const unrealizedPnl = currentValue - investedCapital;
+  const unrealizedPnlPercent = investedCapital > 0 ? (unrealizedPnl / investedCapital) * 100 : 0;
+  const netWorth = currentValue + cashValue + fdValue + npsValue + ppfValue - liabilitiesValue;
+
+  const today = todayISO();
+  // Excludes today's own snapshot — recordTodaysSnapshot() (called by the
+  // dashboard right before this) upserts a row for today, so without this
+  // filter "previous" ends up being that same just-written row on any
+  // page load after the first one today, diffing net worth against
+  // itself and showing ~₹0 day change all day.
+  const sorted = [...snapshots].filter((s) => s.snapshotDate < today).sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+  const previous = sorted.length > 0 ? sorted[sorted.length - 1] : null;
+  const dayChange = previous ? netWorth - previous.netWorth : null;
+  const dayChangePercent = previous && previous.netWorth > 0 ? ((netWorth - previous.netWorth) / previous.netWorth) * 100 : null;
+
+  return {
+    netWorth,
+    investedCapital,
+    currentValue,
+    realizedPnl,
+    unrealizedPnl,
+    unrealizedPnlPercent,
+    cashValue,
+    fdValue,
+    npsValue,
+    ppfValue,
+    liabilitiesValue,
+    dayChange,
+    dayChangePercent,
+  };
+}
+
+/** Pure — no I/O. Shared by getAssetAllocation() and getDashboardData(). */
+function deriveAllocation(holdings: Holding[], cashValue: number, fdValue: number, npsValue: number, ppfValue: number): AllocationSlice[] {
+  const byCategory: Partial<Record<AllocationCategory, number>> = {};
+  for (const h of holdings) {
+    byCategory[h.asset.assetType] = (byCategory[h.asset.assetType] ?? 0) + h.currentValue;
+  }
+  if (cashValue > 0) byCategory.cash = (byCategory.cash ?? 0) + cashValue;
+  if (fdValue > 0) byCategory.fixed_deposit = fdValue;
+  if (npsValue > 0) byCategory.nps = npsValue;
+  if (ppfValue > 0) byCategory.ppf = ppfValue;
+
+  return calculateAllocation(byCategory);
+}
+
+/**
+ * Pure — no I/O. Shared by getSegregatedBreakdown() and getDashboardData().
+ * See getSegregatedBreakdown()'s own doc comment for the grouping rationale.
+ */
+function deriveSegregatedBreakdown(holdings: Holding[], cashValue: number, fdValue: number, npsValue: number, ppfValue: number): SegregatedBreakdown {
+  let equity = 0;
+  let debt = fdValue;
+  let crypto = 0;
+  let other = 0;
+
+  for (const h of holdings) {
+    const group = ASSET_TYPE_GROUP[h.asset.assetType];
+    if (group === "Equity") equity += h.currentValue;
+    else if (group === "Debt") debt += h.currentValue;
+    else if (group === "Crypto") crypto += h.currentValue;
+    else if (group === "Other") other += h.currentValue;
+    // "Cash" is tracked via Bank Accounts, already counted above.
+  }
+
+  return { cash: cashValue, equity, debt, nps: npsValue, ppf: ppfValue, crypto, other };
+}
+
+/** Pure — no I/O. Shared by getRecentActivity() and getDashboardData(). `transactions` must already be sorted newest-first (transactionsRepository.findAll()'s contract). */
+function deriveRecentActivity(
+  transactions: Awaited<ReturnType<typeof transactionsRepository.findAll>>,
+  assets: Asset[],
+  limit: number
+): ActivityItem[] {
+  const assetById = new Map(assets.map((a) => [a.id, a]));
+  return transactions.slice(0, limit).map((t) => {
+    const asset = assetById.get(t.assetId);
+    return {
+      id: t.id,
+      kind: "transaction" as const,
+      label: `${t.transactionType} ${asset ? getAssetDisplayLabel(asset).primary : "—"}`,
+      detail: `${t.quantity} units @ ${t.price.toFixed(2)}`,
+      amount: t.quantity * t.price,
+      date: t.transactionDate,
+    };
+  });
+}
+
+/** Pure — no I/O. Shared by getPortfolioPerformance() and getDashboardData(). */
+function derivePerformance(snapshots: Awaited<ReturnType<typeof snapshotsRepository.findAll>>, period: ChartPeriod): PerformancePoint[] {
+  const days = periodToDays(period);
+  const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+  return snapshots
+    .filter((s) => !cutoff || new Date(s.snapshotDate).getTime() >= cutoff)
+    .map((s) => ({ date: s.snapshotDate, value: s.netWorth }));
 }
 
 export const portfolioService = {
@@ -136,39 +272,7 @@ export const portfolioService = {
       snapshotsRepository.findAll(),
     ]);
 
-    const investedCapital = holdings.reduce((s, h) => s + h.investedAmount, 0);
-    const currentValue = holdings.reduce((s, h) => s + h.currentValue, 0);
-    const realizedPnl = holdings.reduce((s, h) => s + h.realizedPnl, 0);
-    const unrealizedPnl = currentValue - investedCapital;
-    const unrealizedPnlPercent = investedCapital > 0 ? (unrealizedPnl / investedCapital) * 100 : 0;
-    const netWorth = currentValue + cashValue + fdValue + npsValue + ppfValue - liabilitiesValue;
-
-    const today = todayISO();
-    // Excludes today's own snapshot — recordTodaysSnapshot() (called by the
-    // dashboard right before this) upserts a row for today, so without this
-    // filter "previous" ends up being that same just-written row on any
-    // page load after the first one today, diffing net worth against
-    // itself and showing ~₹0 day change all day.
-    const sorted = [...snapshots].filter((s) => s.snapshotDate < today).sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
-    const previous = sorted.length > 0 ? sorted[sorted.length - 1] : null;
-    const dayChange = previous ? netWorth - previous.netWorth : null;
-    const dayChangePercent = previous && previous.netWorth > 0 ? ((netWorth - previous.netWorth) / previous.netWorth) * 100 : null;
-
-    return {
-      netWorth,
-      investedCapital,
-      currentValue,
-      realizedPnl,
-      unrealizedPnl,
-      unrealizedPnlPercent,
-      cashValue,
-      fdValue,
-      npsValue,
-      ppfValue,
-      liabilitiesValue,
-      dayChange,
-      dayChangePercent,
-    };
+    return deriveSummary(holdings, cashValue, fdValue, npsValue, ppfValue, liabilitiesValue, snapshots);
   },
 
   async getNetWorth(): Promise<number> {
@@ -185,42 +289,17 @@ export const portfolioService = {
       ppfService.totalValue(),
     ]);
 
-    const byCategory: Partial<Record<AllocationCategory, number>> = {};
-    for (const h of holdings) {
-      byCategory[h.asset.assetType] = (byCategory[h.asset.assetType] ?? 0) + h.currentValue;
-    }
-    if (cashValue > 0) byCategory.cash = (byCategory.cash ?? 0) + cashValue;
-    if (fdValue > 0) byCategory.fixed_deposit = fdValue;
-    if (npsValue > 0) byCategory.nps = npsValue;
-    if (ppfValue > 0) byCategory.ppf = ppfValue;
-
-    return calculateAllocation(byCategory);
+    return deriveAllocation(holdings, cashValue, fdValue, npsValue, ppfValue);
   },
 
   async getPortfolioPerformance(period: ChartPeriod): Promise<PerformancePoint[]> {
     const snapshots = await snapshotsRepository.findAll();
-    const days = periodToDays(period);
-    const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
-    return snapshots
-      .filter((s) => !cutoff || new Date(s.snapshotDate).getTime() >= cutoff)
-      .map((s) => ({ date: s.snapshotDate, value: s.netWorth }));
+    return derivePerformance(snapshots, period);
   },
 
   async getRecentActivity(limit: number = 8): Promise<ActivityItem[]> {
-    const [transactions, assets] = await Promise.all([transactionsRepository.findRecent(limit), assetsRepository.findAll()]);
-    const assetById = new Map(assets.map((a) => [a.id, a]));
-
-    return transactions.map((t) => {
-      const asset = assetById.get(t.assetId);
-      return {
-        id: t.id,
-        kind: "transaction" as const,
-        label: `${t.transactionType} ${asset ? getAssetDisplayLabel(asset).primary : "—"}`,
-        detail: `${t.quantity} units @ ${t.price.toFixed(2)}`,
-        amount: t.quantity * t.price,
-        date: t.transactionDate,
-      };
-    });
+    const [transactions, assets] = await Promise.all([transactionsRepository.findAll(), assetsRepository.findAll()]);
+    return deriveRecentActivity(transactions, assets, limit);
   },
 
   /**
@@ -232,7 +311,7 @@ export const portfolioService = {
    * ASSET_TYPE_GROUP in constants/asset-types.ts is the only place this
    * grouping logic lives.
    */
-  async getSegregatedBreakdown() {
+  async getSegregatedBreakdown(): Promise<SegregatedBreakdown> {
     const [holdings, cashValue, fdValue, npsValue, ppfValue] = await Promise.all([
       computeHoldings(),
       bankAccountsService.totalValue(),
@@ -241,21 +320,58 @@ export const portfolioService = {
       ppfService.totalValue(),
     ]);
 
-    let equity = 0;
-    let debt = fdValue;
-    let crypto = 0;
-    let other = 0;
+    return deriveSegregatedBreakdown(holdings, cashValue, fdValue, npsValue, ppfValue);
+  },
 
-    for (const h of holdings) {
-      const group = ASSET_TYPE_GROUP[h.asset.assetType];
-      if (group === "Equity") equity += h.currentValue;
-      else if (group === "Debt") debt += h.currentValue;
-      else if (group === "Crypto") crypto += h.currentValue;
-      else if (group === "Other") other += h.currentValue;
-      // "Cash" is tracked via Bank Accounts, already counted above.
-    }
+  /**
+   * Everything the Dashboard page needs, in one call. Fixes a real
+   * redundant-fetch problem: before this, the dashboard independently
+   * called getPortfolioSummary/getAssetAllocation/getTopHoldings/
+   * getSegregatedBreakdown — each of which re-ran computeHoldings()
+   * (assets.findAll() + transactions.findAll()) from scratch — plus
+   * getRecentActivity (another assets.findAll()) and a direct
+   * transactionsRepository.findAll() call in the page itself for XIRR.
+   * That was 5 full transactions.findAll() calls and 5 full
+   * assets.findAll() calls per single page load (267+ transactions
+   * already at the time this was found), all running concurrently inside
+   * one outer Promise.all — so it never multiplied page load *time*, but
+   * it was real unnecessary data transfer and DB round-trips that only
+   * gets worse as transaction count grows.
+   *
+   * This fetches assets/transactions/snapshots/cash/fd/nps/ppf/liabilities
+   * exactly ONCE and derives summary/allocation/topHoldings/breakdown/
+   * recentActivity/performance from that single fetch via the pure
+   * derive*() functions above — the same ones the individual methods
+   * above still use, so behavior is identical, just computed once instead
+   * of up to five times.
+   *
+   * The individual methods (getPortfolioSummary, getAssetAllocation, etc.)
+   * are UNCHANGED and still used by Analytics, Holdings, and the period
+   * switcher — this is additive, not a replacement for those call sites.
+   */
+  async getDashboardData(period: ChartPeriod = "3M", activityLimit: number = 8, topHoldingsLimit: number = 5): Promise<DashboardData> {
+    const [assets, transactions, cashValue, fdValue, npsValue, ppfValue, liabilitiesValue, snapshots] = await Promise.all([
+      assetsRepository.findAll(),
+      transactionsRepository.findAll(),
+      bankAccountsService.totalValue(),
+      fdService.totalValue(),
+      npsService.currentCorpus(),
+      ppfService.totalValue(),
+      liabilitiesService.totalOwed(),
+      snapshotsRepository.findAll(),
+    ]);
 
-    return { cash: cashValue, equity, debt, nps: npsValue, ppf: ppfValue, crypto, other };
+    const holdings = computeHoldingsFrom(assets, transactions);
+
+    return {
+      summary: deriveSummary(holdings, cashValue, fdValue, npsValue, ppfValue, liabilitiesValue, snapshots),
+      allocation: deriveAllocation(holdings, cashValue, fdValue, npsValue, ppfValue),
+      topHoldings: holdings.filter((h) => h.quantity > 1e-9).slice(0, topHoldingsLimit),
+      breakdown: deriveSegregatedBreakdown(holdings, cashValue, fdValue, npsValue, ppfValue),
+      recentActivity: deriveRecentActivity(transactions, assets, activityLimit),
+      performance: derivePerformance(snapshots, period),
+      transactions,
+    };
   },
 
   /**

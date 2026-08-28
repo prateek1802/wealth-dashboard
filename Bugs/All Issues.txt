@@ -120,9 +120,6 @@ CHECKED, FOUND CONSISTENT: XIRR (Dashboard vs Analytics), holdings/currentValue
 3. MAJOR BUGS / GAPS — CORE APP (re-verified against current code)
 ------------------------------------------------------------------------------------
 
-❌ No audit trail for financial record edits/deletes. Highest real risk — silent,
-   irreversible data loss on financial history is currently possible.
-
 ❌ CSV transaction import isn't idempotent. Re-uploading the same file duplicates
    transactions silently. Fix pattern already proven in your own NPS importer —
    just needs porting to this older path.
