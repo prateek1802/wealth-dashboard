@@ -15,7 +15,9 @@ import { addWatchlistItemAction, removeWatchlistItemAction } from "../actions";
 import { SECURITY_ASSET_TYPES, ASSET_TYPE_LABELS } from "@/constants/asset-types";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
-import { Eye, Plus, Trash2 } from "lucide-react";
+import { Eye, Plus, Trash2, RefreshCw } from "lucide-react";
+import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
+import { refreshLivePricesAction } from "@/features/portfolio/actions";
 import type { WatchlistItem } from "@/types/domain/watchlist";
 import type { AssetType } from "@/constants/asset-types";
 import type { SymbolSearchResult } from "@/lib/market-data/symbol-search";
@@ -24,6 +26,7 @@ export function WatchlistView({ items }: { items: WatchlistItem[] }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<WatchlistItem | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [isRefreshingAll, startRefreshAll] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const [symbol, setSymbol] = useState("");
@@ -62,9 +65,34 @@ export function WatchlistView({ items }: { items: WatchlistItem[] }) {
     else toast.error(result.error);
   }
 
+  function handleRefreshAll() {
+    startRefreshAll(async () => {
+      // Scoped to exactly the watchlist's own asset ids — deliberately NOT
+      // the dashboard's RefreshAllCard, which is scoped to holdings (+ NPS)
+      // and would silently refresh nothing here for a watchlist-only
+      // asset. See refreshLivePricesAction's doc comment.
+      const result = await refreshLivePricesAction(items.map((i) => i.assetId));
+      if ("error" in result) {
+        toast.error(result.error);
+        return;
+      }
+      if (result.updated === 0) {
+        toast.info("No live price source for anything on your watchlist.");
+      } else {
+        toast.success(`Updated ${result.updated} price${result.updated === 1 ? "" : "s"}${result.skipped.length ? ` · ${result.skipped.length} skipped (no live source)` : ""}`);
+      }
+    });
+  }
+
   return (
     <div className="flex flex-col gap-4 p-4 lg:p-8">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {items.length > 0 && (
+          <Button variant="outline" onClick={handleRefreshAll} disabled={isRefreshingAll}>
+            <RefreshCw className={isRefreshingAll ? "size-4 animate-spin" : "size-4"} />
+            {isRefreshingAll ? "Refreshing…" : "Refresh all"}
+          </Button>
+        )}
         <Button onClick={() => setDialogOpen(true)}><Plus className="size-4" /> Add to Watchlist</Button>
       </div>
 
@@ -73,10 +101,18 @@ export function WatchlistView({ items }: { items: WatchlistItem[] }) {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
-            <Card key={item.id} className="relative flex flex-col gap-3 p-5">
-              <div className="flex flex-col">
-                <span className="font-mono font-medium text-ink">{item.asset.symbol}</span>
-                <span className="text-xs text-ink-muted">{item.asset.name}</span>
+            <Card key={item.id} className="flex flex-col gap-3 p-5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-col">
+                  <span className="font-mono font-medium text-ink">{item.asset.symbol}</span>
+                  <span className="text-xs text-ink-muted">{item.asset.name}</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <AssetRefreshButton assetId={item.assetId} assetLabel={item.asset.symbol} />
+                  <button onClick={() => setDeleteTarget(item)} className="text-ink-muted hover:text-loss" title="Remove from watchlist">
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
               </div>
               {item.asset.currentPrice !== null ? (
                 <div className="flex flex-col">
@@ -101,9 +137,6 @@ export function WatchlistView({ items }: { items: WatchlistItem[] }) {
                 )}
               </div>
               {item.note && <p className="text-sm text-ink">{item.note}</p>}
-              <button onClick={() => setDeleteTarget(item)} className="absolute right-4 top-4 text-ink-muted hover:text-loss">
-                <Trash2 className="size-4" />
-              </button>
             </Card>
           ))}
         </div>

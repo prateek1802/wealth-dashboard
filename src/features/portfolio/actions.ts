@@ -5,6 +5,7 @@ import { portfolioService } from "@/lib/services/portfolio.service";
 import { assetSchema, assetPriceUpdateSchema } from "@/lib/validation/asset.schema";
 import { ROUTES } from "@/constants/routes";
 import type { ActionResult } from "@/features/transactions/actions";
+import type { Asset } from "@/types/domain/asset";
 
 /**
  * "Edit Asset" is a distinct concept from recording a transaction (point 8):
@@ -79,18 +80,35 @@ export interface RefreshPricesResult {
  * the user isn't stuck re-fetching everything to update one section.
  * Omit to refresh all current holdings.
  */
+/**
+ * Refreshes live prices. Omit assetIds to refresh all current holdings.
+ *
+ * When explicit assetIds ARE given, they're resolved DIRECTLY via
+ * assetsRepository.findById — NOT by filtering portfolioService.getHoldings(),
+ * which only contains assets with an actual transaction-based position.
+ * That filter used to mean a watchlist-only asset's id never matched
+ * anything here: `updated` silently came back 0 with no real attempt ever
+ * made, which is why per-asset refresh could never work for a watchlist
+ * item even once a refresh button existed on that card — the deeper
+ * reason "no refresh capability reaches watchlist assets" was true.
+ */
 export async function refreshLivePricesAction(assetIds?: string[]): Promise<RefreshPricesResult | { ok: false; error: string }> {
   try {
     const { getLiveQuoteForAsset } = await import("@/lib/market-data/live-provider");
     const { priceHistoryService } = await import("@/lib/services/price-history.service");
-    const holdings = await portfolioService.getHoldings();
-    const idFilter = assetIds ? new Set(assetIds) : null;
-    const targets = idFilter ? holdings.filter((h) => idFilter.has(h.asset.id)) : holdings;
+
+    let targets: Asset[];
+    if (assetIds) {
+      const resolved = await Promise.all(assetIds.map((id) => assetsRepository.findById(id)));
+      targets = resolved.filter((a): a is Asset => a !== null);
+    } else {
+      targets = (await portfolioService.getHoldings()).map((h) => h.asset);
+    }
 
     let updated = 0;
     const skipped: string[] = [];
 
-    for (const { asset } of targets) {
+    for (const asset of targets) {
       const quote = await getLiveQuoteForAsset(asset);
       if (quote) {
         await assetsRepository.updatePrice(asset.id, quote.price);
@@ -106,6 +124,7 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
 
     revalidatePath(ROUTES.dashboard);
     revalidatePath(ROUTES.portfolio);
+    revalidatePath(ROUTES.watchlist);
     return { ok: true, updated, skipped };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
