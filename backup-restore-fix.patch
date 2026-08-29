@@ -1,0 +1,189 @@
+diff --git a/src/features/backup/components/backup-view.tsx b/src/features/backup/components/backup-view.tsx
+index 7d64b5f..17b1509 100644
+--- a/src/features/backup/components/backup-view.tsx
++++ b/src/features/backup/components/backup-view.tsx
+@@ -18,6 +18,8 @@ const ENTITY_LABELS: Record<keyof Omit<BackupImportSummary, "errors">, string> =
+   bankAccounts: "Bank Accounts",
+   liabilities: "Liabilities",
+   watchlistItems: "Watchlist Items",
++  priceHistory: "Price History Points",
++  portfolioSnapshots: "Portfolio Snapshots",
+ };
+ 
+ export function BackupView({ isDemoMode }: { isDemoMode: boolean }) {
+diff --git a/src/lib/database/repositories/price-history.repository.ts b/src/lib/database/repositories/price-history.repository.ts
+index 9bd6a73..37ad659 100644
+--- a/src/lib/database/repositories/price-history.repository.ts
++++ b/src/lib/database/repositories/price-history.repository.ts
+@@ -20,23 +20,36 @@ export const priceHistoryRepository = {
+     return (data as PriceHistoryRow[]).map(rowToPoint);
+   },
+ 
++  /** Every point across every asset — used by backup.service.ts's export; price_history was previously omitted from backups entirely. */
++  async findAll(): Promise<PriceHistoryPoint[]> {
++    if (isDemoMode()) return [...demoPriceHistory];
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db.from("price_history").select("*").order("recorded_date");
++    if (error) throw error;
++    return (data as PriceHistoryRow[]).map(rowToPoint);
++  },
++
+   /** Upsert-by-(assetId, today) — at most one point per asset per calendar date, same pattern as portfolio_snapshots. */
+   async recordToday(assetId: string, price: number): Promise<PriceHistoryPoint> {
+-    const today = todayISO();
++    return this.recordForDate(assetId, price, todayISO());
++  },
++
++  /** Same upsert as recordToday but for an arbitrary date — used by backup.service.ts's restore, which needs to write historical points, not just today's. */
++  async recordForDate(assetId: string, price: number, date: string): Promise<PriceHistoryPoint> {
+     if (isDemoMode()) {
+-      const existing = demoPriceHistory.find((p) => p.assetId === assetId && p.recordedDate === today);
++      const existing = demoPriceHistory.find((p) => p.assetId === assetId && p.recordedDate === date);
+       if (existing) {
+         existing.price = price;
+         return existing;
+       }
+-      const point: PriceHistoryPoint = { id: nextId("price"), assetId, price, recordedDate: today, createdAt: new Date().toISOString() };
++      const point: PriceHistoryPoint = { id: nextId("price"), assetId, price, recordedDate: date, createdAt: new Date().toISOString() };
+       demoPriceHistory.push(point);
+       return point;
+     }
+     const db = await getServerSupabaseClient();
+     const { data, error } = await db
+       .from("price_history")
+-      .upsert({ asset_id: assetId, price, recorded_date: today }, { onConflict: "asset_id,recorded_date" })
++      .upsert({ asset_id: assetId, price, recorded_date: date }, { onConflict: "asset_id,recorded_date" })
+       .select()
+       .single();
+     if (error) throw error;
+diff --git a/src/lib/services/backup.service.ts b/src/lib/services/backup.service.ts
+index 8bbf0a5..c4e1e30 100644
+--- a/src/lib/services/backup.service.ts
++++ b/src/lib/services/backup.service.ts
+@@ -7,6 +7,8 @@ import { ppfRepository } from "@/lib/database/repositories/ppf.repository";
+ import { bankAccountsRepository } from "@/lib/database/repositories/bank-accounts.repository";
+ import { liabilitiesRepository } from "@/lib/database/repositories/liabilities.repository";
+ import { watchlistRepository } from "@/lib/database/repositories/watchlist.repository";
++import { priceHistoryRepository } from "@/lib/database/repositories/price-history.repository";
++import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
+ import type { Asset } from "@/types/domain/asset";
+ import type { Transaction } from "@/types/domain/transaction";
+ import type { Goal } from "@/types/domain/goal";
+@@ -16,6 +18,8 @@ import type { PPFAccount } from "@/types/domain/ppf";
+ import type { BankAccount } from "@/types/domain/bank-account";
+ import type { Liability } from "@/types/domain/liability";
+ import type { WatchlistItem } from "@/types/domain/watchlist";
++import type { PriceHistoryPoint } from "@/types/domain/price-history";
++import type { PortfolioSnapshot } from "@/types/domain/snapshot";
+ 
+ export const BACKUP_FORMAT_VERSION = 1;
+ 
+@@ -32,6 +36,10 @@ export interface WealthBackup {
+   bankAccounts: BankAccount[];
+   liabilities: Liability[];
+   watchlistItems: WatchlistItem[];
++  /** Was silently missing from every backup before this fix — see exportAll()'s comment. */
++  priceHistory: PriceHistoryPoint[];
++  /** Was silently missing from every backup before this fix — see exportAll()'s comment. */
++  portfolioSnapshots: PortfolioSnapshot[];
+ }
+ 
+ export interface BackupImportSummary {
+@@ -45,6 +53,8 @@ export interface BackupImportSummary {
+   bankAccounts: number;
+   liabilities: number;
+   watchlistItems: number;
++  priceHistory: number;
++  portfolioSnapshots: number;
+   errors: string[];
+ }
+ 
+@@ -67,7 +77,7 @@ export const backupService = {
+     const npsAccounts = await npsRepository.findAll();
+     const npsContributions = (await Promise.all(npsAccounts.map((a) => npsRepository.findContributions(a.id)))).flat();
+ 
+-    const [assets, transactions, goals, fixedDeposits, ppfAccounts, bankAccounts, liabilities, watchlistItems] = await Promise.all([
++    const [assets, transactions, goals, fixedDeposits, ppfAccounts, bankAccounts, liabilities, watchlistItems, priceHistory, portfolioSnapshots] = await Promise.all([
+       assetsRepository.findAll(),
+       transactionsRepository.findAll(),
+       goalsRepository.findAll(),
+@@ -76,6 +86,13 @@ export const backupService = {
+       bankAccountsRepository.findAll(),
+       liabilitiesRepository.findAll(),
+       watchlistRepository.findAll(),
++      // These two were silently EXCLUDED from every backup before this fix
++      // (2 of 11 tables), despite the export being marketed as a full
++      // backup — a restore would rebuild every holding correctly but come
++      // back with no historical price chart and no Analytics/CAGR history
++      // until enough new snapshots accumulated again.
++      priceHistoryRepository.findAll(),
++      snapshotsRepository.findAll(),
+     ]);
+ 
+     return {
+@@ -91,6 +108,8 @@ export const backupService = {
+       bankAccounts,
+       liabilities,
+       watchlistItems,
++      priceHistory,
++      portfolioSnapshots,
+     };
+   },
+ 
+@@ -98,6 +117,7 @@ export const backupService = {
+     const summary: BackupImportSummary = {
+       assets: 0, transactions: 0, goals: 0, fixedDeposits: 0,
+       npsAccounts: 0, npsContributions: 0, ppfAccounts: 0, bankAccounts: 0, liabilities: 0, watchlistItems: 0,
++      priceHistory: 0, portfolioSnapshots: 0,
+       errors: [],
+     };
+ 
+@@ -247,6 +267,48 @@ export const backupService = {
+       }
+     }
+ 
++    // Previously missing entirely from restore (see WealthBackup's comment)
++    // — resolved through assetIdMap same as transactions/watchlist, since a
++    // restore onto an instance that already has some overlapping assets
++    // reuses the existing asset id rather than the backup's original one.
++    for (const point of backup.priceHistory ?? []) {
++      const assetId = assetIdMap.get(point.assetId);
++      if (!assetId) { summary.errors.push(`Price history point on ${point.recordedDate}: referenced asset not found in backup`); continue; }
++      try {
++        await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate);
++        summary.priceHistory += 1;
++      } catch (err) {
++        summary.errors.push(`Price history point on ${point.recordedDate}: ${err instanceof Error ? err.message : "failed"}`);
++      }
++    }
++
++    // Doesn't reference an asset — upsertToday() (despite the name) keys
++    // off snapshot.snapshotDate, so this correctly restores each
++    // snapshot's own historical date rather than collapsing them all onto
++    // today. Restoring these is what gives Analytics/CAGR real history
++    // again immediately after a restore, instead of needing weeks of new
++    // snapshots to accumulate before those metrics have anything to show.
++    for (const snapshot of backup.portfolioSnapshots ?? []) {
++      try {
++        await snapshotsRepository.upsertToday({
++          snapshotDate: snapshot.snapshotDate,
++          netWorth: snapshot.netWorth,
++          investedCapital: snapshot.investedCapital,
++          securitiesValue: snapshot.securitiesValue,
++          realizedPnl: snapshot.realizedPnl,
++          unrealizedPnl: snapshot.unrealizedPnl,
++          fdValue: snapshot.fdValue,
++          npsValue: snapshot.npsValue,
++          ppfValue: snapshot.ppfValue,
++          cashValue: snapshot.cashValue,
++          allocationSnapshot: snapshot.allocationSnapshot,
++        });
++        summary.portfolioSnapshots += 1;
++      } catch (err) {
++        summary.errors.push(`Portfolio snapshot on ${snapshot.snapshotDate}: ${err instanceof Error ? err.message : "failed"}`);
++      }
++    }
++
+     return summary;
+   },
+ };

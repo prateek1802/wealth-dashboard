@@ -18,6 +18,8 @@ const ENTITY_LABELS: Record<keyof Omit<BackupImportSummary, "errors">, string> =
   bankAccounts: "Bank Accounts",
   liabilities: "Liabilities",
   watchlistItems: "Watchlist Items",
+  priceHistory: "Price History Points",
+  portfolioSnapshots: "Portfolio Snapshots",
 };
 
 export function BackupView({ isDemoMode }: { isDemoMode: boolean }) {

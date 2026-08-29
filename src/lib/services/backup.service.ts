@@ -7,6 +7,8 @@ import { ppfRepository } from "@/lib/database/repositories/ppf.repository";
 import { bankAccountsRepository } from "@/lib/database/repositories/bank-accounts.repository";
 import { liabilitiesRepository } from "@/lib/database/repositories/liabilities.repository";
 import { watchlistRepository } from "@/lib/database/repositories/watchlist.repository";
+import { priceHistoryRepository } from "@/lib/database/repositories/price-history.repository";
+import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
 import type { Asset } from "@/types/domain/asset";
 import type { Transaction } from "@/types/domain/transaction";
 import type { Goal } from "@/types/domain/goal";
@@ -16,6 +18,8 @@ import type { PPFAccount } from "@/types/domain/ppf";
 import type { BankAccount } from "@/types/domain/bank-account";
 import type { Liability } from "@/types/domain/liability";
 import type { WatchlistItem } from "@/types/domain/watchlist";
+import type { PriceHistoryPoint } from "@/types/domain/price-history";
+import type { PortfolioSnapshot } from "@/types/domain/snapshot";
 
 export const BACKUP_FORMAT_VERSION = 1;
 
@@ -32,6 +36,10 @@ export interface WealthBackup {
   bankAccounts: BankAccount[];
   liabilities: Liability[];
   watchlistItems: WatchlistItem[];
+  /** Was silently missing from every backup before this fix — see exportAll()'s comment. */
+  priceHistory: PriceHistoryPoint[];
+  /** Was silently missing from every backup before this fix — see exportAll()'s comment. */
+  portfolioSnapshots: PortfolioSnapshot[];
 }
 
 export interface BackupImportSummary {
@@ -45,6 +53,8 @@ export interface BackupImportSummary {
   bankAccounts: number;
   liabilities: number;
   watchlistItems: number;
+  priceHistory: number;
+  portfolioSnapshots: number;
   errors: string[];
 }
 
@@ -67,7 +77,7 @@ export const backupService = {
     const npsAccounts = await npsRepository.findAll();
     const npsContributions = (await Promise.all(npsAccounts.map((a) => npsRepository.findContributions(a.id)))).flat();
 
-    const [assets, transactions, goals, fixedDeposits, ppfAccounts, bankAccounts, liabilities, watchlistItems] = await Promise.all([
+    const [assets, transactions, goals, fixedDeposits, ppfAccounts, bankAccounts, liabilities, watchlistItems, priceHistory, portfolioSnapshots] = await Promise.all([
       assetsRepository.findAll(),
       transactionsRepository.findAll(),
       goalsRepository.findAll(),
@@ -76,6 +86,13 @@ export const backupService = {
       bankAccountsRepository.findAll(),
       liabilitiesRepository.findAll(),
       watchlistRepository.findAll(),
+      // These two were silently EXCLUDED from every backup before this fix
+      // (2 of 11 tables), despite the export being marketed as a full
+      // backup — a restore would rebuild every holding correctly but come
+      // back with no historical price chart and no Analytics/CAGR history
+      // until enough new snapshots accumulated again.
+      priceHistoryRepository.findAll(),
+      snapshotsRepository.findAll(),
     ]);
 
     return {
@@ -91,6 +108,8 @@ export const backupService = {
       bankAccounts,
       liabilities,
       watchlistItems,
+      priceHistory,
+      portfolioSnapshots,
     };
   },
 
@@ -98,6 +117,7 @@ export const backupService = {
     const summary: BackupImportSummary = {
       assets: 0, transactions: 0, goals: 0, fixedDeposits: 0,
       npsAccounts: 0, npsContributions: 0, ppfAccounts: 0, bankAccounts: 0, liabilities: 0, watchlistItems: 0,
+      priceHistory: 0, portfolioSnapshots: 0,
       errors: [],
     };
 
@@ -244,6 +264,48 @@ export const backupService = {
         summary.watchlistItems += 1;
       } catch (err) {
         summary.errors.push(`Watchlist item: ${err instanceof Error ? err.message : "failed"}`);
+      }
+    }
+
+    // Previously missing entirely from restore (see WealthBackup's comment)
+    // — resolved through assetIdMap same as transactions/watchlist, since a
+    // restore onto an instance that already has some overlapping assets
+    // reuses the existing asset id rather than the backup's original one.
+    for (const point of backup.priceHistory ?? []) {
+      const assetId = assetIdMap.get(point.assetId);
+      if (!assetId) { summary.errors.push(`Price history point on ${point.recordedDate}: referenced asset not found in backup`); continue; }
+      try {
+        await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate);
+        summary.priceHistory += 1;
+      } catch (err) {
+        summary.errors.push(`Price history point on ${point.recordedDate}: ${err instanceof Error ? err.message : "failed"}`);
+      }
+    }
+
+    // Doesn't reference an asset — upsertToday() (despite the name) keys
+    // off snapshot.snapshotDate, so this correctly restores each
+    // snapshot's own historical date rather than collapsing them all onto
+    // today. Restoring these is what gives Analytics/CAGR real history
+    // again immediately after a restore, instead of needing weeks of new
+    // snapshots to accumulate before those metrics have anything to show.
+    for (const snapshot of backup.portfolioSnapshots ?? []) {
+      try {
+        await snapshotsRepository.upsertToday({
+          snapshotDate: snapshot.snapshotDate,
+          netWorth: snapshot.netWorth,
+          investedCapital: snapshot.investedCapital,
+          securitiesValue: snapshot.securitiesValue,
+          realizedPnl: snapshot.realizedPnl,
+          unrealizedPnl: snapshot.unrealizedPnl,
+          fdValue: snapshot.fdValue,
+          npsValue: snapshot.npsValue,
+          ppfValue: snapshot.ppfValue,
+          cashValue: snapshot.cashValue,
+          allocationSnapshot: snapshot.allocationSnapshot,
+        });
+        summary.portfolioSnapshots += 1;
+      } catch (err) {
+        summary.errors.push(`Portfolio snapshot on ${snapshot.snapshotDate}: ${err instanceof Error ? err.message : "failed"}`);
       }
     }
 
