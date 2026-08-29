@@ -2,56 +2,11 @@ import { isDemoMode } from "@/lib/database/client";
 import { getServerSupabaseClient } from "@/lib/database/server-client";
 import { demoAssets, nextId } from "@/lib/database/demo-data";
 import { sanitizePrice } from "@/lib/utils/sanitize-price";
+import { rowToAsset, assetToRow } from "@/lib/database/asset-mapping";
 import type { Asset, NewAsset, AssetUpdate } from "@/types/domain/asset";
 import type { AssetRow } from "@/types/database";
-import type { AssetType } from "@/constants/asset-types";
 
-export { sanitizePrice };
-
-/**
- * See sanitizePrice()'s doc comment in lib/utils/sanitize-price.ts for why
- * this exists — sanitized here on every READ so an already-corrupted row
- * displays safely everywhere the app renders an Asset.
- */
-function rowToAsset(row: AssetRow): Asset {
-  return {
-    id: row.id,
-    symbol: row.symbol,
-    name: row.name,
-    assetType: row.asset_type as AssetType,
-    currency: row.currency,
-    exchange: row.exchange,
-    sector: row.sector,
-    country: row.country,
-    isin: row.isin,
-    currentPrice: sanitizePrice(row.current_price),
-    currentPriceUpdatedAt: row.current_price_updated_at,
-    isActive: row.is_active,
-    notes: row.notes,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function assetToRow(a: NewAsset) {
-  return {
-    symbol: a.symbol,
-    name: a.name,
-    asset_type: a.assetType,
-    currency: a.currency,
-    exchange: a.exchange,
-    sector: a.sector,
-    country: a.country,
-    isin: a.isin,
-    // sanitizePrice() here too — upsertBySymbol's INSERT path (used by CSV
-    // import and backup restore, the latter trusting an uploaded file) goes
-    // straight to assetToRow(), bypassing update()'s guard above.
-    current_price: sanitizePrice(a.currentPrice),
-    current_price_updated_at: a.currentPriceUpdatedAt,
-    is_active: a.isActive,
-    notes: a.notes,
-  };
-}
+export { sanitizePrice, rowToAsset };
 
 export const assetsRepository = {
   async findAll(): Promise<Asset[]> {
