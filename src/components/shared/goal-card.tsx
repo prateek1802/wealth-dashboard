@@ -1,21 +1,21 @@
 import { Card } from "@/components/ui/card";
-import { Trash2 } from "lucide-react";
+import { Trash2, Pencil } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import type { Goal } from "@/types/domain/goal";
 
 /**
- * onDelete is optional so this stays reusable anywhere a read-only goal
- * summary is wanted (e.g. a future dashboard widget) without dragging a
- * delete affordance along. When provided, the button sits in the header's
- * own flex row — NOT absolutely positioned from outside by the caller.
- * That absolute-overlay approach is what caused this same icon-overlap bug
- * on Bank Accounts/FDs/NPS: an externally-overlaid icon collides with
- * whatever a card renders in that same corner (here, "by {targetDate}").
- * Fixed there by moving the action into each card's own header row; same
- * fix here.
+ * onEdit/onDelete are both optional so this stays reusable anywhere a
+ * read-only goal summary is wanted (e.g. a future dashboard widget)
+ * without dragging those affordances along. When provided, they sit in
+ * the header's own flex row — NOT absolutely positioned from outside by
+ * the caller. That absolute-overlay approach is what caused this same
+ * icon-overlap bug on Bank Accounts/FDs/NPS: an externally-overlaid icon
+ * collides with whatever a card renders in that same corner (here, "by
+ * {targetDate}"). Fixed there by moving the action into each card's own
+ * header row; same fix here.
  */
-export function GoalCard({ goal, onDelete }: { goal: Goal; onDelete?: () => void }) {
+export function GoalCard({ goal, onEdit, onDelete }: { goal: Goal; onEdit?: () => void; onDelete?: () => void }) {
   const progress = goal.targetAmount > 0 ? Math.min(100, (goal.currentAmount / goal.targetAmount) * 100) : 0;
   const remaining = Math.max(0, goal.targetAmount - goal.currentAmount);
 
@@ -39,6 +39,11 @@ export function GoalCard({ goal, onDelete }: { goal: Goal; onDelete?: () => void
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <div className="flex items-center gap-2">
             {goal.targetDate && <span className="text-xs text-ink-muted">by {formatDate(goal.targetDate)}</span>}
+            {onEdit && (
+              <button onClick={onEdit} className="text-ink-muted hover:text-ink" title="Edit">
+                <Pencil className="size-4" />
+              </button>
+            )}
             {onDelete && (
               <button onClick={onDelete} className="text-ink-muted hover:text-loss" title="Delete">
                 <Trash2 className="size-4" />

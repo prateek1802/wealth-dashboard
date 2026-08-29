@@ -1,0 +1,159 @@
+diff --git a/src/components/shared/goal-card.tsx b/src/components/shared/goal-card.tsx
+index 8e6d38f..bf13848 100644
+--- a/src/components/shared/goal-card.tsx
++++ b/src/components/shared/goal-card.tsx
+@@ -1,21 +1,21 @@
+ import { Card } from "@/components/ui/card";
+-import { Trash2 } from "lucide-react";
++import { Trash2, Pencil } from "lucide-react";
+ import { formatCurrency } from "@/lib/utils/currency";
+ import { formatDate } from "@/lib/utils/date";
+ import type { Goal } from "@/types/domain/goal";
+ 
+ /**
+- * onDelete is optional so this stays reusable anywhere a read-only goal
+- * summary is wanted (e.g. a future dashboard widget) without dragging a
+- * delete affordance along. When provided, the button sits in the header's
+- * own flex row — NOT absolutely positioned from outside by the caller.
+- * That absolute-overlay approach is what caused this same icon-overlap bug
+- * on Bank Accounts/FDs/NPS: an externally-overlaid icon collides with
+- * whatever a card renders in that same corner (here, "by {targetDate}").
+- * Fixed there by moving the action into each card's own header row; same
+- * fix here.
++ * onEdit/onDelete are both optional so this stays reusable anywhere a
++ * read-only goal summary is wanted (e.g. a future dashboard widget)
++ * without dragging those affordances along. When provided, they sit in
++ * the header's own flex row — NOT absolutely positioned from outside by
++ * the caller. That absolute-overlay approach is what caused this same
++ * icon-overlap bug on Bank Accounts/FDs/NPS: an externally-overlaid icon
++ * collides with whatever a card renders in that same corner (here, "by
++ * {targetDate}"). Fixed there by moving the action into each card's own
++ * header row; same fix here.
+  */
+-export function GoalCard({ goal, onDelete }: { goal: Goal; onDelete?: () => void }) {
++export function GoalCard({ goal, onEdit, onDelete }: { goal: Goal; onEdit?: () => void; onDelete?: () => void }) {
+   const progress = goal.targetAmount > 0 ? Math.min(100, (goal.currentAmount / goal.targetAmount) * 100) : 0;
+   const remaining = Math.max(0, goal.targetAmount - goal.currentAmount);
+ 
+@@ -39,6 +39,11 @@ export function GoalCard({ goal, onDelete }: { goal: Goal; onDelete?: () => void
+         <div className="flex shrink-0 flex-col items-end gap-1.5">
+           <div className="flex items-center gap-2">
+             {goal.targetDate && <span className="text-xs text-ink-muted">by {formatDate(goal.targetDate)}</span>}
++            {onEdit && (
++              <button onClick={onEdit} className="text-ink-muted hover:text-ink" title="Edit">
++                <Pencil className="size-4" />
++              </button>
++            )}
+             {onDelete && (
+               <button onClick={onDelete} className="text-ink-muted hover:text-loss" title="Delete">
+                 <Trash2 className="size-4" />
+diff --git a/src/features/goals/actions.ts b/src/features/goals/actions.ts
+index 873ae26..a548c21 100644
+--- a/src/features/goals/actions.ts
++++ b/src/features/goals/actions.ts
+@@ -18,9 +18,11 @@ export async function addGoalAction(input: unknown): Promise<ActionResult> {
+   }
+ }
+ 
+-export async function updateGoalProgressAction(id: string, currentAmount: number): Promise<ActionResult> {
++export async function updateGoalAction(id: string, input: unknown): Promise<ActionResult> {
++  const parsed = goalSchema.safeParse(input);
++  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+   try {
+-    await goalsRepository.update(id, { currentAmount });
++    await goalsRepository.update(id, { ...parsed.data, targetDate: parsed.data.targetDate ?? null, category: parsed.data.category ?? null, description: parsed.data.description ?? null });
+     revalidatePath(ROUTES.goals);
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+diff --git a/src/features/goals/components/goals-view.tsx b/src/features/goals/components/goals-view.tsx
+index 2d792e4..f9dd197 100644
+--- a/src/features/goals/components/goals-view.tsx
++++ b/src/features/goals/components/goals-view.tsx
+@@ -9,12 +9,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
+ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+ import { GoalCard } from "@/components/shared/goal-card";
+ import { EmptyState } from "@/components/shared/empty-state";
+-import { addGoalAction, deleteGoalAction } from "../actions";
++import { addGoalAction, updateGoalAction, deleteGoalAction } from "../actions";
+ import { Target, Plus } from "lucide-react";
+ import type { Goal } from "@/types/domain/goal";
+ 
+ export function GoalsView({ goals }: { goals: Goal[] }) {
+   const [dialogOpen, setDialogOpen] = useState(false);
++  const [editTarget, setEditTarget] = useState<Goal | null>(null);
+   const [deleteTarget, setDeleteTarget] = useState<Goal | null>(null);
+   const [isPending, startTransition] = useTransition();
+   const [error, setError] = useState<string | null>(null);
+@@ -25,19 +26,33 @@ export function GoalsView({ goals }: { goals: Goal[] }) {
+   const [targetDate, setTargetDate] = useState("");
+   const [category, setCategory] = useState("");
+ 
++  function openAdd() {
++    setEditTarget(null);
++    setName(""); setTargetAmount(""); setCurrentAmount("0"); setTargetDate(""); setCategory("");
++    setDialogOpen(true);
++  }
++
++  function openEdit(goal: Goal) {
++    setEditTarget(goal);
++    setName(goal.name); setTargetAmount(goal.targetAmount.toString()); setCurrentAmount(goal.currentAmount.toString());
++    setTargetDate(goal.targetDate ?? ""); setCategory(goal.category ?? "");
++    setDialogOpen(true);
++  }
++
+   function handleSubmit() {
+     setError(null);
+     startTransition(async () => {
+-      const result = await addGoalAction({
++      const payload = {
+         name,
+         targetAmount: Number(targetAmount),
+         currentAmount: Number(currentAmount || 0),
+         targetDate: targetDate || null,
+         category: category || null,
+         description: null,
+-      });
++      };
++      const result = editTarget ? await updateGoalAction(editTarget.id, payload) : await addGoalAction(payload);
+       if (result.ok) {
+-        toast.success("Goal added");
++        toast.success(editTarget ? "Goal updated" : "Goal added");
+         setName(""); setTargetAmount(""); setCurrentAmount("0"); setTargetDate(""); setCategory("");
+         setDialogOpen(false);
+       } else {
+@@ -55,22 +70,22 @@ export function GoalsView({ goals }: { goals: Goal[] }) {
+   return (
+     <div className="flex flex-col gap-4 p-4 lg:p-8">
+       <div className="flex justify-end">
+-        <Button onClick={() => setDialogOpen(true)}><Plus className="size-4" /> Add Goal</Button>
++        <Button onClick={openAdd}><Plus className="size-4" /> Add Goal</Button>
+       </div>
+ 
+       {goals.length === 0 ? (
+-        <EmptyState icon={Target} title="No goals yet" description="Set a savings goal to track your progress toward it." action={<Button onClick={() => setDialogOpen(true)}><Plus className="size-4" /> Add Goal</Button>} />
++        <EmptyState icon={Target} title="No goals yet" description="Set a savings goal to track your progress toward it." action={<Button onClick={openAdd}><Plus className="size-4" /> Add Goal</Button>} />
+       ) : (
+         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+           {goals.map((g) => (
+-            <GoalCard key={g.id} goal={g} onDelete={() => setDeleteTarget(g)} />
++            <GoalCard key={g.id} goal={g} onEdit={() => openEdit(g)} onDelete={() => setDeleteTarget(g)} />
+           ))}
+         </div>
+       )}
+ 
+       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+         <DialogContent>
+-          <DialogHeader><DialogTitle>Add goal</DialogTitle></DialogHeader>
++          <DialogHeader><DialogTitle>{editTarget ? "Edit goal" : "Add goal"}</DialogTitle></DialogHeader>
+           <div className="flex flex-col gap-4">
+             <div className="flex flex-col gap-1.5">
+               <Label htmlFor="goal-name">Name</Label>
+@@ -97,7 +112,7 @@ export function GoalsView({ goals }: { goals: Goal[] }) {
+               </div>
+             </div>
+             {error && <p className="text-sm text-loss">{error}</p>}
+-            <Button onClick={handleSubmit} disabled={isPending || !name || !targetAmount}>{isPending ? "Saving…" : "Add goal"}</Button>
++            <Button onClick={handleSubmit} disabled={isPending || !name || !targetAmount}>{isPending ? "Saving…" : editTarget ? "Save changes" : "Add goal"}</Button>
+           </div>
+         </DialogContent>
+       </Dialog>
