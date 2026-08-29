@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Toaster } from "sonner";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { ThemeProvider } from "@/components/layout/theme-provider";
 import "./globals.css";
 
@@ -34,6 +36,15 @@ export default function RootLayout({
           {children}
           <Toaster position="bottom-right" richColors closeButton />
         </ThemeProvider>
+        {/*
+          Both are no-ops (render null, no network calls) anywhere except a
+          real Vercel deployment — safe in local dev and in demo mode with
+          no Supabase configured. Analytics: page views. Speed Insights:
+          real-user Core Web Vitals. Neither needs an env var; Vercel wires
+          them up automatically for any project on its platform.
+        */}
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );
