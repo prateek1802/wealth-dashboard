@@ -1,0 +1,181 @@
+diff --git a/src/app/(app)/error.tsx b/src/app/(app)/error.tsx
+new file mode 100644
+index 0000000..d5db772
+--- /dev/null
++++ b/src/app/(app)/error.tsx
+@@ -0,0 +1,45 @@
++"use client";
++import { useEffect } from "react";
++import { AlertTriangle } from "lucide-react";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { ROUTES } from "@/constants/routes";
++
++/**
++ * Catches errors thrown by any (app)-group page or its Server Components.
++ * Scoped to this route group (not the root) specifically so the sidebar
++ * and mobile nav — rendered by (app)/layout.tsx, the PARENT of this
++ * boundary — stay intact: only the page content underneath is replaced by
++ * this fallback, not the whole app shell. Before this fix there was no
++ * error.tsx anywhere in the App Router, so an unhandled error on any page
++ * fell through to Next.js's generic unstyled error screen with no way to
++ * recover without a full page reload.
++ */
++export default function AppError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
++  useEffect(() => {
++    console.error(error);
++  }, [error]);
++
++  return (
++    <div className="flex min-h-[60vh] items-center justify-center p-4 lg:p-8">
++      <Card className="flex max-w-md flex-col items-center gap-4 p-8 text-center">
++        <div className="flex size-11 items-center justify-center rounded-full bg-loss/10 text-loss">
++          <AlertTriangle className="size-5" />
++        </div>
++        <div className="flex flex-col gap-1.5">
++          <p className="font-medium text-ink">Something went wrong loading this page</p>
++          <p className="text-sm text-ink-muted">
++            {error.message || "An unexpected error occurred."}
++            {error.digest && <span className="mt-1 block font-mono text-xs text-ink-muted/70">Ref: {error.digest}</span>}
++          </p>
++        </div>
++        <div className="flex gap-2">
++          <Button variant="outline" onClick={() => (window.location.href = ROUTES.dashboard)}>
++            Go to Dashboard
++          </Button>
++          <Button onClick={reset}>Try again</Button>
++        </div>
++      </Card>
++    </div>
++  );
++}
+diff --git a/src/app/(app)/loading.tsx b/src/app/(app)/loading.tsx
+new file mode 100644
+index 0000000..4814893
+--- /dev/null
++++ b/src/app/(app)/loading.tsx
+@@ -0,0 +1,38 @@
++import { Skeleton } from "@/components/ui/skeleton";
++import { Card } from "@/components/ui/card";
++
++/**
++ * Shown automatically by Next.js (via the implicit Suspense boundary this
++ * file creates) while any (app)-group page's async Server Component work
++ * is still in flight — e.g. the first paint of a page that fetches from
++ * Supabase. Before this fix there was no loading.tsx anywhere in the App
++ * Router, so navigating to a page with a slow fetch showed nothing at all
++ * until it finished, instead of an immediate skeleton.
++ *
++ * Deliberately generic (a card grid), not tailored per page — this file
++ * can't know which page it's covering. Good enough to make navigation
++ * feel instant instead of frozen; not meant to pixel-match every page's
++ * final layout.
++ */
++export default function AppLoading() {
++  return (
++    <div className="flex flex-col gap-6 p-4 lg:p-8">
++      <div className="flex flex-col gap-2">
++        <Skeleton className="h-7 w-48" />
++        <Skeleton className="h-4 w-72" />
++      </div>
++      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
++        {Array.from({ length: 4 }).map((_, i) => (
++          <Card key={i} className="flex flex-col gap-3 p-5">
++            <Skeleton className="h-4 w-20" />
++            <Skeleton className="h-7 w-32" />
++          </Card>
++        ))}
++      </div>
++      <Card className="flex flex-col gap-4 p-5">
++        <Skeleton className="h-5 w-40" />
++        <Skeleton className="h-48 w-full" />
++      </Card>
++    </div>
++  );
++}
+diff --git a/src/app/error.tsx b/src/app/error.tsx
+new file mode 100644
+index 0000000..24f0f97
+--- /dev/null
++++ b/src/app/error.tsx
+@@ -0,0 +1,35 @@
++"use client";
++import { useEffect } from "react";
++import { AlertTriangle } from "lucide-react";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++
++/**
++ * Covers the landing page and /login — the (app) route group has its own
++ * error.tsx (keeps the sidebar intact on a crash there), so this only
++ * catches errors outside it. No app chrome to preserve here, so this is
++ * just centered on a bare page.
++ */
++export default function RootError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
++  useEffect(() => {
++    console.error(error);
++  }, [error]);
++
++  return (
++    <div className="flex min-h-screen items-center justify-center bg-surface p-4">
++      <Card className="flex max-w-md flex-col items-center gap-4 p-8 text-center">
++        <div className="flex size-11 items-center justify-center rounded-full bg-loss/10 text-loss">
++          <AlertTriangle className="size-5" />
++        </div>
++        <div className="flex flex-col gap-1.5">
++          <p className="font-medium text-ink">Something went wrong</p>
++          <p className="text-sm text-ink-muted">
++            {error.message || "An unexpected error occurred."}
++            {error.digest && <span className="mt-1 block font-mono text-xs text-ink-muted/70">Ref: {error.digest}</span>}
++          </p>
++        </div>
++        <Button onClick={reset}>Try again</Button>
++      </Card>
++    </div>
++  );
++}
+diff --git a/src/app/global-error.tsx b/src/app/global-error.tsx
+new file mode 100644
+index 0000000..f042e71
+--- /dev/null
++++ b/src/app/global-error.tsx
+@@ -0,0 +1,39 @@
++"use client";
++import { useEffect } from "react";
++
++/**
++ * Only fires if the ROOT layout itself throws (not a page — that's
++ * error.tsx above, or (app)/error.tsx). Because this replaces the entire
++ * root layout, it must render its own <html>/<body> per Next.js's
++ * documented requirement. Kept deliberately plain, inline-styled, with no
++ * dependency on this app's design-system components, Tailwind, or
++ * globals.css — if the root layout crashed, those may be exactly what's
++ * broken, so this fallback can't assume any of them still work.
++ */
++export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
++  useEffect(() => {
++    console.error(error);
++  }, [error]);
++
++  return (
++    <html lang="en">
++      <body style={{ margin: 0, fontFamily: "system-ui, sans-serif", background: "#faf9f6", color: "#1a1a1a" }}>
++        <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
++          <div style={{ maxWidth: "28rem", textAlign: "center", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "center" }}>
++            <p style={{ fontWeight: 600, fontSize: "1.1rem" }}>Something went wrong</p>
++            <p style={{ fontSize: "0.875rem", color: "#666" }}>
++              {error.message || "An unexpected error occurred."}
++              {error.digest && <span style={{ display: "block", marginTop: "0.25rem", fontFamily: "monospace", fontSize: "0.75rem" }}>Ref: {error.digest}</span>}
++            </p>
++            <button
++              onClick={reset}
++              style={{ padding: "0.5rem 1.25rem", borderRadius: "0.5rem", border: "none", background: "#1a1a1a", color: "#fff", cursor: "pointer", fontSize: "0.875rem" }}
++            >
++              Try again
++            </button>
++          </div>
++        </div>
++      </body>
++    </html>
++  );
++}
