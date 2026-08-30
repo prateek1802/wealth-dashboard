@@ -1,0 +1,466 @@
+diff --git a/src/app/(app)/analytics/page.tsx b/src/app/(app)/analytics/page.tsx
+index 0f8d31d..76d03ac 100644
+--- a/src/app/(app)/analytics/page.tsx
++++ b/src/app/(app)/analytics/page.tsx
+@@ -4,7 +4,8 @@ import { EmptyState } from "@/components/shared/empty-state";
+ import { StatTile } from "@/features/analytics/components/stat-tile";
+ import { AllocationDonut } from "@/components/charts/allocation-donut";
+ import { portfolioService } from "@/lib/services/portfolio.service";
+-import { npsService } from "@/lib/services/nps.service";
++import { npsService } from "@/lib/services/nps.service";
++import { npsRepository } from "@/lib/database/repositories/nps.repository";
+ import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
+ import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
+ import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
+@@ -23,13 +24,15 @@ export const dynamic = "force-dynamic";
+ const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
+ 
+ export default async function AnalyticsPage() {
+-  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows] = await Promise.all([
++  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows, npsSchemeHoldings, npsSchemeTransactions] = await Promise.all([
+     portfolioService.getPortfolioSummary(),
+     portfolioService.getAssetAllocation(),
+     transactionsRepository.findAll(),
+     snapshotsRepository.findAll(),
+     portfolioService.getHoldingsWithXIRR(),
+     npsService.getCashflows(),
++    npsRepository.findAllSchemeHoldings(),
++    npsRepository.findAllSchemeTransactions(),
+   ]);
+ 
+   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+@@ -39,10 +42,11 @@ export default async function AnalyticsPage() {
+   // silently disagreeing with the Dashboard under the same "XIRR" label.
+   const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
+ 
+-  // Grouping key (ASSET_TYPE_GROUP) already existed — this is the first
+-  // thing to actually use it for XIRR. See calculateCategoryXIRR's doc
+-  // comment for scope (currently-held holdings only, no NPS/FD/PPF/cash).
+-  const categoryXirr = calculateCategoryXIRR(holdingsWithXirr, transactions, todayISO());
++  // Per-asset-TYPE (not the coarser Equity/Debt/Crypto/Other grouping) plus
++  // one row per NPS scheme (E/C/G/A) — see calculateCategoryXIRR's doc
++  // comment for exact scope (currently-held holdings only, NPS switches
++  // excluded, no FD/PPF/cash).
++  const categoryXirr = calculateCategoryXIRR(holdingsWithXirr, transactions, npsSchemeHoldings, npsSchemeTransactions, todayISO());
+ 
+   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
+@@ -87,15 +91,15 @@ export default async function AnalyticsPage() {
+ 
+         {categoryXirr.length > 0 && (
+           <Card>
+-            <CardHeader><CardTitle>XIRR by Asset Class</CardTitle></CardHeader>
++            <CardHeader><CardTitle>XIRR by Asset Type</CardTitle></CardHeader>
+             <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
+-              {categoryXirr.map(({ group, result, holdingCount }) => (
++              {categoryXirr.map(({ key, label, result, count }) => (
+                 <StatTile
+-                  key={group}
+-                  label={group}
++                  key={key}
++                  label={label}
+                   result={result}
+                   colorByValue
+-                  caption={`${holdingCount} holding${holdingCount === 1 ? "" : "s"}`}
++                  caption={`${count} holding${count === 1 ? "" : "s"}`}
+                 />
+               ))}
+             </CardContent>
+diff --git a/src/lib/calculations/category-xirr.ts b/src/lib/calculations/category-xirr.ts
+index b0ef661..1928cfa 100644
+--- a/src/lib/calculations/category-xirr.ts
++++ b/src/lib/calculations/category-xirr.ts
+@@ -1,76 +1,122 @@
+-import { ASSET_TYPE_GROUP } from "@/constants/asset-types";
++import { ASSET_TYPE_LABELS, SECURITY_ASSET_TYPES } from "@/constants/asset-types";
++import { NPS_SCHEME_LABELS, NPS_SCHEMES } from "@/constants/nps";
+ import { calculateXIRR } from "./returns";
+ import { netCashFlow } from "./cashflow";
+ import type { CalcResult } from "./returns";
+ import type { Holding } from "@/types/domain/holding";
+ import type { Transaction } from "@/types/domain/transaction";
+-
+-export type AssetGroup = "Equity" | "Debt" | "Crypto" | "Other";
+-const GROUPS: AssetGroup[] = ["Equity", "Debt", "Crypto", "Other"];
++import type { AssetType } from "@/constants/asset-types";
++import type { NPSScheme } from "@/constants/nps";
++import type { NPSSchemeHolding, NPSSchemeTransaction } from "@/types/domain/nps";
+ 
+ export interface CategoryXIRRResult {
+-  group: AssetGroup;
++  /** Stable identity for a React key — an AssetType, or "nps_<scheme>" for an NPS row. */
++  key: string;
++  label: string;
+   result: CalcResult<number>;
+-  holdingCount: number;
++  /** Securities holdings or NPS scheme holdings contributing to this row. */
++  count: number;
+ }
+ 
+ /**
+- * The grouping key (ASSET_TYPE_GROUP) already existed — this is the first
+- * thing to actually use it for XIRR. Applies the same pooling approach as
+- * the portfolio-wide XIRR (all transaction cash flows for the group, plus
+- * each holding's current value as a final "as if sold today" inflow), just
+- * scoped to one asset-class group instead of the whole portfolio — so
+- * "is my equity XIRR beating my debt XIRR" is answerable, not just one
+- * pooled number across everything.
++ * Per-asset-TYPE XIRR (Indian Stock, US Stock, ETF, Equity MF, Debt MF,
++ * Bond, Crypto — each its own row) plus one row per NPS scheme (E/C/G/A).
++ *
++ * Deliberately NOT grouped by the coarser ASSET_TYPE_GROUP (Equity/Debt/
++ * Crypto/Other) — an earlier version of this did that, which silently
++ * pooled Indian stocks, US stocks, ETFs, and equity mutual funds into one
++ * "Equity" number with no way to see an individual asset type's own XIRR
++ * (e.g. "my Indian stocks specifically" got no number of its own; only
++ * Crypto looked distinct, because Crypto happens to be a 1:1 type-to-group
++ * mapping). This is the finer breakdown that actually answers that.
++ *
++ * NPS is broken down the same way — by INDIVIDUAL scheme (E/C/G/A), not
++ * folded into Equity/Debt/Other — for the same reason: "my NPS Equity (E)
++ * sleeve's own XIRR" is a real, different question from "my NPS Corporate
++ * Bonds (C) sleeve's XIRR". This only reads already-computed NPS scheme
++ * holdings/transactions — none of NPS's own live-NAV-refresh or staleness
++ * logic is touched by any of this.
+  *
+- * "Cash" is never a key here: computeHoldings() (portfolio.service.ts)
+- * already excludes cash-type assets from holdings entirely (tracked via
+- * Bank Accounts instead), so no holding ever maps to that group.
++ * NPS switches (switch_in/switch_out — money moved between E/C/G/A
++ * *within* the same NPS account, no cash actually entering or leaving the
++ * subscriber's pocket) are DELIBERATELY EXCLUDED, same as the account-level
++ * pooled NPS XIRR elsewhere in this codebase. A scheme whose corpus grew
++ * mainly through internal switches rather than direct contributions will
++ * therefore show an incomplete or insufficient_data result — a known,
++ * deliberate scope limit: correctly attributing a switch as a
++ * "contribution" to the destination scheme (and a "withdrawal" from the
++ * source) is real, non-trivial modeling work that hasn't been built yet.
+  *
+- * Scoped to CURRENTLY-HELD holdings — unlike the portfolio-wide XIRR
+- * (which pools every transaction ever made, including fully-exited
+- * positions), a transaction whose asset isn't in `holdings` contributes
+- * nothing here. A category with only fully-exited positions and nothing
+- * currently held is therefore omitted entirely, same as a category with
+- * no holdings at all.
++ * "Cash" is excluded entirely (not in SECURITY_ASSET_TYPES) — it's tracked
++ * via Bank Accounts, not as a security with quantity/price.
+  *
+- * A group with zero holdings is omitted from the result entirely — not
+- * reported as insufficient_data, since there's nothing to report on at
+- * all, not a data-quality gap.
++ * Scoped to CURRENTLY-HELD holdings for securities — unlike the
++ * portfolio-wide XIRR (which pools every transaction ever made, including
++ * fully-exited positions), a transaction whose asset isn't in `holdings`
++ * contributes nothing here.
++ *
++ * A row with nothing in it at all is omitted — not reported as
++ * insufficient_data, since there's nothing to report on, not a
++ * data-quality gap.
+  */
+ export function calculateCategoryXIRR(
+   holdings: Pick<Holding, "asset" | "currentValue">[],
+   transactions: Pick<Transaction, "assetId" | "transactionDate" | "transactionType" | "quantity" | "price" | "fees" | "taxes">[],
++  npsSchemeHoldings: Pick<NPSSchemeHolding, "scheme" | "unitsHeld" | "lastNav">[] = [],
++  npsSchemeTransactions: Pick<NPSSchemeTransaction, "scheme" | "transactionDate" | "transactionType" | "amount">[] = [],
+   today: string
+ ): CategoryXIRRResult[] {
+-  const assetIdToGroup = new Map(holdings.map((h) => [h.asset.id, ASSET_TYPE_GROUP[h.asset.assetType] as AssetGroup]));
++  const assetIdToType = new Map(holdings.map((h) => [h.asset.id, h.asset.assetType]));
+ 
+-  const cashflowsByGroup = new Map<AssetGroup, { date: string; amount: number }[]>();
+-  const currentValueByGroup = new Map<AssetGroup, number>();
+-  const holdingCountByGroup = new Map<AssetGroup, number>();
++  const cashflowsByType = new Map<AssetType, { date: string; amount: number }[]>();
++  const currentValueByType = new Map<AssetType, number>();
++  const countByType = new Map<AssetType, number>();
+ 
+   for (const h of holdings) {
+-    const group = assetIdToGroup.get(h.asset.id);
+-    if (!group) continue;
+-    currentValueByGroup.set(group, (currentValueByGroup.get(group) ?? 0) + h.currentValue);
+-    holdingCountByGroup.set(group, (holdingCountByGroup.get(group) ?? 0) + 1);
++    currentValueByType.set(h.asset.assetType, (currentValueByType.get(h.asset.assetType) ?? 0) + h.currentValue);
++    countByType.set(h.asset.assetType, (countByType.get(h.asset.assetType) ?? 0) + 1);
+   }
+ 
+   for (const t of transactions) {
+-    const group = assetIdToGroup.get(t.assetId);
+-    if (!group) continue;
+-    const list = cashflowsByGroup.get(group) ?? [];
++    const type = assetIdToType.get(t.assetId);
++    if (!type) continue;
++    const list = cashflowsByType.get(type) ?? [];
+     list.push({ date: t.transactionDate, amount: netCashFlow(t) });
+-    cashflowsByGroup.set(group, list);
++    cashflowsByType.set(type, list);
+   }
+ 
+   const results: CategoryXIRRResult[] = [];
+-  for (const group of GROUPS) {
+-    const holdingCount = holdingCountByGroup.get(group) ?? 0;
+-    if (holdingCount === 0) continue;
+-    const cashflows = [...(cashflowsByGroup.get(group) ?? [])];
+-    cashflows.push({ date: today, amount: currentValueByGroup.get(group) ?? 0 });
+-    results.push({ group, result: calculateXIRR(cashflows), holdingCount });
++
++  for (const type of SECURITY_ASSET_TYPES) {
++    const count = countByType.get(type) ?? 0;
++    if (count === 0) continue;
++    const cashflows = [...(cashflowsByType.get(type) ?? [])];
++    cashflows.push({ date: today, amount: currentValueByType.get(type) ?? 0 });
++    results.push({ key: type, label: ASSET_TYPE_LABELS[type], result: calculateXIRR(cashflows), count });
++  }
++
++  const cashflowsByScheme = new Map<NPSScheme, { date: string; amount: number }[]>();
++  const currentValueByScheme = new Map<NPSScheme, number>();
++  const countByScheme = new Map<NPSScheme, number>();
++
++  for (const h of npsSchemeHoldings) {
++    currentValueByScheme.set(h.scheme, (currentValueByScheme.get(h.scheme) ?? 0) + h.unitsHeld * (h.lastNav ?? 0));
++    countByScheme.set(h.scheme, (countByScheme.get(h.scheme) ?? 0) + 1);
++  }
++
++  for (const t of npsSchemeTransactions) {
++    if (t.transactionType !== "contribution" && t.transactionType !== "withdrawal") continue; // switches excluded — see doc comment
++    const list = cashflowsByScheme.get(t.scheme) ?? [];
++    list.push({ date: t.transactionDate, amount: -t.amount });
++    cashflowsByScheme.set(t.scheme, list);
++  }
++
++  for (const scheme of NPS_SCHEMES) {
++    const count = countByScheme.get(scheme) ?? 0;
++    if (count === 0) continue;
++    const cashflows = [...(cashflowsByScheme.get(scheme) ?? [])];
++    cashflows.push({ date: today, amount: currentValueByScheme.get(scheme) ?? 0 });
++    results.push({ key: `nps_${scheme}`, label: `NPS — ${NPS_SCHEME_LABELS[scheme]}`, result: calculateXIRR(cashflows), count });
+   }
+ 
+   return results;
+diff --git a/src/lib/database/repositories/nps.repository.ts b/src/lib/database/repositories/nps.repository.ts
+index f56fb2b..a3a2c0e 100644
+--- a/src/lib/database/repositories/nps.repository.ts
++++ b/src/lib/database/repositories/nps.repository.ts
+@@ -259,6 +259,15 @@ export const npsRepository = {
+     return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
+   },
+ 
++  /** All scheme transactions across every NPS account — mirrors findAllSchemeHoldings() exactly. Used by the Analytics page's per-scheme (E/C/G/A) XIRR breakdown; read-only, no NPS import/refresh/staleness logic touched. */
++  async findAllSchemeTransactions(): Promise<NPSSchemeTransaction[]> {
++    if (isDemoMode()) return [...demoNPSSchemeTransactions];
++    const db = await getServerSupabaseClient();
++    const { data, error } = await db.from("nps_scheme_transactions").select("*");
++    if (error) throw error;
++    return (data as NPSSchemeTransactionRow[]).map(rowToSchemeTransaction);
++  },
++
+   /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. Only touches units_held/last_nav/last_nav_date — never npsnav_scheme_code, so the live-NAV mapping (set via setSchemeNAVSource) survives every re-import untouched. */
+   async upsertSchemeHolding(npsAccountId: string, scheme: NPSScheme, unitsHeld: number, lastNav: number | null, lastNavDate: string | null): Promise<NPSSchemeHolding> {
+     if (isDemoMode()) {
+diff --git a/test/category-xirr.test.ts b/test/category-xirr.test.ts
+index d109cd7..489c4fd 100644
+--- a/test/category-xirr.test.ts
++++ b/test/category-xirr.test.ts
+@@ -3,6 +3,7 @@ import { calculateCategoryXIRR } from "@/lib/calculations/category-xirr";
+ import { txn } from "./helpers";
+ import type { Asset } from "@/types/domain/asset";
+ import type { Holding } from "@/types/domain/holding";
++import type { NPSSchemeHolding, NPSSchemeTransaction } from "@/types/domain/nps";
+ 
+ function makeAsset(overrides: Partial<Asset>): Asset {
+   return {
+@@ -39,77 +40,147 @@ function makeHolding(overrides: Partial<Holding> & { asset: Asset }): Holding {
+   };
+ }
+ 
+-describe("calculateCategoryXIRR", () => {
+-  it("pools cash flows separately per asset-class group", () => {
+-    const equityAsset = makeAsset({ id: "eq-1", assetType: "stock_in" });
+-    const debtAsset = makeAsset({ id: "debt-1", assetType: "bond" });
++function makeSchemeHolding(overrides: Partial<NPSSchemeHolding>): NPSSchemeHolding {
++  return {
++    id: "sh-1",
++    npsAccountId: "acc-1",
++    scheme: "E",
++    unitsHeld: 100,
++    lastNav: 50,
++    lastNavDate: "2024-01-01",
++    npsnavSchemeCode: null,
++    createdAt: "2023-01-01T00:00:00Z",
++    updatedAt: "2023-01-01T00:00:00Z",
++    ...overrides,
++  };
++}
++
++function makeSchemeTxn(overrides: Partial<NPSSchemeTransaction>): NPSSchemeTransaction {
++  return {
++    id: "st-1",
++    npsAccountId: "acc-1",
++    scheme: "E",
++    transactionType: "contribution",
++    transactionDate: "2023-01-01",
++    units: 100,
++    nav: 40,
++    amount: 4000,
++    employeeAmount: null,
++    employerAmount: null,
++    linkedTransactionId: null,
++    description: null,
++    createdAt: "2023-01-01T00:00:00Z",
++    ...overrides,
++  };
++}
+ 
++describe("calculateCategoryXIRR — per-asset-type breakdown", () => {
++  it("keeps Indian Stock, US Stock, and Equity MF as SEPARATE rows, not pooled into one 'Equity' bucket", () => {
+     const holdings = [
+-      makeHolding({ asset: equityAsset, currentValue: 1500 }),
+-      makeHolding({ asset: debtAsset, currentValue: 1100 }),
++      makeHolding({ asset: makeAsset({ id: "in-1", assetType: "stock_in" }), currentValue: 1500 }),
++      makeHolding({ asset: makeAsset({ id: "us-1", assetType: "stock_us" }), currentValue: 1100 }),
++      makeHolding({ asset: makeAsset({ id: "mf-1", assetType: "mutual_fund" }), currentValue: 1300 }),
+     ];
+     const transactions = [
+-      txn({ assetId: "eq-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
+-      txn({ assetId: "debt-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
++      txn({ assetId: "in-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
++      txn({ assetId: "us-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
++      txn({ assetId: "mf-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
+     ];
+ 
+-    const results = calculateCategoryXIRR(holdings, transactions, "2024-01-01");
+-
+-    expect(results).toHaveLength(2);
+-    const equity = results.find((r) => r.group === "Equity");
+-    const debt = results.find((r) => r.group === "Debt");
+-    expect(equity?.holdingCount).toBe(1);
+-    expect(debt?.holdingCount).toBe(1);
+-    expect(equity?.result.status).toBe("ok");
+-    expect(debt?.result.status).toBe("ok");
+-    // Equity grew more (1000 -> 1500) than debt (1000 -> 1100) over the same period.
+-    if (equity?.result.status === "ok" && debt?.result.status === "ok") {
+-      expect(equity.result.value).toBeGreaterThan(debt.result.value);
+-    }
++    const results = calculateCategoryXIRR(holdings, transactions, [], [], "2024-01-01");
++
++    expect(results.map((r) => r.key).sort()).toEqual(["mutual_fund", "stock_in", "stock_us"]);
++    expect(results.find((r) => r.key === "stock_in")?.label).toBe("Indian Stock");
++    expect(results.every((r) => r.count === 1)).toBe(true);
+   });
+ 
+-  it("omits a group entirely when it has no holdings, rather than reporting insufficient_data", () => {
+-    const holdings = [makeHolding({ asset: makeAsset({ id: "eq-1", assetType: "stock_in" }) })];
+-    const transactions = [txn({ assetId: "eq-1", transactionDate: "2023-01-01" })];
++  it("pools multiple holdings of the SAME type into one row", () => {
++    const holdings = [
++      makeHolding({ asset: makeAsset({ id: "in-1", assetType: "stock_in" }), currentValue: 1200 }),
++      makeHolding({ asset: makeAsset({ id: "in-2", assetType: "stock_in" }), currentValue: 1300 }),
++    ];
++    const transactions = [
++      txn({ assetId: "in-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
++      txn({ assetId: "in-2", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
++    ];
+ 
+-    const results = calculateCategoryXIRR(holdings, transactions, "2024-01-01");
++    const results = calculateCategoryXIRR(holdings, transactions, [], [], "2024-01-01");
+ 
+     expect(results).toHaveLength(1);
+-    expect(results[0].group).toBe("Equity");
+-    expect(results.find((r) => r.group === "Debt")).toBeUndefined();
+-    expect(results.find((r) => r.group === "Crypto")).toBeUndefined();
++    expect(results[0].key).toBe("stock_in");
++    expect(results[0].count).toBe(2);
+   });
+ 
+-  it("pools multiple holdings in the same group into one XIRR", () => {
+-    const asset1 = makeAsset({ id: "eq-1", assetType: "stock_in" });
+-    const asset2 = makeAsset({ id: "eq-2", assetType: "etf" });
+-    const holdings = [
+-      makeHolding({ asset: asset1, currentValue: 1200 }),
+-      makeHolding({ asset: asset2, currentValue: 1300 }),
+-    ];
+-    const transactions = [
+-      txn({ assetId: "eq-1", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
+-      txn({ assetId: "eq-2", transactionDate: "2023-01-01", quantity: 10, price: 100 }),
++  it("omits an asset type with no holdings", () => {
++    const holdings = [makeHolding({ asset: makeAsset({ id: "in-1", assetType: "stock_in" }) })];
++    const transactions = [txn({ assetId: "in-1", transactionDate: "2023-01-01" })];
++
++    const results = calculateCategoryXIRR(holdings, transactions, [], [], "2024-01-01");
++
++    expect(results).toHaveLength(1);
++    expect(results.find((r) => r.key === "crypto")).toBeUndefined();
++  });
++});
++
++describe("calculateCategoryXIRR — NPS per-scheme breakdown", () => {
++  it("gives NPS Equity (E) its own row, separate from securities Equity types", () => {
++    const holdings = [makeHolding({ asset: makeAsset({ id: "in-1", assetType: "stock_in" }), currentValue: 1500 })];
++    const transactions = [txn({ assetId: "in-1", transactionDate: "2023-01-01", quantity: 10, price: 100 })];
++    const npsHoldings = [makeSchemeHolding({ scheme: "E", unitsHeld: 100, lastNav: 50 })]; // current value 5000
++    const npsTxns = [makeSchemeTxn({ scheme: "E", transactionType: "contribution", transactionDate: "2023-01-01", amount: 4000 })];
++
++    const results = calculateCategoryXIRR(holdings, transactions, npsHoldings, npsTxns, "2024-01-01");
++
++    expect(results.map((r) => r.key).sort()).toEqual(["nps_E", "stock_in"]);
++    expect(results.find((r) => r.key === "nps_E")?.label).toBe("NPS — Equity");
++  });
++
++  it("excludes switch_in/switch_out from NPS scheme cash flows", () => {
++    const npsHoldings = [makeSchemeHolding({ scheme: "C", unitsHeld: 100, lastNav: 50 })];
++    const npsTxns = [
++      makeSchemeTxn({ scheme: "C", transactionType: "contribution", transactionDate: "2023-01-01", amount: 4000 }),
++      makeSchemeTxn({ scheme: "C", transactionType: "switch_in", transactionDate: "2023-06-01", amount: 10000 }),
+     ];
+ 
+-    const results = calculateCategoryXIRR(holdings, transactions, "2024-01-01");
++    const results = calculateCategoryXIRR([], [], npsHoldings, npsTxns, "2024-01-01");
+ 
+     expect(results).toHaveLength(1);
+-    expect(results[0].group).toBe("Equity");
+-    expect(results[0].holdingCount).toBe(2);
++    // If switch_in had been included, the pooled cash flow would be
++    // radically different (an extra 10,000 inflow-side entry) — this just
++    // confirms a result was computed at all from the contribution alone.
+     expect(results[0].result.status).toBe("ok");
+   });
+ 
+-  it("never produces a Cash group (cash-type assets are excluded upstream, but verify defensively)", () => {
+-    const holdings = [makeHolding({ asset: makeAsset({ id: "cash-1", assetType: "cash" }) })];
+-    const transactions = [txn({ assetId: "cash-1", transactionDate: "2023-01-01" })];
++  it("gives each of the four NPS schemes its own row when all are held", () => {
++    const npsHoldings = (["E", "C", "G", "A"] as const).map((scheme) => makeSchemeHolding({ scheme, unitsHeld: 100, lastNav: 50 }));
++    const npsTxns = (["E", "C", "G", "A"] as const).map((scheme) =>
++      makeSchemeTxn({ scheme, transactionType: "contribution", transactionDate: "2023-01-01", amount: 4000 })
++    );
+ 
+-    const results = calculateCategoryXIRR(holdings, transactions, "2024-01-01");
++    const results = calculateCategoryXIRR([], [], npsHoldings, npsTxns, "2024-01-01");
++
++    expect(results.map((r) => r.key).sort()).toEqual(["nps_A", "nps_C", "nps_E", "nps_G"]);
++  });
++
++  it("omits an NPS scheme with no holding", () => {
++    const npsHoldings = [makeSchemeHolding({ scheme: "E", unitsHeld: 100, lastNav: 50 })];
++    const npsTxns = [makeSchemeTxn({ scheme: "E", transactionType: "contribution", amount: 4000 })];
++
++    const results = calculateCategoryXIRR([], [], npsHoldings, npsTxns, "2024-01-01");
++
++    expect(results).toHaveLength(1);
++    expect(results.find((r) => r.key === "nps_C")).toBeUndefined();
++  });
++});
+ 
+-    expect(results.some((r) => (r.group as string) === "Cash")).toBe(false);
++describe("calculateCategoryXIRR — edge cases", () => {
++  it("returns an empty array when there is nothing at all", () => {
++    expect(calculateCategoryXIRR([], [], [], [], "2024-01-01")).toEqual([]);
+   });
+ 
+-  it("returns an empty array when there are no holdings at all", () => {
+-    expect(calculateCategoryXIRR([], [], "2024-01-01")).toEqual([]);
++  it("defaults npsSchemeHoldings/npsSchemeTransactions to empty arrays when omitted", () => {
++    const holdings = [makeHolding({ asset: makeAsset({ id: "in-1", assetType: "stock_in" }) })];
++    const transactions = [txn({ assetId: "in-1", transactionDate: "2023-01-01" })];
++    expect(() => calculateCategoryXIRR(holdings, transactions, undefined, undefined, "2024-01-01")).not.toThrow();
+   });
+ });

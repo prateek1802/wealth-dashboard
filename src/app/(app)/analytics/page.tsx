@@ -5,6 +5,7 @@ import { StatTile } from "@/features/analytics/components/stat-tile";
 import { AllocationDonut } from "@/components/charts/allocation-donut";
 import { portfolioService } from "@/lib/services/portfolio.service";
 import { npsService } from "@/lib/services/nps.service";
+import { npsRepository } from "@/lib/database/repositories/nps.repository";
 import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
 import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
@@ -23,13 +24,15 @@ export const dynamic = "force-dynamic";
 const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
 
 export default async function AnalyticsPage() {
-  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows] = await Promise.all([
+  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows, npsSchemeHoldings, npsSchemeTransactions] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     transactionsRepository.findAll(),
     snapshotsRepository.findAll(),
     portfolioService.getHoldingsWithXIRR(),
     npsService.getCashflows(),
+    npsRepository.findAllSchemeHoldings(),
+    npsRepository.findAllSchemeTransactions(),
   ]);
 
   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
@@ -39,10 +42,11 @@ export default async function AnalyticsPage() {
   // silently disagreeing with the Dashboard under the same "XIRR" label.
   const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
 
-  // Grouping key (ASSET_TYPE_GROUP) already existed — this is the first
-  // thing to actually use it for XIRR. See calculateCategoryXIRR's doc
-  // comment for scope (currently-held holdings only, no NPS/FD/PPF/cash).
-  const categoryXirr = calculateCategoryXIRR(holdingsWithXirr, transactions, todayISO());
+  // Per-asset-TYPE (not the coarser Equity/Debt/Crypto/Other grouping) plus
+  // one row per NPS scheme (E/C/G/A) — see calculateCategoryXIRR's doc
+  // comment for exact scope (currently-held holdings only, NPS switches
+  // excluded, no FD/PPF/cash).
+  const categoryXirr = calculateCategoryXIRR(holdingsWithXirr, transactions, npsSchemeHoldings, npsSchemeTransactions, todayISO());
 
   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
@@ -87,15 +91,15 @@ export default async function AnalyticsPage() {
 
         {categoryXirr.length > 0 && (
           <Card>
-            <CardHeader><CardTitle>XIRR by Asset Class</CardTitle></CardHeader>
+            <CardHeader><CardTitle>XIRR by Asset Type</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              {categoryXirr.map(({ group, result, holdingCount }) => (
+              {categoryXirr.map(({ key, label, result, count }) => (
                 <StatTile
-                  key={group}
-                  label={group}
+                  key={key}
+                  label={label}
                   result={result}
                   colorByValue
-                  caption={`${holdingCount} holding${holdingCount === 1 ? "" : "s"}`}
+                  caption={`${count} holding${count === 1 ? "" : "s"}`}
                 />
               ))}
             </CardContent>

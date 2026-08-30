@@ -259,6 +259,15 @@ export const npsRepository = {
     return (data as NPSSchemeHoldingRow[]).map(rowToSchemeHolding);
   },
 
+  /** All scheme transactions across every NPS account — mirrors findAllSchemeHoldings() exactly. Used by the Analytics page's per-scheme (E/C/G/A) XIRR breakdown; read-only, no NPS import/refresh/staleness logic touched. */
+  async findAllSchemeTransactions(): Promise<NPSSchemeTransaction[]> {
+    if (isDemoMode()) return [...demoNPSSchemeTransactions];
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db.from("nps_scheme_transactions").select("*");
+    if (error) throw error;
+    return (data as NPSSchemeTransactionRow[]).map(rowToSchemeTransaction);
+  },
+
   /** Upsert on (nps_account_id, scheme) — see the unique constraint in schema.sql. Only touches units_held/last_nav/last_nav_date — never npsnav_scheme_code, so the live-NAV mapping (set via setSchemeNAVSource) survives every re-import untouched. */
   async upsertSchemeHolding(npsAccountId: string, scheme: NPSScheme, unitsHeld: number, lastNav: number | null, lastNavDate: string | null): Promise<NPSSchemeHolding> {
     if (isDemoMode()) {
