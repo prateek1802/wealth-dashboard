@@ -8,6 +8,7 @@ import { npsService } from "@/lib/services/nps.service";
 import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
 import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
+import { calculateCategoryXIRR } from "@/lib/calculations/category-xirr";
 import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
 import { RISK_METRICS_CUTOFF_DATE } from "@/constants/risk";
 import { netCashFlow } from "@/lib/calculations/cashflow";
@@ -37,6 +38,11 @@ export default async function AnalyticsPage() {
   // npsService.getCashflows()) — this was previously securities-only here,
   // silently disagreeing with the Dashboard under the same "XIRR" label.
   const xirr = calculateXIRR([...securitiesCashflows, ...npsCashflows]);
+
+  // Grouping key (ASSET_TYPE_GROUP) already existed — this is the first
+  // thing to actually use it for XIRR. See calculateCategoryXIRR's doc
+  // comment for scope (currently-held holdings only, no NPS/FD/PPF/cash).
+  const categoryXirr = calculateCategoryXIRR(holdingsWithXirr, transactions, todayISO());
 
   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
@@ -78,6 +84,23 @@ export default async function AnalyticsPage() {
             </Card>
           </CardContent>
         </Card>
+
+        {categoryXirr.length > 0 && (
+          <Card>
+            <CardHeader><CardTitle>XIRR by Asset Class</CardTitle></CardHeader>
+            <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              {categoryXirr.map(({ group, result, holdingCount }) => (
+                <StatTile
+                  key={group}
+                  label={group}
+                  result={result}
+                  colorByValue
+                  caption={`${holdingCount} holding${holdingCount === 1 ? "" : "s"}`}
+                />
+              ))}
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader><CardTitle>Risk</CardTitle></CardHeader>
