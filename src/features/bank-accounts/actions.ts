@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { bankAccountsService } from "@/lib/services/bank-accounts.service";
 import { bankAccountSchema } from "@/lib/validation/bank-account.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
 
 export async function addBankAccountAction(input: unknown): Promise<ActionResult> {
@@ -14,6 +15,7 @@ export async function addBankAccountAction(input: unknown): Promise<ActionResult
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("addBankAccountAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -25,6 +27,7 @@ export async function updateBankAccountBalanceAction(id: string, currentBalance:
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("updateBankAccountBalanceAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -36,6 +39,7 @@ export async function deleteBankAccountAction(id: string): Promise<ActionResult>
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("deleteBankAccountAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

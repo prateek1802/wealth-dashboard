@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { ppfService } from "@/lib/services/ppf.service";
 import { ppfAccountSchema, withdrawPPFSchema } from "@/lib/validation/ppf.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
 
 export async function addPPFAccountAction(input: unknown): Promise<ActionResult> {
@@ -14,6 +15,7 @@ export async function addPPFAccountAction(input: unknown): Promise<ActionResult>
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("addPPFAccountAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -25,6 +27,7 @@ export async function updatePPFBalanceAction(id: string, currentBalance: number,
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("updatePPFBalanceAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -38,6 +41,7 @@ export async function withdrawPPFAction(id: string, input: unknown): Promise<Act
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("withdrawPPFAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -49,6 +53,7 @@ export async function deletePPFAccountAction(id: string): Promise<ActionResult> 
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("deletePPFAccountAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

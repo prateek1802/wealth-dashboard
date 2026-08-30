@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { backupService } from "@/lib/services/backup.service";
 import type { WealthBackup, BackupImportSummary } from "@/lib/services/backup.service";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 
 export async function exportBackupAction(): Promise<WealthBackup> {
   return backupService.exportAll();
@@ -25,6 +26,7 @@ export async function importBackupAction(
     }
     return { ok: true, summary };
   } catch (err) {
+    logServerError("importBackupAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Import failed" };
   }
 }

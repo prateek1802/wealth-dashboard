@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { fdService } from "@/lib/services/fd.service";
 import { fixedDepositSchema, withdrawFixedDepositSchema } from "@/lib/validation/fd.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
 
 export async function addFixedDepositAction(input: unknown): Promise<ActionResult> {
@@ -14,6 +15,7 @@ export async function addFixedDepositAction(input: unknown): Promise<ActionResul
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("addFixedDepositAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -28,6 +30,7 @@ export async function editFixedDepositAction(id: string, input: unknown): Promis
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("editFixedDepositAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -41,6 +44,7 @@ export async function withdrawFixedDepositAction(id: string, input: unknown): Pr
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("withdrawFixedDepositAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -52,6 +56,7 @@ export async function deleteFixedDepositAction(id: string): Promise<ActionResult
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("deleteFixedDepositAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

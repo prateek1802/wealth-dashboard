@@ -5,6 +5,7 @@ import { assetsRepository } from "@/lib/database/repositories/assets.repository"
 import { watchlistItemSchema } from "@/lib/validation/watchlist.schema";
 import { assetSchema } from "@/lib/validation/asset.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import { z } from "zod";
 import type { ActionResult } from "@/features/transactions/actions";
 
@@ -25,6 +26,7 @@ export async function addWatchlistItemAction(input: unknown): Promise<ActionResu
     revalidatePath(ROUTES.watchlist);
     return { ok: true };
   } catch (err) {
+    logServerError("addWatchlistItemAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -35,6 +37,7 @@ export async function removeWatchlistItemAction(id: string): Promise<ActionResul
     revalidatePath(ROUTES.watchlist);
     return { ok: true };
   } catch (err) {
+    logServerError("removeWatchlistItemAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

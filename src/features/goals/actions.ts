@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { goalsRepository } from "@/lib/database/repositories/goals.repository";
 import { goalSchema } from "@/lib/validation/goal.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
 
 export async function addGoalAction(input: unknown): Promise<ActionResult> {
@@ -14,6 +15,7 @@ export async function addGoalAction(input: unknown): Promise<ActionResult> {
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("addGoalAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -27,6 +29,7 @@ export async function updateGoalAction(id: string, input: unknown): Promise<Acti
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("updateGoalAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -38,6 +41,7 @@ export async function deleteGoalAction(id: string): Promise<ActionResult> {
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("deleteGoalAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

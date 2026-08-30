@@ -4,6 +4,7 @@ import { assetsRepository } from "@/lib/database/repositories/assets.repository"
 import { portfolioService } from "@/lib/services/portfolio.service";
 import { assetSchema, assetPriceUpdateSchema } from "@/lib/validation/asset.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
 import type { Asset } from "@/types/domain/asset";
 
@@ -23,6 +24,7 @@ export async function updateAssetMetadataAction(assetId: string, input: unknown)
     revalidatePath(ROUTES.investmentDetail(assetId));
     return { ok: true };
   } catch (err) {
+    logServerError("updateAssetMetadataAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -41,6 +43,7 @@ export async function updateAssetPriceAction(input: unknown): Promise<ActionResu
     revalidatePath(ROUTES.investmentDetail(parsed.data.assetId));
     return { ok: true };
   } catch (err) {
+    logServerError("updateAssetPriceAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -52,6 +55,7 @@ export async function deleteAssetAction(assetId: string): Promise<ActionResult> 
     revalidatePath(ROUTES.dashboard);
     return { ok: true };
   } catch (err) {
+    logServerError("deleteAssetAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -127,6 +131,7 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
     revalidatePath(ROUTES.watchlist);
     return { ok: true, updated, skipped };
   } catch (err) {
+    logServerError("refreshLivePricesAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

@@ -1,0 +1,388 @@
+diff --git a/src/features/goals/actions.ts b/src/features/goals/actions.ts
+index a548c21..14ea429 100644
+--- a/src/features/goals/actions.ts
++++ b/src/features/goals/actions.ts
+@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
+ import { goalsRepository } from "@/lib/database/repositories/goals.repository";
+ import { goalSchema } from "@/lib/validation/goal.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import type { ActionResult } from "@/features/transactions/actions";
+ 
+ export async function addGoalAction(input: unknown): Promise<ActionResult> {
+@@ -14,6 +15,7 @@ export async function addGoalAction(input: unknown): Promise<ActionResult> {
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addGoalAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -27,6 +29,7 @@ export async function updateGoalAction(id: string, input: unknown): Promise<Acti
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("updateGoalAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -38,6 +41,7 @@ export async function deleteGoalAction(id: string): Promise<ActionResult> {
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("deleteGoalAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/features/backup/actions.ts b/src/features/backup/actions.ts
+index 8b5c467..1dd87f0 100644
+--- a/src/features/backup/actions.ts
++++ b/src/features/backup/actions.ts
+@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
+ import { backupService } from "@/lib/services/backup.service";
+ import type { WealthBackup, BackupImportSummary } from "@/lib/services/backup.service";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ 
+ export async function exportBackupAction(): Promise<WealthBackup> {
+   return backupService.exportAll();
+@@ -25,6 +26,7 @@ export async function importBackupAction(
+     }
+     return { ok: true, summary };
+   } catch (err) {
++    logServerError("importBackupAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Import failed" };
+   }
+ }
+diff --git a/src/features/bank-accounts/actions.ts b/src/features/bank-accounts/actions.ts
+index d4a4ca0..79fcc3e 100644
+--- a/src/features/bank-accounts/actions.ts
++++ b/src/features/bank-accounts/actions.ts
+@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
+ import { bankAccountsService } from "@/lib/services/bank-accounts.service";
+ import { bankAccountSchema } from "@/lib/validation/bank-account.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import type { ActionResult } from "@/features/transactions/actions";
+ 
+ export async function addBankAccountAction(input: unknown): Promise<ActionResult> {
+@@ -14,6 +15,7 @@ export async function addBankAccountAction(input: unknown): Promise<ActionResult
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addBankAccountAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -25,6 +27,7 @@ export async function updateBankAccountBalanceAction(id: string, currentBalance:
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("updateBankAccountBalanceAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -36,6 +39,7 @@ export async function deleteBankAccountAction(id: string): Promise<ActionResult>
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("deleteBankAccountAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/features/fixed-deposits/actions.ts b/src/features/fixed-deposits/actions.ts
+index a8b3c01..cf91528 100644
+--- a/src/features/fixed-deposits/actions.ts
++++ b/src/features/fixed-deposits/actions.ts
+@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
+ import { fdService } from "@/lib/services/fd.service";
+ import { fixedDepositSchema, withdrawFixedDepositSchema } from "@/lib/validation/fd.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import type { ActionResult } from "@/features/transactions/actions";
+ 
+ export async function addFixedDepositAction(input: unknown): Promise<ActionResult> {
+@@ -14,6 +15,7 @@ export async function addFixedDepositAction(input: unknown): Promise<ActionResul
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addFixedDepositAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -28,6 +30,7 @@ export async function editFixedDepositAction(id: string, input: unknown): Promis
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("editFixedDepositAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -41,6 +44,7 @@ export async function withdrawFixedDepositAction(id: string, input: unknown): Pr
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("withdrawFixedDepositAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -52,6 +56,7 @@ export async function deleteFixedDepositAction(id: string): Promise<ActionResult
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("deleteFixedDepositAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/features/liabilities/actions.ts b/src/features/liabilities/actions.ts
+index 2f89b67..888f638 100644
+--- a/src/features/liabilities/actions.ts
++++ b/src/features/liabilities/actions.ts
+@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
+ import { liabilitiesService } from "@/lib/services/liabilities.service";
+ import { liabilitySchema } from "@/lib/validation/liability.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import type { ActionResult } from "@/features/transactions/actions";
+ 
+ export async function addLiabilityAction(input: unknown): Promise<ActionResult> {
+@@ -14,6 +15,7 @@ export async function addLiabilityAction(input: unknown): Promise<ActionResult>
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addLiabilityAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -27,6 +29,7 @@ export async function updateLiabilityAction(id: string, input: unknown): Promise
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("updateLiabilityAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -38,6 +41,7 @@ export async function deleteLiabilityAction(id: string): Promise<ActionResult> {
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("deleteLiabilityAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/features/portfolio/actions.ts b/src/features/portfolio/actions.ts
+index f56928f..600d5ed 100644
+--- a/src/features/portfolio/actions.ts
++++ b/src/features/portfolio/actions.ts
+@@ -4,6 +4,7 @@ import { assetsRepository } from "@/lib/database/repositories/assets.repository"
+ import { portfolioService } from "@/lib/services/portfolio.service";
+ import { assetSchema, assetPriceUpdateSchema } from "@/lib/validation/asset.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import type { ActionResult } from "@/features/transactions/actions";
+ import type { Asset } from "@/types/domain/asset";
+ 
+@@ -23,6 +24,7 @@ export async function updateAssetMetadataAction(assetId: string, input: unknown)
+     revalidatePath(ROUTES.investmentDetail(assetId));
+     return { ok: true };
+   } catch (err) {
++    logServerError("updateAssetMetadataAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -41,6 +43,7 @@ export async function updateAssetPriceAction(input: unknown): Promise<ActionResu
+     revalidatePath(ROUTES.investmentDetail(parsed.data.assetId));
+     return { ok: true };
+   } catch (err) {
++    logServerError("updateAssetPriceAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -52,6 +55,7 @@ export async function deleteAssetAction(assetId: string): Promise<ActionResult>
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("deleteAssetAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -127,6 +131,7 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
+     revalidatePath(ROUTES.watchlist);
+     return { ok: true, updated, skipped };
+   } catch (err) {
++    logServerError("refreshLivePricesAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/features/ppf/actions.ts b/src/features/ppf/actions.ts
+index 5501583..6f5c2f2 100644
+--- a/src/features/ppf/actions.ts
++++ b/src/features/ppf/actions.ts
+@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
+ import { ppfService } from "@/lib/services/ppf.service";
+ import { ppfAccountSchema, withdrawPPFSchema } from "@/lib/validation/ppf.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import type { ActionResult } from "@/features/transactions/actions";
+ 
+ export async function addPPFAccountAction(input: unknown): Promise<ActionResult> {
+@@ -14,6 +15,7 @@ export async function addPPFAccountAction(input: unknown): Promise<ActionResult>
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addPPFAccountAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -25,6 +27,7 @@ export async function updatePPFBalanceAction(id: string, currentBalance: number,
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("updatePPFBalanceAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -38,6 +41,7 @@ export async function withdrawPPFAction(id: string, input: unknown): Promise<Act
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("withdrawPPFAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -49,6 +53,7 @@ export async function deletePPFAccountAction(id: string): Promise<ActionResult>
+     revalidatePath(ROUTES.dashboard);
+     return { ok: true };
+   } catch (err) {
++    logServerError("deletePPFAccountAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/features/transactions/actions.ts b/src/features/transactions/actions.ts
+index d24ca67..d4c345e 100644
+--- a/src/features/transactions/actions.ts
++++ b/src/features/transactions/actions.ts
+@@ -5,6 +5,7 @@ import { assetsRepository } from "@/lib/database/repositories/assets.repository"
+ import { transactionSchema } from "@/lib/validation/transaction.schema";
+ import { assetSchema } from "@/lib/validation/asset.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import { z } from "zod";
+ 
+ const addInvestmentSchema = z.object({
+@@ -29,6 +30,7 @@ export async function addInvestmentAction(input: unknown): Promise<ActionResult>
+     revalidatePath(ROUTES.transactions);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addInvestmentAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -53,6 +55,7 @@ export async function addTransactionAction(input: unknown): Promise<ActionResult
+     revalidatePath(ROUTES.investmentDetail(parsed.data.assetId));
+     return { ok: true };
+   } catch (err) {
++    logServerError("addTransactionAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -68,6 +71,7 @@ export async function editTransactionAction(id: string, assetId: string, input:
+     revalidatePath(ROUTES.investmentDetail(assetId));
+     return { ok: true };
+   } catch (err) {
++    logServerError("editTransactionAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -81,6 +85,7 @@ export async function deleteTransactionAction(id: string, assetId: string): Prom
+     revalidatePath(ROUTES.investmentDetail(assetId));
+     return { ok: true };
+   } catch (err) {
++    logServerError("deleteTransactionAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -177,6 +182,7 @@ export async function importTransactionsCSVAction(
+       seenKeys.add(key);
+       imported += 1;
+     } catch (err) {
++      logServerError("importTransactionsCSVAction:row", err);
+       failed.push({ rowNumber, ok: false, symbol: data.symbol, error: err instanceof Error ? err.message : "Failed to import" });
+     }
+   }
+diff --git a/src/features/watchlist/actions.ts b/src/features/watchlist/actions.ts
+index 5c9500a..42ac5c8 100644
+--- a/src/features/watchlist/actions.ts
++++ b/src/features/watchlist/actions.ts
+@@ -5,6 +5,7 @@ import { assetsRepository } from "@/lib/database/repositories/assets.repository"
+ import { watchlistItemSchema } from "@/lib/validation/watchlist.schema";
+ import { assetSchema } from "@/lib/validation/asset.schema";
+ import { ROUTES } from "@/constants/routes";
++import { logServerError } from "@/lib/utils/log-error";
+ import { z } from "zod";
+ import type { ActionResult } from "@/features/transactions/actions";
+ 
+@@ -25,6 +26,7 @@ export async function addWatchlistItemAction(input: unknown): Promise<ActionResu
+     revalidatePath(ROUTES.watchlist);
+     return { ok: true };
+   } catch (err) {
++    logServerError("addWatchlistItemAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+@@ -35,6 +37,7 @@ export async function removeWatchlistItemAction(id: string): Promise<ActionResul
+     revalidatePath(ROUTES.watchlist);
+     return { ok: true };
+   } catch (err) {
++    logServerError("removeWatchlistItemAction", err);
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
+diff --git a/src/lib/utils/log-error.ts b/src/lib/utils/log-error.ts
+new file mode 100644
+index 0000000..764ff18
+--- /dev/null
++++ b/src/lib/utils/log-error.ts
+@@ -0,0 +1,15 @@
++/**
++ * Before this, every Server Action's catch block silently swallowed the
++ * real error into a generic user-facing message — nothing was ever logged
++ * server-side, so a genuine failure (a Supabase constraint violation, a
++ * network error, anything) left no trace to debug from. No external
++ * logging service needed: a plain console.error, called consistently with
++ * useful context, is already captured by Vercel's own log aggregation
++ * (visible in the project's Logs tab) for any app deployed there.
++ *
++ * `context` should identify which action failed (e.g. "addTransactionAction")
++ * so a log line is actually traceable back to a call site.
++ */
++export function logServerError(context: string, err: unknown): void {
++  console.error(`[${context}]`, err);
++}
+diff --git a/test/log-error.test.ts b/test/log-error.test.ts
+new file mode 100644
+index 0000000..d1356a6
+--- /dev/null
++++ b/test/log-error.test.ts
+@@ -0,0 +1,21 @@
++import { describe, it, expect, vi, afterEach } from "vitest";
++import { logServerError } from "@/lib/utils/log-error";
++
++describe("logServerError", () => {
++  afterEach(() => {
++    vi.restoreAllMocks();
++  });
++
++  it("logs via console.error with the context in brackets, followed by the raw error", () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    const err = new Error("boom");
++    logServerError("addTransactionAction", err);
++    expect(spy).toHaveBeenCalledWith("[addTransactionAction]", err);
++  });
++
++  it("logs whatever was thrown, even a non-Error value", () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    logServerError("someAction", "a plain string error");
++    expect(spy).toHaveBeenCalledWith("[someAction]", "a plain string error");
++  });
++});

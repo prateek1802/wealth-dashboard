@@ -5,6 +5,7 @@ import { assetsRepository } from "@/lib/database/repositories/assets.repository"
 import { transactionSchema } from "@/lib/validation/transaction.schema";
 import { assetSchema } from "@/lib/validation/asset.schema";
 import { ROUTES } from "@/constants/routes";
+import { logServerError } from "@/lib/utils/log-error";
 import { z } from "zod";
 
 const addInvestmentSchema = z.object({
@@ -29,6 +30,7 @@ export async function addInvestmentAction(input: unknown): Promise<ActionResult>
     revalidatePath(ROUTES.transactions);
     return { ok: true };
   } catch (err) {
+    logServerError("addInvestmentAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -53,6 +55,7 @@ export async function addTransactionAction(input: unknown): Promise<ActionResult
     revalidatePath(ROUTES.investmentDetail(parsed.data.assetId));
     return { ok: true };
   } catch (err) {
+    logServerError("addTransactionAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -68,6 +71,7 @@ export async function editTransactionAction(id: string, assetId: string, input: 
     revalidatePath(ROUTES.investmentDetail(assetId));
     return { ok: true };
   } catch (err) {
+    logServerError("editTransactionAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -81,6 +85,7 @@ export async function deleteTransactionAction(id: string, assetId: string): Prom
     revalidatePath(ROUTES.investmentDetail(assetId));
     return { ok: true };
   } catch (err) {
+    logServerError("deleteTransactionAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
@@ -177,6 +182,7 @@ export async function importTransactionsCSVAction(
       seenKeys.add(key);
       imported += 1;
     } catch (err) {
+      logServerError("importTransactionsCSVAction:row", err);
       failed.push({ rowNumber, ok: false, symbol: data.symbol, error: err instanceof Error ? err.message : "Failed to import" });
     }
   }
