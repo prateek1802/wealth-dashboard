@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
+import { PriceFreshness } from "@/components/shared/price-freshness";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
 import { formatCurrency, formatCurrencyPrecise, formatSignedCurrency, formatPercent, formatQuantity } from "@/lib/utils/currency";
 import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
@@ -43,6 +44,7 @@ export function InvestmentCard({ holding }: { holding: Holding }) {
             <span className="font-tabular text-ink">
               {holding.asset.currentPrice != null ? formatCurrencyPrecise(holding.asset.currentPrice, holding.asset.currency) : "—"}
             </span>
+            <PriceFreshness updatedAt={holding.asset.currentPriceUpdatedAt} />
           </div>
         </div>
 
