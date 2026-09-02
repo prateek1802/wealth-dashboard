@@ -128,10 +128,10 @@ function HoldingsGroup({ label, holdings, view, hideHeader = false }: { label: s
                       <td className="px-4 py-3 text-right font-tabular">{formatQuantity(h.quantity)}</td>
                       <td className="px-4 py-3 text-right font-tabular">{formatCurrencyPrecise(h.weightedAverageCost, h.asset.currency)}</td>
                       <td className="px-4 py-3 text-right font-tabular">
-                        <div className="flex flex-col items-end">
-                          <span>{h.asset.currentPrice != null ? formatCurrencyPrecise(h.asset.currentPrice, h.asset.currency) : "—"}</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          {h.asset.currentPrice != null ? formatCurrencyPrecise(h.asset.currentPrice, h.asset.currency) : "—"}
                           <PriceFreshness updatedAt={h.asset.currentPriceUpdatedAt} />
-                        </div>
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-right font-tabular">{formatCurrency(h.currentValue, h.asset.currency)}</td>
                       <td className={cn("px-4 py-3 text-right font-tabular", isGain ? "text-gain" : "text-loss")}>

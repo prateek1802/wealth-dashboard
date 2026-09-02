@@ -68,7 +68,7 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">{currentPriceLabel(asset.assetType)}</span>
           <span className="font-tabular text-lg font-medium text-ink">{asset.currentPrice ? formatCurrencyPrecise(asset.currentPrice, asset.currency) : "—"}</span>
-          <PriceFreshness updatedAt={asset.currentPriceUpdatedAt} />
+          <PriceFreshness updatedAt={asset.currentPriceUpdatedAt} mode="text" />
         </Card>
         <Card className="flex flex-col gap-1 p-5">
           <span className="text-xs text-ink-muted">{quantityLabel(asset.assetType)}</span>

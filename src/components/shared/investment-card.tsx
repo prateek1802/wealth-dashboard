@@ -41,10 +41,10 @@ export function InvestmentCard({ holding }: { holding: Holding }) {
           </div>
           <div className="flex flex-col gap-0.5">
             <span className="text-ink-muted">{currentPriceLabel(holding.asset.assetType)}</span>
-            <span className="font-tabular text-ink">
+            <span className="flex items-center gap-1 font-tabular text-ink">
               {holding.asset.currentPrice != null ? formatCurrencyPrecise(holding.asset.currentPrice, holding.asset.currency) : "—"}
+              <PriceFreshness updatedAt={holding.asset.currentPriceUpdatedAt} />
             </span>
-            <PriceFreshness updatedAt={holding.asset.currentPriceUpdatedAt} />
           </div>
         </div>
 
