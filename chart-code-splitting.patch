@@ -1,0 +1,343 @@
+diff --git a/src/components/charts/allocation-donut-impl.tsx b/src/components/charts/allocation-donut-impl.tsx
+new file mode 100644
+index 0000000..edd4a00
+--- /dev/null
++++ b/src/components/charts/allocation-donut-impl.tsx
+@@ -0,0 +1,40 @@
++"use client";
++import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
++import { ALLOCATION_CATEGORY_LABELS, type AllocationCategory } from "@/constants/asset-types";
++import { formatCurrency } from "@/lib/utils/currency";
++import type { AllocationSlice } from "@/types/domain/snapshot";
++
++const PALETTE = ["#a9793f", "#3f7d58", "#6f6a5e", "#b54b3f", "#d4a25f", "#7d9ba9", "#8a6fae", "#c98f5e"];
++
++export function AllocationDonut({ slices }: { slices: AllocationSlice[] }) {
++  return (
++    <div className="flex h-full flex-col gap-3">
++      <div className="h-40 w-full">
++        <ResponsiveContainer width="100%" height="100%">
++          <PieChart>
++            <Pie data={slices} dataKey="value" nameKey="category" innerRadius="60%" outerRadius="95%" strokeWidth={0}>
++              {slices.map((s, i) => (
++                <Cell key={s.category} fill={PALETTE[i % PALETTE.length]} />
++              ))}
++            </Pie>
++            <Tooltip
++              formatter={(value) => formatCurrency(Number(value))}
++              contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
++            />
++          </PieChart>
++        </ResponsiveContainer>
++      </div>
++      <ul className="flex flex-col gap-1.5 overflow-y-auto text-xs">
++        {slices.map((s, i) => (
++          <li key={s.category} className="flex items-center justify-between gap-2">
++            <span className="flex items-center gap-2 text-ink-muted">
++              <span className="size-2 rounded-full" style={{ background: PALETTE[i % PALETTE.length] }} />
++              {ALLOCATION_CATEGORY_LABELS[s.category as AllocationCategory] ?? s.category}
++            </span>
++            <span className="font-tabular text-ink">{s.percentage.toFixed(1)}%</span>
++          </li>
++        ))}
++      </ul>
++    </div>
++  );
++}
+diff --git a/src/components/charts/allocation-donut.tsx b/src/components/charts/allocation-donut.tsx
+index edd4a00..abbf336 100644
+--- a/src/components/charts/allocation-donut.tsx
++++ b/src/components/charts/allocation-donut.tsx
+@@ -1,40 +1,21 @@
+ "use client";
+-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+-import { ALLOCATION_CATEGORY_LABELS, type AllocationCategory } from "@/constants/asset-types";
+-import { formatCurrency } from "@/lib/utils/currency";
+-import type { AllocationSlice } from "@/types/domain/snapshot";
++import dynamic from "next/dynamic";
++import { Skeleton } from "@/components/ui/skeleton";
+ 
+-const PALETTE = ["#a9793f", "#3f7d58", "#6f6a5e", "#b54b3f", "#d4a25f", "#7d9ba9", "#8a6fae", "#c98f5e"];
+-
+-export function AllocationDonut({ slices }: { slices: AllocationSlice[] }) {
+-  return (
+-    <div className="flex h-full flex-col gap-3">
+-      <div className="h-40 w-full">
+-        <ResponsiveContainer width="100%" height="100%">
+-          <PieChart>
+-            <Pie data={slices} dataKey="value" nameKey="category" innerRadius="60%" outerRadius="95%" strokeWidth={0}>
+-              {slices.map((s, i) => (
+-                <Cell key={s.category} fill={PALETTE[i % PALETTE.length]} />
+-              ))}
+-            </Pie>
+-            <Tooltip
+-              formatter={(value) => formatCurrency(Number(value))}
+-              contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
+-            />
+-          </PieChart>
+-        </ResponsiveContainer>
+-      </div>
+-      <ul className="flex flex-col gap-1.5 overflow-y-auto text-xs">
+-        {slices.map((s, i) => (
+-          <li key={s.category} className="flex items-center justify-between gap-2">
+-            <span className="flex items-center gap-2 text-ink-muted">
+-              <span className="size-2 rounded-full" style={{ background: PALETTE[i % PALETTE.length] }} />
+-              {ALLOCATION_CATEGORY_LABELS[s.category as AllocationCategory] ?? s.category}
+-            </span>
+-            <span className="font-tabular text-ink">{s.percentage.toFixed(1)}%</span>
+-          </li>
+-        ))}
+-      </ul>
+-    </div>
+-  );
+-}
++/**
++ * recharts previously shipped in the initial JS bundle for EVERY page that
++ * imported this — including pages where the chart isn't the first thing
++ * rendered. next/dynamic splits the real implementation
++ * (allocation-donut-impl.tsx) into its own chunk, loaded only when this
++ * component actually renders. `ssr: false` because ResponsiveContainer
++ * needs real DOM measurements to lay out — it can't render anything
++ * meaningful during SSR anyway, so skipping SSR for it avoids a
++ * guaranteed hydration mismatch instead of causing one.
++ *
++ * Every caller keeps importing from this exact path — nothing else in the
++ * codebase needs to change.
++ */
++export const AllocationDonut = dynamic(() => import("./allocation-donut-impl").then((m) => m.AllocationDonut), {
++  ssr: false,
++  loading: () => <Skeleton className="h-40 w-full" />,
++});
+diff --git a/src/components/charts/performance-line-chart-impl.tsx b/src/components/charts/performance-line-chart-impl.tsx
+new file mode 100644
+index 0000000..099e2da
+--- /dev/null
++++ b/src/components/charts/performance-line-chart-impl.tsx
+@@ -0,0 +1,41 @@
++"use client";
++import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
++import { formatCurrency } from "@/lib/utils/currency";
++import { formatDate } from "@/lib/utils/date";
++import type { PerformancePoint } from "@/types/domain/snapshot";
++
++export function PerformanceLineChart({ points }: { points: PerformancePoint[] }) {
++  return (
++    <ResponsiveContainer width="100%" height="100%">
++      <AreaChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
++        <defs>
++          <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
++            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
++            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
++          </linearGradient>
++        </defs>
++        <XAxis
++          dataKey="date"
++          tickFormatter={(d) => formatDate(d, "d MMM")}
++          tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
++          axisLine={false}
++          tickLine={false}
++          minTickGap={40}
++        />
++        <YAxis
++          tickFormatter={(v) => formatCurrency(v)}
++          tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
++          axisLine={false}
++          tickLine={false}
++          width={70}
++        />
++        <Tooltip
++          labelFormatter={(d) => formatDate(String(d))}
++          formatter={(value) => [formatCurrency(Number(value)), "Net worth"]}
++          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
++        />
++        <Area type="monotone" dataKey="value" stroke="var(--accent)" strokeWidth={2} fill="url(#netWorthFill)" />
++      </AreaChart>
++    </ResponsiveContainer>
++  );
++}
+diff --git a/src/components/charts/performance-line-chart.tsx b/src/components/charts/performance-line-chart.tsx
+index 099e2da..f65353f 100644
+--- a/src/components/charts/performance-line-chart.tsx
++++ b/src/components/charts/performance-line-chart.tsx
+@@ -1,41 +1,13 @@
+ "use client";
+-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+-import { formatCurrency } from "@/lib/utils/currency";
+-import { formatDate } from "@/lib/utils/date";
+-import type { PerformancePoint } from "@/types/domain/snapshot";
++import dynamic from "next/dynamic";
++import { Skeleton } from "@/components/ui/skeleton";
+ 
+-export function PerformanceLineChart({ points }: { points: PerformancePoint[] }) {
+-  return (
+-    <ResponsiveContainer width="100%" height="100%">
+-      <AreaChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+-        <defs>
+-          <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
+-            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
+-            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+-          </linearGradient>
+-        </defs>
+-        <XAxis
+-          dataKey="date"
+-          tickFormatter={(d) => formatDate(d, "d MMM")}
+-          tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
+-          axisLine={false}
+-          tickLine={false}
+-          minTickGap={40}
+-        />
+-        <YAxis
+-          tickFormatter={(v) => formatCurrency(v)}
+-          tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
+-          axisLine={false}
+-          tickLine={false}
+-          width={70}
+-        />
+-        <Tooltip
+-          labelFormatter={(d) => formatDate(String(d))}
+-          formatter={(value) => [formatCurrency(Number(value)), "Net worth"]}
+-          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
+-        />
+-        <Area type="monotone" dataKey="value" stroke="var(--accent)" strokeWidth={2} fill="url(#netWorthFill)" />
+-      </AreaChart>
+-    </ResponsiveContainer>
+-  );
+-}
++/**
++ * See allocation-donut.tsx's doc comment for the full rationale — same
++ * code-splitting pattern, real implementation now in
++ * performance-line-chart-impl.tsx.
++ */
++export const PerformanceLineChart = dynamic(() => import("./performance-line-chart-impl").then((m) => m.PerformanceLineChart), {
++  ssr: false,
++  loading: () => <Skeleton className="h-full w-full" />,
++});
+diff --git a/src/components/charts/sparkline-impl.tsx b/src/components/charts/sparkline-impl.tsx
+new file mode 100644
+index 0000000..e9bd954
+--- /dev/null
++++ b/src/components/charts/sparkline-impl.tsx
+@@ -0,0 +1,21 @@
++"use client";
++import { AreaChart, Area, ResponsiveContainer } from "recharts";
++
++/** Minimal trend indicator embedded inside MetricCard / InvestmentCard — no axes, no tooltip. */
++export function Sparkline({ values, positive = true }: { values: number[]; positive?: boolean }) {
++  const data = values.map((v, i) => ({ i, v }));
++  const color = positive ? "var(--gain)" : "var(--loss)";
++  return (
++    <ResponsiveContainer width="100%" height="100%">
++      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
++        <defs>
++          <linearGradient id={`spark-${positive ? "up" : "down"}`} x1="0" y1="0" x2="0" y2="1">
++            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
++            <stop offset="100%" stopColor={color} stopOpacity={0} />
++          </linearGradient>
++        </defs>
++        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} fill={`url(#spark-${positive ? "up" : "down"})`} dot={false} />
++      </AreaChart>
++    </ResponsiveContainer>
++  );
++}
+diff --git a/src/components/charts/sparkline.tsx b/src/components/charts/sparkline.tsx
+index e9bd954..e0a6d4e 100644
+--- a/src/components/charts/sparkline.tsx
++++ b/src/components/charts/sparkline.tsx
+@@ -1,21 +1,13 @@
+ "use client";
+-import { AreaChart, Area, ResponsiveContainer } from "recharts";
++import dynamic from "next/dynamic";
+ 
+-/** Minimal trend indicator embedded inside MetricCard / InvestmentCard — no axes, no tooltip. */
+-export function Sparkline({ values, positive = true }: { values: number[]; positive?: boolean }) {
+-  const data = values.map((v, i) => ({ i, v }));
+-  const color = positive ? "var(--gain)" : "var(--loss)";
+-  return (
+-    <ResponsiveContainer width="100%" height="100%">
+-      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+-        <defs>
+-          <linearGradient id={`spark-${positive ? "up" : "down"}`} x1="0" y1="0" x2="0" y2="1">
+-            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+-            <stop offset="100%" stopColor={color} stopOpacity={0} />
+-          </linearGradient>
+-        </defs>
+-        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} fill={`url(#spark-${positive ? "up" : "down"})`} dot={false} />
+-      </AreaChart>
+-    </ResponsiveContainer>
+-  );
+-}
++/**
++ * See allocation-donut.tsx's doc comment for the full rationale — same
++ * code-splitting pattern, real implementation now in sparkline-impl.tsx.
++ * No loading fallback here (unlike the other three charts): Sparkline is
++ * a small decorative trend indicator embedded inside MetricCard/
++ * InvestmentCard, not a primary content element — rendering nothing while
++ * its chunk loads is less disruptive than a skeleton flashing inside an
++ * otherwise-already-rendered card.
++ */
++export const Sparkline = dynamic(() => import("./sparkline-impl").then((m) => m.Sparkline), { ssr: false });
+diff --git a/src/features/nps/components/nps-projection-chart-impl.tsx b/src/features/nps/components/nps-projection-chart-impl.tsx
+new file mode 100644
+index 0000000..803a258
+--- /dev/null
++++ b/src/features/nps/components/nps-projection-chart-impl.tsx
+@@ -0,0 +1,20 @@
++"use client";
++import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
++import { formatCurrency } from "@/lib/utils/currency";
++import type { NPSProjectionPoint } from "@/types/domain/nps";
++
++export function NPSProjectionChart({ points }: { points: NPSProjectionPoint[] }) {
++  return (
++    <ResponsiveContainer width="100%" height="100%">
++      <LineChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
++        <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--ink-muted)" }} axisLine={false} tickLine={false} />
++        <YAxis tickFormatter={(v) => formatCurrency(v)} tick={{ fontSize: 11, fill: "var(--ink-muted)" }} axisLine={false} tickLine={false} width={80} />
++        <Tooltip
++          formatter={(value) => [formatCurrency(Number(value)), "Projected corpus"]}
++          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
++        />
++        <Line type="monotone" dataKey="corpus" stroke="var(--accent)" strokeWidth={2} dot={false} />
++      </LineChart>
++    </ResponsiveContainer>
++  );
++}
+diff --git a/src/features/nps/components/nps-projection-chart.tsx b/src/features/nps/components/nps-projection-chart.tsx
+index 803a258..0ffcc9e 100644
+--- a/src/features/nps/components/nps-projection-chart.tsx
++++ b/src/features/nps/components/nps-projection-chart.tsx
+@@ -1,20 +1,16 @@
+ "use client";
+-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+-import { formatCurrency } from "@/lib/utils/currency";
+-import type { NPSProjectionPoint } from "@/types/domain/nps";
++import dynamic from "next/dynamic";
++import { Skeleton } from "@/components/ui/skeleton";
+ 
+-export function NPSProjectionChart({ points }: { points: NPSProjectionPoint[] }) {
+-  return (
+-    <ResponsiveContainer width="100%" height="100%">
+-      <LineChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+-        <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--ink-muted)" }} axisLine={false} tickLine={false} />
+-        <YAxis tickFormatter={(v) => formatCurrency(v)} tick={{ fontSize: 11, fill: "var(--ink-muted)" }} axisLine={false} tickLine={false} width={80} />
+-        <Tooltip
+-          formatter={(value) => [formatCurrency(Number(value)), "Projected corpus"]}
+-          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
+-        />
+-        <Line type="monotone" dataKey="corpus" stroke="var(--accent)" strokeWidth={2} dot={false} />
+-      </LineChart>
+-    </ResponsiveContainer>
+-  );
+-}
++/**
++ * See components/charts/allocation-donut.tsx's doc comment for the full
++ * code-splitting rationale — same pattern, real implementation moved to
++ * nps-projection-chart-impl.tsx UNCHANGED (byte-for-byte copy). This file
++ * only changes HOW the chart is loaded (a separate JS chunk, fetched on
++ * render instead of bundled eagerly) — no NPS data, NAV, staleness, or
++ * import logic is touched by this at all.
++ */
++export const NPSProjectionChart = dynamic(() => import("./nps-projection-chart-impl").then((m) => m.NPSProjectionChart), {
++  ssr: false,
++  loading: () => <Skeleton className="h-full w-full" />,
++});

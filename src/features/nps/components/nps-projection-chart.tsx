@@ -1,20 +1,16 @@
 "use client";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { formatCurrency } from "@/lib/utils/currency";
-import type { NPSProjectionPoint } from "@/types/domain/nps";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
 
-export function NPSProjectionChart({ points }: { points: NPSProjectionPoint[] }) {
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--ink-muted)" }} axisLine={false} tickLine={false} />
-        <YAxis tickFormatter={(v) => formatCurrency(v)} tick={{ fontSize: 11, fill: "var(--ink-muted)" }} axisLine={false} tickLine={false} width={80} />
-        <Tooltip
-          formatter={(value) => [formatCurrency(Number(value)), "Projected corpus"]}
-          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
-        />
-        <Line type="monotone" dataKey="corpus" stroke="var(--accent)" strokeWidth={2} dot={false} />
-      </LineChart>
-    </ResponsiveContainer>
-  );
-}
+/**
+ * See components/charts/allocation-donut.tsx's doc comment for the full
+ * code-splitting rationale — same pattern, real implementation moved to
+ * nps-projection-chart-impl.tsx UNCHANGED (byte-for-byte copy). This file
+ * only changes HOW the chart is loaded (a separate JS chunk, fetched on
+ * render instead of bundled eagerly) — no NPS data, NAV, staleness, or
+ * import logic is touched by this at all.
+ */
+export const NPSProjectionChart = dynamic(() => import("./nps-projection-chart-impl").then((m) => m.NPSProjectionChart), {
+  ssr: false,
+  loading: () => <Skeleton className="h-full w-full" />,
+});

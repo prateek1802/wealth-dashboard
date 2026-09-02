@@ -1,21 +1,13 @@
 "use client";
-import { AreaChart, Area, ResponsiveContainer } from "recharts";
+import dynamic from "next/dynamic";
 
-/** Minimal trend indicator embedded inside MetricCard / InvestmentCard — no axes, no tooltip. */
-export function Sparkline({ values, positive = true }: { values: number[]; positive?: boolean }) {
-  const data = values.map((v, i) => ({ i, v }));
-  const color = positive ? "var(--gain)" : "var(--loss)";
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id={`spark-${positive ? "up" : "down"}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} fill={`url(#spark-${positive ? "up" : "down"})`} dot={false} />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
+/**
+ * See allocation-donut.tsx's doc comment for the full rationale — same
+ * code-splitting pattern, real implementation now in sparkline-impl.tsx.
+ * No loading fallback here (unlike the other three charts): Sparkline is
+ * a small decorative trend indicator embedded inside MetricCard/
+ * InvestmentCard, not a primary content element — rendering nothing while
+ * its chunk loads is less disruptive than a skeleton flashing inside an
+ * otherwise-already-rendered card.
+ */
+export const Sparkline = dynamic(() => import("./sparkline-impl").then((m) => m.Sparkline), { ssr: false });
