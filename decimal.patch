@@ -1,0 +1,159 @@
+diff --git a/package-lock.json b/package-lock.json
+index 095d313..9623b66 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -23,6 +23,7 @@
+         "clsx": "^2.1.1",
+         "cmdk": "^1.1.1",
+         "date-fns": "^4.4.0",
++        "decimal.js": "^10.6.0",
+         "framer-motion": "^13.0.0",
+         "lucide-react": "^1.30.0",
+         "next": "16.3.0",
+@@ -4666,6 +4667,12 @@
+         }
+       }
+     },
++    "node_modules/decimal.js": {
++      "version": "10.6.0",
++      "resolved": "https://registry.npmjs.org/decimal.js/-/decimal.js-10.6.0.tgz",
++      "integrity": "sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==",
++      "license": "MIT"
++    },
+     "node_modules/decimal.js-light": {
+       "version": "2.5.1",
+       "resolved": "https://registry.npmjs.org/decimal.js-light/-/decimal.js-light-2.5.1.tgz",
+diff --git a/package.json b/package.json
+index 05f4c31..0ccf9b6 100644
+--- a/package.json
++++ b/package.json
+@@ -25,6 +25,7 @@
+     "clsx": "^2.1.1",
+     "cmdk": "^1.1.1",
+     "date-fns": "^4.4.0",
++    "decimal.js": "^10.6.0",
+     "framer-motion": "^13.0.0",
+     "lucide-react": "^1.30.0",
+     "next": "16.3.0",
+diff --git a/src/lib/utils/money.ts b/src/lib/utils/money.ts
+new file mode 100644
+index 0000000..cbf9dbe
+--- /dev/null
++++ b/src/lib/utils/money.ts
+@@ -0,0 +1,49 @@
++import Decimal from "decimal.js";
++
++/**
++ * Plain JS `number` arithmetic on money is used throughout this codebase's
++ * existing calculations (pnl.ts, returns.ts, holdings.ts, cashflow.ts,
++ * tax-harvesting.ts, fd.ts, ppf.ts, risk.ts, allocation.ts, nps.ts) and
++ * that's DELIBERATELY left untouched here — low risk at current
++ * transaction volume, and retrofitting every existing calculation carries
++ * real risk of subtly shifting already-correct, already-tested numbers for
++ * a problem that isn't currently causing visible symptoms. This module is
++ * for adoption GOING FORWARD: new money-arithmetic code, especially
++ * anything that chains many additions/subtractions (where floating-point
++ * drift compounds — e.g. `0.1 + 0.2 !== 0.3` in plain JS), should reach
++ * for these instead of raw `+`/`-`/`*`/`/`.
++ *
++ * Every function takes and returns plain `number` — Decimal.js is used
++ * only as the calculation's internal engine, so these drop into existing
++ * `number`-typed fields/APIs with no wider type migration required.
++ *
++ * Rounds to `precision` decimal places (default 2, ordinary currency
++ * precision) using round-half-up, matching how money is conventionally
++ * rounded (vs. JS's own floating-point-unsafe `Math.round`).
++ */
++
++export function addMoney(a: number, b: number): number {
++  return new Decimal(a).plus(b).toNumber();
++}
++
++export function subtractMoney(a: number, b: number): number {
++  return new Decimal(a).minus(b).toNumber();
++}
++
++export function multiplyMoney(a: number, b: number): number {
++  return new Decimal(a).times(b).toNumber();
++}
++
++/** Returns Infinity/-Infinity on division by zero, matching plain JS `/` — same as `10/0` — rather than throwing. Callers who need to treat that as an error should check the divisor first. */
++export function divideMoney(a: number, b: number): number {
++  return new Decimal(a).dividedBy(b).toNumber();
++}
++
++/** Sums an array in one pass — avoids accumulating drift across N separate addMoney() calls in a reduce. */
++export function sumMoney(values: number[]): number {
++  return values.reduce((sum, v) => sum.plus(v), new Decimal(0)).toNumber();
++}
++
++export function roundMoney(value: number, precision: number = 2): number {
++  return new Decimal(value).toDecimalPlaces(precision, Decimal.ROUND_HALF_UP).toNumber();
++}
+diff --git a/test/money.test.ts b/test/money.test.ts
+new file mode 100644
+index 0000000..5487801
+--- /dev/null
++++ b/test/money.test.ts
+@@ -0,0 +1,61 @@
++import { describe, it, expect } from "vitest";
++import { addMoney, subtractMoney, multiplyMoney, divideMoney, sumMoney, roundMoney } from "@/lib/utils/money";
++
++describe("addMoney", () => {
++  it("avoids the classic floating-point drift that plain JS addition has", () => {
++    // Plain JS: 0.1 + 0.2 === 0.30000000000000004, not 0.3.
++    expect(0.1 + 0.2).not.toBe(0.3);
++    expect(addMoney(0.1, 0.2)).toBe(0.3);
++  });
++
++  it("adds ordinary values correctly", () => {
++    expect(addMoney(1000.5, 250.25)).toBe(1250.75);
++  });
++});
++
++describe("subtractMoney", () => {
++  it("avoids drift on subtraction", () => {
++    expect(subtractMoney(0.3, 0.1)).toBe(0.2);
++  });
++});
++
++describe("multiplyMoney", () => {
++  it("avoids drift on multiplication", () => {
++    // Plain JS: 1.005 * 100 === 100.49999999999999, not 100.5.
++    expect(1.005 * 100).not.toBe(100.5);
++    expect(multiplyMoney(1.005, 100)).toBe(100.5);
++  });
++});
++
++describe("divideMoney", () => {
++  it("divides correctly", () => {
++    expect(divideMoney(10, 4)).toBe(2.5);
++  });
++
++  it("returns Infinity on division by zero, matching plain JS `/` rather than throwing", () => {
++    expect(divideMoney(10, 0)).toBe(Infinity);
++  });
++});
++
++describe("sumMoney", () => {
++  it("sums an array without accumulating drift across many additions", () => {
++    const values = Array(10).fill(0.1);
++    expect(values.reduce((a, b) => a + b, 0)).not.toBe(1); // plain JS drifts here
++    expect(sumMoney(values)).toBe(1);
++  });
++
++  it("returns 0 for an empty array", () => {
++    expect(sumMoney([])).toBe(0);
++  });
++});
++
++describe("roundMoney", () => {
++  it("rounds to 2 decimal places by default", () => {
++    expect(roundMoney(10.005)).toBe(10.01); // round-half-up, unlike plain toFixed's banker's-rounding-adjacent quirks
++    expect(roundMoney(10.004)).toBe(10);
++  });
++
++  it("respects a custom precision", () => {
++    expect(roundMoney(1.2345, 3)).toBe(1.235);
++  });
++});
