@@ -1,37 +1,54 @@
 "use client";
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { formatDate } from "@/lib/utils/date";
 import { AUDIT_TABLE_LABELS } from "@/types/domain/audit";
 import { buildDiffRows } from "@/lib/audit/build-diff";
-import { History, ChevronDown, ChevronRight } from "lucide-react";
+import { restoreAuditLogEntryAction } from "../actions";
+import { History, ChevronDown, ChevronRight, Undo2 } from "lucide-react";
 import type { AuditLogEntry } from "@/types/domain/audit";
 
 function EntryRow({ entry }: { entry: AuditLogEntry }) {
   const [open, setOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [isPending, startTransition] = useTransition();
   const rows = buildDiffRows(entry);
   const label = AUDIT_TABLE_LABELS[entry.tableName] ?? entry.tableName;
 
+  function handleRestore() {
+    startTransition(async () => {
+      const result = await restoreAuditLogEntryAction(entry.id);
+      if (result.ok) toast.success(`${label} restored`);
+      else toast.error(result.error);
+    });
+  }
+
   return (
     <div className="border-b border-border-subtle last:border-0">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface-sunken"
-      >
-        <div className="flex items-center gap-3">
+      <div className="flex w-full items-center justify-between gap-3 px-4 py-3 hover:bg-surface-sunken">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex flex-1 items-center gap-3 text-left">
           {open ? <ChevronDown className="size-4 text-ink-muted" /> : <ChevronRight className="size-4 text-ink-muted" />}
           <div className="flex flex-col">
             <span className="text-sm font-medium text-ink">{label}</span>
             <span className="text-xs text-ink-muted">{formatDate(entry.changedAt, "d MMM yyyy, HH:mm")}</span>
           </div>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {entry.action === "delete" && (
+            <Button variant="outline" size="sm" onClick={() => setConfirmOpen(true)} disabled={isPending}>
+              <Undo2 className="size-3.5" /> {isPending ? "Restoring…" : "Restore"}
+            </Button>
+          )}
+          <Badge className={entry.action === "delete" ? "border-loss/30 bg-loss/10 text-loss" : "border-accent/30 bg-accent-soft text-accent"}>
+            {entry.action === "delete" ? "Deleted" : "Edited"}
+          </Badge>
         </div>
-        <Badge className={entry.action === "delete" ? "border-loss/30 bg-loss/10 text-loss" : "border-accent/30 bg-accent-soft text-accent"}>
-          {entry.action === "delete" ? "Deleted" : "Edited"}
-        </Badge>
-      </button>
+      </div>
       {open && (
         <div className="px-4 pb-4">
           {rows.length === 0 ? (
@@ -60,6 +77,15 @@ function EntryRow({ entry }: { entry: AuditLogEntry }) {
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={`Restore this ${label.toLowerCase()}?`}
+        description={`This brings back exactly what was deleted, including its original date and ID. If it was a ${label.toLowerCase()} that other records depend on (e.g. an investment with transactions), only this record itself comes back — related records deleted separately need their own restore.`}
+        onConfirm={handleRestore}
+        confirmLabel="Restore"
+        destructive={false}
+      />
     </div>
   );
 }

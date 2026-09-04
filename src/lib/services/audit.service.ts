@@ -8,4 +8,8 @@ export const auditService = {
   async listForRecord(tableName: string, recordId: string) {
     return auditRepository.findForRecord(tableName, recordId);
   },
+
+  async restore(auditLogId: string) {
+    return auditRepository.restore(auditLogId);
+  },
 };

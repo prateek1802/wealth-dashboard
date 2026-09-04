@@ -1,0 +1,220 @@
+WEALTH DASHBOARD — CONSOLIDATED STATUS REPORT
+(supersedes All_Issues.txt / MASTER-REPORT.txt — every item below directly
+re-verified against the latest zip, not carried forward on trust)
+
+====================================================================================
+1. WHAT'S DONE — TRUST/CORRECTNESS BACKLOG (essentially closed out)
+====================================================================================
+
+✅ Audit trail — database-level trigger on every real financial-record table,
+   read-only to the user via RLS (can't even be tampered with by the user's own
+   session), with a UI page to view it. Better than originally scoped.
+
+✅ CSV import idempotency — dedup key correctly NOT enforced as a hard DB
+   constraint (unlike NPS's), since manual entry means two genuinely different
+   real transactions could legitimately match every field. Tested including
+   floating-point key stability.
+
+✅ Analytics risk-metric outlier bug (was showing >500) — fixed with two layers:
+   a configurable cutoff date (defaults conservatively to today, meaning
+   Volatility/Sharpe/Sortino show "insufficient data" until manually set to a
+   real date in src/constants/risk.ts — deliberate, not a bug) plus independent
+   ±30% outlier-return exclusion. Tested with a planted extreme snapshot.
+
+✅ CAGR methodology caption — added, correctly conditional on cagr.status==="ok"
+   (a first version had this unconditional, causing an orphaned caption; fixed
+   in a follow-up patch).
+
+✅ Goals card icon-overlap — fixed, same header-row pattern as FD/Bank cards.
+✅ Goals edit capability — updateGoalAction now exists.
+✅ Watchlist price display — item.asset.currentPrice now rendered, with
+   visual highlighting when target/stop-loss conditions are met.
+✅ Watchlist refresh — both per-item and a scoped "refresh all," deliberately
+   kept separate from Dashboard's refresh scope.
+✅ Backup/Restore completeness — priceHistory and portfolioSnapshots now
+   included in exports (confirmed via a real backup file: 303 + 16 items).
+✅ Error boundaries — error.tsx correctly scoped to the (app) route group only
+   (preserves sidebar on error), plus a global-error.tsx that correctly avoids
+   depending on any of the app's own styling/components.
+✅ loading.tsx — route-level streaming added.
+✅ Vercel Analytics + Speed Insights — installed, with a comment noting they're
+   safe no-ops outside a real Vercel deployment.
+✅ Server-side error logging — logServerError() (plain console.error, captured
+   by Vercel's own log aggregation, no new infra) rolled out across 9 feature
+   action files initially; the one gap (NPS actions.ts was skipped) has since
+   been closed too — 10 call sites confirmed.
+✅ Category-wise XIRR — done, and better-designed than originally scoped: finer
+   per-asset-TYPE breakdown (not the coarser Equity/Debt/Crypto grouping), plus
+   one row per NPS scheme (E/C/G/A). Well-documented scope limits (switches
+   excluded, currently-held only). Well-tested including the specific "don't
+   pool into one Equity bucket" design decision.
+✅ Analytics XIRR pooling bug (bonus find) — Analytics' own XIRR tile was quietly
+   securities-only this whole time, same bug class as the original
+   Dashboard/Analytics mismatch, just resurfaced independently. Now correctly
+   pooled with NPS, matching the Dashboard.
+✅ MF-specific NAV/units display — real terminology ("Units", "Avg. NAV",
+   "Present NAV") for mutual funds specifically, rolled out consistently across
+   portfolio, transactions, investment detail, and the tax-harvesting lot table.
+✅ Floating-point quantity display bug (bonus find) — summed MF units were
+   rendering as e.g. "1876.2259999999989"; new formatQuantity() fixes display
+   only, verified to never touch underlying calculation precision.
+✅ "Refresh all" NPS scope gap — fixed correctly (not just renamed): now calls
+   both securities refresh and a new refreshAllLiveNAVs() that loops every NPS
+   account, merging both into one honest toast count.
+✅ Chart code-splitting — real next/dynamic wrapper components for chart
+   implementations, ssr:false where appropriate.
+✅ Decimal-safe money math foundation — src/lib/utils/money.ts (Decimal.js-backed
+   add/subtract/multiply/divide, all number-in-number-out so it drops into
+   existing typed code with no wider migration). Deliberately zero consumers yet
+   by design — documented as "adopt going forward," not a retrofit of existing
+   (already-correct, already-tested) calculations. Correct, honest scoping, not
+   an incomplete feature.
+
+====================================================================================
+2. NPS REWRITE — ALL 8 PARTS, STILL FULLY VERIFIED
+====================================================================================
+Part 1 (contribution sync) · Part 2 (real units×NAV schema, DB-level dedup) ·
+Part 3 (classification rules — independently reproduced real numbers:
+Rs.7,70,430 invested / Rs.8,82,252 corpus) · Part 4 (import parser, both
+formats — caught a real spec error on switch settlement lag) · Part 5 (live
+NAV via npsnav.in, refuses to auto-guess PFM-to-scheme mapping) · Part 6
+(Dashboard/Analytics XIRR consistency) · Part 7 (employer field + per-scheme
+UI) · Part 8 (idempotent re-upload, tested).
+
+NPS NAV DISCREPANCY — FULLY DIAGNOSED, ROOT CAUSE CONFIRMED EXTERNAL:
+Multi-day investigation ruled out every app-side cause one by one (fetch logic,
+DB writes, derived-corpus math, caching, units-count accuracy all independently
+verified correct) before finding the real cause: npsnav.in's own data was
+genuinely stuck for 2+ days (confirmed directly on their site: "NAV updated:
+24-08-2026" banner while checking on the 26th-27th). The app's misleading
+fetch-timestamp-as-"as of"-date masked this. A GitHub issue was drafted for
+npsnav.in's maintainer. Fix for the masking problem itself (switch to the
+"Detailed" endpoint, store the real last-updated date, add a visible staleness
+warning) is fully spec'd — see Section 4, still not built.
+
+Holdings Hub (replaces old sidebar dropdown) — done, verified clean, old logic
+genuinely removed not left dangling.
+
+====================================================================================
+3. STILL OPEN — CONFIRMED, RE-CHECKED DIRECTLY AGAINST LATEST CODE
+====================================================================================
+
+❌ CAGR zero-snapshot bug. firstSnapshot = sortedSnapshots[0] still has no
+   filtering for netWorth <= 0. This account's real first two snapshots
+   (2026-08-14, 2026-08-15) are legitimately Rs.0 (recorded before real holdings
+   existed on this deployment) — calculateCAGR() correctly refuses a zero base,
+   so CAGR is permanently stuck. Not data loss — confirmed via an actual backup
+   file that full snapshot history (16 entries, Aug 14 onward) is intact and
+   complete. FIX: skip leading snapshots with netWorth <= 0 when selecting
+   CAGR's starting point; recompute years from that adjusted snapshot's date.
+   Full ready-to-send prompt paragraph already drafted.
+
+❌ NPS live NAV "Detailed" endpoint + staleness warning — spec'd (Section 2),
+   not yet built. This is what would have caught the 2-day npsnav.in staleness
+   incident automatically instead of requiring days of manual investigation.
+
+❌ Dashboard redundant data fetching — RE-CHECKED, GOTTEN WORSE, NOT BETTER.
+   computeHoldings() is now called independently 9 times per Dashboard load (up
+   from 7 at the last performance audit) — category-wise XIRR and other new
+   Analytics/Dashboard features have each added their own independent call
+   instead of sharing one computed result. This is the exact "compounds over
+   time as more features get built" risk flagged in the original performance
+   audit, now visibly happening. FIX unchanged: one shared getDashboardData()
+   that computes holdings once, derives every dependent view from that single
+   result.
+
+❌ Analytics visual redesign — only the data-correctness half is done (outlier
+   bug, category XIRR, CAGR caption, XIRR pooling). The actual redesign — bigger
+   trend chart with period toggles, plain-language summary line, collapsed
+   Advanced/Risk section with explainers, customizable-XIRR checkbox selector,
+   removing the Concentration card — has not been started. Full spec already
+   written (ANALYTICS-REDESIGN-PROMPT.txt).
+
+❌ Table memoization (transactions/portfolio views) — still no useMemo. Low
+   priority, not currently felt as slow.
+
+❌ Auto-refresh at market close (cron) — still no vercel.json, no scheduled
+   workflow. Needs genuine new infra, not a code-only patch.
+
+❌ Liabilities-not-loading — still needs live diagnosis (a real browser console
+   error or Vercel log), not further static code review; source has looked
+   internally consistent every time it's been checked.
+
+❌ Undo window on deletes — confirm dialog only, still no reversible-delete
+   pattern anywhere.
+
+❌ Freshness indicators for securities prices in the UI — currentPriceUpdatedAt
+   exists in the data model, still not rendered anywhere for stocks/MF/crypto
+   (NPS already does this correctly via last_nav_date).
+
+====================================================================================
+4. READY-TO-SEND PROMPTS (drafted, not yet given to the coding chat)
+====================================================================================
+
+A. CAGR ZERO-SNAPSHOT FIX (one paragraph, ready as-is):
+   "In src/app/(app)/analytics/page.tsx, CAGR is stuck permanently showing 'Need
+   a positive starting value and a positive time span' because firstSnapshot =
+   sortedSnapshots[0] picks the chronologically first snapshot with no regard
+   for its value, and this account's actual first two snapshots (2026-08-14 and
+   2026-08-15) legitimately have netWorth = 0 (recorded before real holdings
+   were added on this deployment) — calculateCAGR() in
+   src/lib/calculations/returns.ts correctly refuses to compute from a zero base
+   (beginValue <= 0 guard), so it's stuck on those two entries forever even
+   though Aug 16 onward is perfectly good data. Fix: when selecting the CAGR
+   starting snapshot, skip past any leading snapshots with netWorth <= 0 and use
+   the first one with a positive value instead of unconditionally using
+   sortedSnapshots[0] — recompute years from that same adjusted starting
+   snapshot's date, not the original zero-value one. Add a test covering a
+   snapshot series that starts with one or more zero-value entries followed by
+   real values, asserting CAGR computes successfully using the first positive
+   entry as the base."
+
+B. NPS DETAILED ENDPOINT + STALENESS WARNING — full spec already written
+   (NPS-DETAILED-ENDPOINT-PROMPT.txt, preserved verbatim in the prior merged
+   doc). Switch fetchNPSNAVQuote() to npsnav.in's Detailed endpoint, store the
+   real last-updated date instead of fetch time, show a visible warning if a
+   connected scheme's data is >2 days old.
+
+C. ANALYTICS REDESIGN — full spec already written (ANALYTICS-REDESIGN-PROMPT.txt).
+   Trend chart with period toggles, plain-language summary, collapsed Advanced
+   section with explainers, customizable-XIRR checkboxes (default = all,
+   matching current behavior), remove Concentration card.
+
+D. DASHBOARD REDUNDANT FETCH — not yet written as a dedicated prompt. Given it's
+   now measurably worse (9 calls, was 7), worth writing up and sending alongside
+   or before the Analytics redesign, since more Analytics work will likely add
+   even more independent computeHoldings() calls if this isn't fixed first.
+
+====================================================================================
+5. FEATURE IDEAS — STATUS UNCHANGED, PLUS FIRE (NEW, DISCUSSED NOT SPEC'D)
+====================================================================================
+
+✅ Shipped: Tax-loss harvesting.
+❌ Not started: allocation drift/rebalancing alerts, portfolio benchmarking vs.
+   Nifty/Sensex, SIP reminders, gold/property as first-class asset types,
+   weekly recap, cash flow forecast, Account Aggregator auto-sync (still the
+   biggest single differentiator, still its own dedicated project).
+
+🆕 FIRE calculator — discussed this session, not yet spec'd as a buildable
+   prompt. Real progress on the data side: two years of actual categorized
+   expense/income data (Money Manager app exports) were reviewed —
+   2024: Rs.5,58,887 expenses / Rs.8,63,129 income / 35.2% savings rate.
+   2025: Rs.6,02,224 expenses / Rs.9,78,377 income / 38.4% savings rate
+   (savings rate trending up year over year). Proposed approach: parse this
+   export format (mirroring the NPS statement importer pattern), store only
+   ANNUAL summaries (not every transaction — deliberately avoids turning this
+   into a full budgeting app, consistent with that being flagged as low-fit
+   earlier), and feed real expense/savings-rate data into a FIRE Number /
+   years-to-FIRE calculator. Not yet written up as a full technical spec.
+
+====================================================================================
+6. OVERALL ASSESSMENT
+====================================================================================
+The trust/correctness backlog (Section 1) is essentially closed — everything
+that made the app's own numbers hard to fully trust has been fixed and
+independently verified, not just claimed. What's left (Section 3) is now mostly
+forward-looking feature/polish work, with two exceptions worth treating as
+near-term priorities rather than backlog: the CAGR bug (small, fully diagnosed,
+one paragraph away from being fixed) and the Dashboard's redundant fetching
+(measurably trending worse as more features get added on top of it — worth
+fixing before, not after, more Analytics work compounds it further).
