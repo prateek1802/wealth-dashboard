@@ -21,6 +21,7 @@ import {
   LogOut,
   Scissors,
   History,
+  AlertTriangle,
 } from "lucide-react";
 
 interface NavItem {
@@ -36,9 +37,18 @@ const MOBILE_TABS: NavItem[] = [
   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
 ];
 
-/** Everything that doesn't fit in the fixed 4-slot bottom tab bar, reachable via "More". Per-asset-class links now live one level deeper, inside the Holdings hub (see /holdings) — not duplicated here. */
+/**
+ * Everything that doesn't fit in the fixed 4-slot bottom tab bar, reachable
+ * via "More". Most per-asset-class links live one level deeper, inside the
+ * Holdings hub (see /holdings) — not duplicated here. Liabilities is the
+ * one exception: it used to be Holdings-hub-only (behind a conditional
+ * render that made it invisible with $0 owed, with no other way to reach
+ * it at all), so it gets its own direct link here too, same as the
+ * desktop sidebar.
+ */
 const MORE_ITEMS: NavItem[] = [
   { href: ROUTES.goals, label: "Goals", icon: Target },
+  { href: ROUTES.liabilities, label: "Liabilities", icon: AlertTriangle },
   { href: ROUTES.watchlist, label: "Watchlist", icon: Eye },
   { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
   { href: ROUTES.auditLog, label: "Audit Log", icon: History },

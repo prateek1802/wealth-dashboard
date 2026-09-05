@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
-import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatCurrency } from "@/lib/utils/currency";
 import { ROUTES } from "@/constants/routes";
 import { ALLOCATION_CATEGORY_LABELS, type AllocationCategory, type AssetType } from "@/constants/asset-types";
-import { TrendingUp, PieChart, Bitcoin, FileText, Banknote, PiggyBank, ShieldCheck, Landmark, AlertTriangle, Eye, type LucideIcon } from "lucide-react";
+import { TrendingUp, PieChart, Bitcoin, FileText, Banknote, PiggyBank, ShieldCheck, Landmark, Eye, type LucideIcon } from "lucide-react";
 import type { AllocationSlice } from "@/types/domain/snapshot";
 
 const CATEGORY_ICONS: Record<AllocationCategory, LucideIcon> = {
@@ -47,7 +47,7 @@ function HoldingCard({ href, icon: Icon, label, valueLabel, tone = "default" }: 
   );
 }
 
-export function HoldingsHubView({ allocation, liabilitiesValue, watchlistCount }: { allocation: AllocationSlice[]; liabilitiesValue: number; watchlistCount: number }) {
+export function HoldingsHubView({ allocation, watchlistCount }: { allocation: AllocationSlice[]; watchlistCount: number }) {
   const sorted = [...allocation].sort((a, b) => b.value - a.value);
 
   return (
@@ -62,23 +62,7 @@ export function HoldingsHubView({ allocation, liabilitiesValue, watchlistCount }
         />
       ))}
 
-      {/*
-        Previously guarded by `liabilitiesValue > 0` — meaning anyone with
-        no liabilities yet (or who'd paid everything off) had this card
-        vanish entirely, and with no other nav link to /liabilities
-        anywhere in the app, the page became completely unreachable. Same
-        chicken-and-egg bug either way: you needed an existing liability to
-        find the button that lets you add one. Always shown now, matching
-        Watchlist's card just below, which never had this guard.
-      */}
-      <HoldingCard
-        href={ROUTES.liabilities}
-        icon={AlertTriangle}
-        label="Liabilities"
-        valueLabel={liabilitiesValue > 0 ? formatSignedCurrency(-liabilitiesValue) : formatCurrency(0)}
-        tone={liabilitiesValue > 0 ? "loss" : "default"}
-      />
-
+      {/* Liabilities moved to a direct sidebar/mobile-nav link instead of living here — see Sidebar/MobileNav. */}
       <HoldingCard href={ROUTES.watchlist} icon={Eye} label="Watchlist" valueLabel={`${watchlistCount} tracked`} />
     </div>
   );

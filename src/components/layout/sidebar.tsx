@@ -5,7 +5,7 @@ import { ROUTES } from "@/constants/routes";
 import { cn } from "@/lib/utils/cn";
 import { useTheme } from "./theme-provider";
 import { isDemoMode, getBrowserSupabaseClient } from "@/lib/database/client";
-import { LayoutDashboard, Receipt, LineChart, Target, DatabaseBackup, Wallet, Sun, Moon, Gem, LogOut, Scissors, History } from "lucide-react";
+import { LayoutDashboard, Receipt, LineChart, Target, DatabaseBackup, Wallet, Sun, Moon, Gem, LogOut, Scissors, History, AlertTriangle } from "lucide-react";
 
 interface NavItem {
   href: string;
@@ -20,6 +20,7 @@ const TOP_ITEMS: NavItem[] = [
   { href: ROUTES.analytics, label: "Analytics", icon: LineChart },
   { href: ROUTES.taxHarvesting, label: "Tax Harvesting", icon: Scissors },
   { href: ROUTES.goals, label: "Goals", icon: Target },
+  { href: ROUTES.liabilities, label: "Liabilities", icon: AlertTriangle },
 ];
 
 const BOTTOM_ITEMS: NavItem[] = [

@@ -34,9 +34,21 @@ export const liabilitiesRepository = {
       return liability;
     }
     const db = await getServerSupabaseClient();
+    // user_id explicitly set here rather than relying solely on the
+    // column's `default auth.uid()` in schema.sql — a live table whose
+    // default (or RLS policy) has drifted from the repo's schema.sql
+    // (the same class of issue as the audit_log table that was missing
+    // entirely earlier — a migration in the repo never actually run
+    // against the live DB) would otherwise insert a NULL user_id and fail
+    // the RLS check with a 42501 error. Setting it explicitly here means
+    // this can't happen regardless of what the DB's own default is.
+    const {
+      data: { user },
+    } = await db.auth.getUser();
+    if (!user) throw new Error("Not signed in.");
     const { data, error } = await db
       .from("liabilities")
-      .insert({ name: input.name, liability_type: input.liabilityType, amount_owed: input.amountOwed, interest_rate: input.interestRate, notes: input.notes })
+      .insert({ user_id: user.id, name: input.name, liability_type: input.liabilityType, amount_owed: input.amountOwed, interest_rate: input.interestRate, notes: input.notes })
       .select()
       .single();
     if (error) throw error;
