@@ -1,0 +1,30 @@
+diff --git a/src/features/holdings/components/holdings-hub-view.tsx b/src/features/holdings/components/holdings-hub-view.tsx
+index 7c2852d..f97a118 100644
+--- a/src/features/holdings/components/holdings-hub-view.tsx
++++ b/src/features/holdings/components/holdings-hub-view.tsx
+@@ -62,9 +62,22 @@ export function HoldingsHubView({ allocation, liabilitiesValue, watchlistCount }
+         />
+       ))}
+ 
+-      {liabilitiesValue > 0 && (
+-        <HoldingCard href={ROUTES.liabilities} icon={AlertTriangle} label="Liabilities" valueLabel={formatSignedCurrency(-liabilitiesValue)} tone="loss" />
+-      )}
++      {/*
++        Previously guarded by `liabilitiesValue > 0` — meaning anyone with
++        no liabilities yet (or who'd paid everything off) had this card
++        vanish entirely, and with no other nav link to /liabilities
++        anywhere in the app, the page became completely unreachable. Same
++        chicken-and-egg bug either way: you needed an existing liability to
++        find the button that lets you add one. Always shown now, matching
++        Watchlist's card just below, which never had this guard.
++      */}
++      <HoldingCard
++        href={ROUTES.liabilities}
++        icon={AlertTriangle}
++        label="Liabilities"
++        valueLabel={liabilitiesValue > 0 ? formatSignedCurrency(-liabilitiesValue) : formatCurrency(0)}
++        tone={liabilitiesValue > 0 ? "loss" : "default"}
++      />
+ 
+       <HoldingCard href={ROUTES.watchlist} icon={Eye} label="Watchlist" valueLabel={`${watchlistCount} tracked`} />
+     </div>
