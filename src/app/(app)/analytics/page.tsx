@@ -13,10 +13,12 @@ import { calculateCategoryXIRR } from "@/lib/calculations/category-xirr";
 import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
 import { RISK_METRICS_CUTOFF_DATE } from "@/constants/risk";
 import { netCashFlow } from "@/lib/calculations/cashflow";
-import { formatCurrency, formatSignedCurrency } from "@/lib/utils/currency";
+import { formatSignedCurrency } from "@/lib/utils/currency";
 import { todayISO } from "@/lib/utils/date";
-import { ALLOCATION_CATEGORY_LABELS } from "@/constants/asset-types";
 import { GrowthProjection } from "@/features/analytics/components/growth-projection";
+import { TrendChartCard } from "@/features/analytics/components/trend-chart-card";
+import { RiskMetricsSection } from "@/features/analytics/components/risk-metrics-section";
+import { XIRRSelectorCard } from "@/features/analytics/components/xirr-selector-card";
 import { PieChart } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +26,7 @@ export const dynamic = "force-dynamic";
 const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
 
 export default async function AnalyticsPage() {
-  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows, npsSchemeHoldings, npsSchemeTransactions] = await Promise.all([
+  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, perf1M, perf3M, perf1Y, perfAll] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     transactionsRepository.findAll(),
@@ -33,6 +35,13 @@ export default async function AnalyticsPage() {
     npsService.getCashflows(),
     npsRepository.findAllSchemeHoldings(),
     npsRepository.findAllSchemeTransactions(),
+    // All 4 trend-chart periods fetched up front — the period toggle
+    // (TrendChartCard) just switches which already-fetched series is
+    // shown, no client round-trip per click.
+    portfolioService.getPortfolioPerformance("1M"),
+    portfolioService.getPortfolioPerformance("3M"),
+    portfolioService.getPortfolioPerformance("1Y"),
+    portfolioService.getPortfolioPerformance("All"),
   ]);
 
   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
@@ -47,6 +56,21 @@ export default async function AnalyticsPage() {
   // comment for exact scope (currently-held holdings only, NPS switches
   // excluded, no FD/PPF/cash).
   const categoryXirr = calculateCategoryXIRR(holdingsWithXirr, transactions, npsSchemeHoldings, npsSchemeTransactions, todayISO());
+
+  // Trimmed to only what calculateFilteredXIRR needs — not full Asset/
+  // Transaction objects — since these get sent to a Client Component
+  // (XIRRSelectorCard) for on-toggle recomputation with no server
+  // round-trip. See that function's doc comment in calculations/filtered-xirr.ts.
+  const xirrHoldingsInput = holdingsWithXirr.map((h) => ({ assetId: h.asset.id, assetType: h.asset.assetType, currentValue: h.currentValue }));
+  const xirrTransactionsInput = transactions.map((t) => ({
+    assetId: t.assetId,
+    transactionDate: t.transactionDate,
+    transactionType: t.transactionType,
+    quantity: t.quantity,
+    price: t.price,
+    fees: t.fees,
+    taxes: t.taxes,
+  }));
 
   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
@@ -63,11 +87,6 @@ export default async function AnalyticsPage() {
   const maxDrawdown = calculateMaxDrawdown(netWorthSeries);
   const sharpe = calculateSharpeRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE, RISK_METRICS_CUTOFF_DATE);
   const sortino = calculateSortinoRatio(netWorthSeries, snapshotDates, RISK_FREE_RATE, RISK_METRICS_CUTOFF_DATE);
-
-  const topHolding = allocation[0];
-  const concentration = topHolding
-    ? { status: "ok" as const, value: topHolding.percentage }
-    : { status: "insufficient_data" as const, reason: "No holdings yet." };
 
   return (
     <div>
@@ -106,51 +125,24 @@ export default async function AnalyticsPage() {
           </Card>
         )}
 
-        <Card>
-          <CardHeader><CardTitle>Risk</CardTitle></CardHeader>
-          <CardContent className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatTile label="Volatility" result={volatility} caption="Annualized from irregular snapshots · approximate" />
-            <StatTile label="Max Drawdown" result={maxDrawdown} />
-            <StatTile label="Sharpe Ratio" result={sharpe} format={(v) => v.toFixed(2)} colorByValue caption="Annualized from irregular snapshots · approximate" />
-            <StatTile label="Sortino Ratio" result={sortino} format={(v) => v.toFixed(2)} colorByValue caption="Annualized from irregular snapshots · approximate" />
-          </CardContent>
-        </Card>
+        <TrendChartCard performanceByPeriod={{ "1M": perf1M, "3M": perf3M, "1Y": perf1Y, All: perfAll }} />
+
+        <RiskMetricsSection volatility={volatility} maxDrawdown={maxDrawdown} sharpe={sharpe} sortino={sortino} />
+
+        <XIRRSelectorCard defaultResult={xirr} holdings={xirrHoldingsInput} transactions={xirrTransactionsInput} npsCashflows={npsCashflows} today={todayISO()} />
 
         <GrowthProjection holdings={holdingsWithXirr} portfolioXirr={xirr} portfolioValue={summary.currentValue} />
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card>
-            <CardHeader><CardTitle>Asset Allocation</CardTitle></CardHeader>
-            <CardContent>
-              {allocation.length === 0 ? (
-                <EmptyState icon={PieChart} title="No holdings yet" description="Allocation breakdown appears once you add investments." />
-              ) : (
-                <AllocationDonut slices={allocation} />
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader><CardTitle>Concentration</CardTitle></CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <StatTile
-                label="Largest position, % of portfolio"
-                result={concentration}
-                format={(v) => `${v.toFixed(1)}%`}
-              />
-              {allocation.length > 0 && (
-                <ul className="flex flex-col gap-2 text-sm">
-                  {allocation.slice(0, 5).map((a) => (
-                    <li key={a.category} className="flex justify-between text-ink-muted">
-                      <span>{ALLOCATION_CATEGORY_LABELS[a.category] ?? a.category}</span>
-                      <span className="font-tabular text-ink">{formatCurrency(a.value)} · {a.percentage.toFixed(1)}%</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader><CardTitle>Asset Allocation</CardTitle></CardHeader>
+          <CardContent>
+            {allocation.length === 0 ? (
+              <EmptyState icon={PieChart} title="No holdings yet" description="Allocation breakdown appears once you add investments." />
+            ) : (
+              <AllocationDonut slices={allocation} />
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
