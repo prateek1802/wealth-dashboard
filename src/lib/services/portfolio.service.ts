@@ -41,6 +41,11 @@ export interface TaxHarvestingSummary {
   realizedVDA: number;
 }
 
+export interface RefreshPricesResult {
+  updated: number;
+  skipped: string[]; // symbols with no live source (e.g. mutual funds, "other")
+}
+
 export interface SegregatedBreakdown {
   cash: number;
   equity: number;
@@ -74,7 +79,17 @@ export interface DashboardData {
  */
 
 /** Pure — no I/O. Extracted from computeHoldings() so getDashboardData() can build holdings from data it already fetched, instead of re-fetching. */
-function computeHoldingsFrom(assets: Asset[], allTransactions: Awaited<ReturnType<typeof transactionsRepository.findAll>>): Holding[] {
+/**
+ * Pure — no I/O. Exported (in addition to being used internally by
+ * computeHoldings()/getDashboardData()) so the market-close cron route
+ * (src/app/api/cron/refresh-prices/route.ts) can compute the SAME
+ * holdings logic from data it fetched via an admin Supabase client — a
+ * cron invocation has no user session/cookies at all, so it can't go
+ * through the normal cookie-based repository layer, but the actual
+ * "what counts as a holding" logic still needs to be identical, not
+ * reimplemented a second time.
+ */
+export function computeHoldingsFrom(assets: Asset[], allTransactions: Awaited<ReturnType<typeof transactionsRepository.findAll>>): Holding[] {
   // "cash" as an asset_type is a legacy V1 path — Bank Accounts (bank-accounts.service.ts)
   // is the intended way to track cash now; any leftover cash-type assets are
   // excluded from holdings here so they're not double-counted.
@@ -425,5 +440,43 @@ export const portfolioService = {
       realizedLTCG,
       realizedVDA,
     };
+  },
+
+  /**
+   * Shared core of price-refreshing — used by refreshLivePricesAction
+   * (the Server Action behind the dashboard/watchlist/per-asset refresh
+   * buttons) AND the market-close cron route (src/app/api/cron/
+   * refresh-prices/route.ts), so the actual fetch-and-update logic exists
+   * in exactly one place. Omit assetIds to refresh every current holding
+   * (what the cron job does); pass specific ids to scope it (what the
+   * Server Action does for a single-asset or watchlist-scoped refresh).
+   */
+  async refreshPrices(assetIds?: string[]): Promise<RefreshPricesResult> {
+    const { getLiveQuoteForAsset } = await import("@/lib/market-data/live-provider");
+    const { priceHistoryService } = await import("@/lib/services/price-history.service");
+
+    let targets: Asset[];
+    if (assetIds) {
+      const resolved = await Promise.all(assetIds.map((id) => assetsRepository.findById(id)));
+      targets = resolved.filter((a): a is Asset => a !== null);
+    } else {
+      targets = (await this.getHoldings()).map((h) => h.asset);
+    }
+
+    let updated = 0;
+    const skipped: string[] = [];
+
+    for (const asset of targets) {
+      const quote = await getLiveQuoteForAsset(asset);
+      if (quote) {
+        await assetsRepository.updatePrice(asset.id, quote.price);
+        await priceHistoryService.record(asset.id, quote.price);
+        updated += 1;
+      } else {
+        skipped.push(asset.symbol);
+      }
+    }
+
+    return { updated, skipped };
   },
 };

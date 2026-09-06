@@ -6,7 +6,6 @@ import { assetSchema, assetPriceUpdateSchema } from "@/lib/validation/asset.sche
 import { ROUTES } from "@/constants/routes";
 import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
-import type { Asset } from "@/types/domain/asset";
 
 /**
  * "Edit Asset" is a distinct concept from recording a transaction (point 8):
@@ -65,7 +64,6 @@ export interface RefreshPricesResult {
   updated: number;
   skipped: string[]; // symbols with no live source (e.g. mutual funds, "other")
 }
-
 /**
  * Fetches a live quote for every CURRENTLY HELD security (quantity > 0) via
  * the free CoinGecko (crypto) / Yahoo Finance (equities) / mfapi.in (Indian
@@ -98,32 +96,14 @@ export interface RefreshPricesResult {
  */
 export async function refreshLivePricesAction(assetIds?: string[]): Promise<RefreshPricesResult | { ok: false; error: string }> {
   try {
-    const { getLiveQuoteForAsset } = await import("@/lib/market-data/live-provider");
-    const { priceHistoryService } = await import("@/lib/services/price-history.service");
+    const { updated, skipped } = await portfolioService.refreshPrices(assetIds);
 
-    let targets: Asset[];
+    // Per-asset revalidation for the investment detail page — dashboard/
+    // portfolio/watchlist revalidation below doesn't touch that route.
+    // (portfolioService.refreshPrices() doesn't know about routes, only
+    // about which assets it actually updated, so this stays here.)
     if (assetIds) {
-      const resolved = await Promise.all(assetIds.map((id) => assetsRepository.findById(id)));
-      targets = resolved.filter((a): a is Asset => a !== null);
-    } else {
-      targets = (await portfolioService.getHoldings()).map((h) => h.asset);
-    }
-
-    let updated = 0;
-    const skipped: string[] = [];
-
-    for (const asset of targets) {
-      const quote = await getLiveQuoteForAsset(asset);
-      if (quote) {
-        await assetsRepository.updatePrice(asset.id, quote.price);
-        await priceHistoryService.record(asset.id, quote.price);
-        updated += 1;
-        // Covers the per-asset refresh button on the investment detail page
-        // — dashboard/portfolio revalidation below doesn't touch this route.
-        revalidatePath(ROUTES.investmentDetail(asset.id));
-      } else {
-        skipped.push(asset.symbol);
-      }
+      for (const id of assetIds) revalidatePath(ROUTES.investmentDetail(id));
     }
 
     revalidatePath(ROUTES.dashboard);

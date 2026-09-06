@@ -5,7 +5,15 @@ import type { Transaction, NewTransaction } from "@/types/domain/transaction";
 import type { TransactionRow } from "@/types/database";
 import type { TransactionType } from "@/constants/asset-types";
 
-function rowToTransaction(row: TransactionRow): Transaction {
+/**
+ * Exported (in addition to being used internally by findAll/findById/etc.)
+ * so the market-close cron route can map rows fetched via its own admin
+ * client into the same domain shape computeHoldingsFrom() expects — see
+ * that function's doc comment in portfolio.service.ts for why the cron
+ * route can't just call transactionsRepository.findAll() directly (no
+ * user session/cookies in a cron invocation).
+ */
+export function rowToTransaction(row: TransactionRow): Transaction {
   return {
     id: row.id,
     assetId: row.asset_id,

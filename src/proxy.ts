@@ -58,7 +58,13 @@ export const config = {
      * Match all request paths except:
      * - _next/static, _next/image (Next.js internals)
      * - favicon.ico and other static assets
+     * - /api/* — API routes handle their own auth scheme (e.g. the
+     *   market-close cron route checks a bearer-token secret, not a
+     *   cookie session). A Vercel Cron invocation has no session cookie
+     *   at all, so without this exclusion every cron call was silently
+     *   redirected to /login (a 307, never reaching the route handler)
+     *   instead of ever running the actual refresh.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
