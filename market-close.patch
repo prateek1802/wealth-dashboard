@@ -1,0 +1,44 @@
+diff --git a/src/app/api/cron/refresh-prices/route.ts b/src/app/api/cron/refresh-prices/route.ts
+index a8f850b..f201ce6 100644
+--- a/src/app/api/cron/refresh-prices/route.ts
++++ b/src/app/api/cron/refresh-prices/route.ts
+@@ -53,6 +53,18 @@ export async function GET(request: Request) {
+     if (assetsError) throw assetsError;
+     if (txnError) throw txnError;
+ 
++    // The one thing an admin (service-role) client can't get for free that
++    // a normal cookie-based request can: there's no session, so
++    // price_history's `user_id default auth.uid()` has nothing to read and
++    // the insert fails NOT NULL (confirmed in production). This app is
++    // single-user, so any existing row already carries the one real
++    // user_id — reusing it from data already fetched above (no extra
++    // query) rather than assuming a value.
++    const userId = (assetRows as (AssetRow & { user_id: string })[])[0]?.user_id;
++    if (!userId) {
++      return NextResponse.json({ ok: true, updated: 0, skipped: [], note: "No assets exist yet — nothing to refresh." });
++    }
++
+     const assets = (assetRows as AssetRow[]).map(rowToAsset);
+     const transactions = (txnRows as TransactionRow[]).map(rowToTransaction);
+     const holdings = computeHoldingsFrom(assets, transactions).filter((h) => h.quantity > 1e-9);
+@@ -68,6 +80,11 @@ export async function GET(request: Request) {
+         skipped.push(asset.symbol);
+         continue;
+       }
++      // UPDATE, not INSERT — the row already has its own user_id from
++      // when it was created, untouched by this. Only INSERT triggers a
++      // column's `default auth.uid()`, which is what actually needed the
++      // explicit userId below (price_history.upsert()). Checked, not
++      // assumed — this route makes exactly these two writes, nothing else.
+       const { error: updateError } = await db
+         .from("assets")
+         .update({ current_price: quote.price, current_price_updated_at: new Date().toISOString() })
+@@ -76,7 +93,7 @@ export async function GET(request: Request) {
+ 
+       const { error: historyError } = await db
+         .from("price_history")
+-        .upsert({ asset_id: asset.id, price: quote.price, recorded_date: today }, { onConflict: "asset_id,recorded_date" });
++        .upsert({ user_id: userId, asset_id: asset.id, price: quote.price, recorded_date: today }, { onConflict: "asset_id,recorded_date" });
+       if (historyError) throw historyError;
+ 
+       updated += 1;
