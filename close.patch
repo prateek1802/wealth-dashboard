@@ -1,0 +1,169 @@
+diff --git a/src/app/api/cron/refresh-prices/route.ts b/src/app/api/cron/refresh-prices/route.ts
+index f201ce6..d4efe02 100644
+--- a/src/app/api/cron/refresh-prices/route.ts
++++ b/src/app/api/cron/refresh-prices/route.ts
+@@ -1,4 +1,5 @@
+ import { NextResponse } from "next/server";
++import type { SupabaseClient } from "@supabase/supabase-js";
+ import { getAdminSupabaseClient } from "@/lib/database/admin-client";
+ import { rowToAsset } from "@/lib/database/asset-mapping";
+ import { rowToTransaction } from "@/lib/database/repositories/transactions.repository";
+@@ -7,7 +8,73 @@ import { getLiveQuoteForAsset } from "@/lib/market-data/live-provider";
+ import { todayISO } from "@/lib/utils/date";
+ import type { AssetRow, TransactionRow } from "@/types/database";
+ 
+-export const maxDuration = 60; // Vercel Hobby plan's ceiling. Sequential per-asset fetches (deliberately rate-limit-friendly — see live-provider.ts) can take a while with many holdings; this is the longest a Hobby-tier function is allowed to run.
++export const maxDuration = 60; // Vercel Hobby plan's ceiling. Sequential per-item fetches (deliberately rate-limit-friendly — see live-provider.ts) can take a while with many holdings; this is the longest a Hobby-tier function is allowed to run.
++
++interface SecuritiesRefreshResult {
++  updated: number;
++  skipped: string[];
++}
++
++interface NPSRefreshResult {
++  updated: number;
++  skipped: number;
++  failed: number;
++}
++
++/**
++ * Mirrors npsService.refreshAllLiveNAVs()'s exact logic (see
++ * nps.service.ts's refreshLiveNAVs) — same field mapping, same
++ * skip/fail semantics — but reading/writing via the ADMIN client passed
++ * in, not npsRepository's cookie-based one. That repository's own methods
++ * are hard-wired to getServerSupabaseClient() (cookie-based); called from
++ * this sessionless cron context they'd see zero rows under RLS and report
++ * a hollow "success" that refreshed nothing. Rather than touch
++ * nps.repository.ts / nps.service.ts at all (none of NPS's own schema,
++ * import, or classification logic changes here), this is a small,
++ * parallel implementation for this one admin-client context, reusing the
++ * pure, already-tested fetchNPSNAVQuote() unchanged.
++ *
++ * One query across every account's scheme holdings, rather than looping
++ * per-account the way refreshAllLiveNAVs() does — behaviorally identical
++ * (every holding still gets exactly one attempt), just flattened since
++ * there's no need to fetch accounts separately first here.
++ *
++ * The UPDATE below never touches user_id (same as the assets price
++ * update in this route) — it's an UPDATE on an existing row, which never
++ * triggers a column's `default auth.uid()`, so no INSERT-only NOT NULL
++ * issue applies here at all. Checked, not assumed.
++ */
++async function refreshNPSLiveNAVs(db: SupabaseClient): Promise<NPSRefreshResult> {
++  const { fetchNPSNAVQuote } = await import("@/lib/market-data/live-provider");
++  const { data, error } = await db.from("nps_scheme_holdings").select("nps_account_id, scheme, npsnav_scheme_code");
++  if (error) throw error;
++
++  const holdings = data as { nps_account_id: string; scheme: string; npsnav_scheme_code: string | null }[];
++  let updated = 0;
++  let skipped = 0;
++  let failed = 0;
++
++  for (const holding of holdings) {
++    if (!holding.npsnav_scheme_code) {
++      skipped += 1;
++      continue;
++    }
++    const quote = await fetchNPSNAVQuote(holding.npsnav_scheme_code);
++    if (!quote) {
++      failed += 1;
++      continue;
++    }
++    const { error: updateError } = await db
++      .from("nps_scheme_holdings")
++      .update({ last_nav: quote.nav, last_nav_date: quote.asOf.slice(0, 10) })
++      .eq("nps_account_id", holding.nps_account_id)
++      .eq("scheme", holding.scheme);
++    if (updateError) throw updateError;
++    updated += 1;
++  }
++
++  return { updated, skipped, failed };
++}
+ 
+ /**
+  * Scheduled via vercel.json for weekday IST market close (+ a small buffer
+@@ -23,19 +90,22 @@ export const maxDuration = 60; // Vercel Hobby plan's ceiling. Sequential per-as
+  *
+  * Uses an ADMIN client (see admin-client.ts), not the normal cookie-based
+  * repository layer — a cron invocation has no user session/cookies, so
+- * assetsRepository/transactionsRepository would silently see nothing
+- * (RLS blocking an anonymous request) rather than erroring loudly. This
+- * app is single-user (see ARCHITECTURE.md), so "refresh everyone's
+- * prices" and "refresh the one user's prices" are the same operation here.
++ * assetsRepository/transactionsRepository/npsRepository would silently
++ * see nothing (RLS blocking an anonymous request) rather than erroring
++ * loudly. This app is single-user (see ARCHITECTURE.md), so "refresh
++ * everyone's prices" and "refresh the one user's prices" are the same
++ * operation here.
+  *
+- * Scoped to actual HOLDINGS (quantity > 0), same as the dashboard's
+- * manual "Refresh all" button — NOT every active asset, so a watchlist-only
+- * symbol doesn't silently consume free-tier API rate limits daily for a
+- * symbol the user is just casually tracking. NPS is NOT refreshed here —
+- * NPS NAVs are typically published the next business day, not at same-day
+- * market close, so "at market close" doesn't apply to them the same way;
+- * NPS's own refresh path (refreshAllNPSLiveNAVsAction) is untouched by
+- * this route entirely.
++ * Securities are scoped to actual HOLDINGS (quantity > 0), same as the
++ * dashboard's manual "Refresh all" button — NOT every active asset, so a
++ * watchlist-only symbol doesn't silently consume free-tier API rate
++ * limits daily for a symbol the user is just casually tracking.
++ *
++ * NPS live NAVs are refreshed too (added after securities-only shipped —
++ * see refreshNPSLiveNAVs() above), run sequentially AFTER the securities
++ * refresh, not in parallel — consistent with this app's existing
++ * rate-limit-conscious pattern (live-provider.ts) of not bursting free
++ * external APIs.
+  */
+ export async function GET(request: Request) {
+   const authHeader = request.headers.get("authorization");
+@@ -62,7 +132,7 @@ export async function GET(request: Request) {
+     // query) rather than assuming a value.
+     const userId = (assetRows as (AssetRow & { user_id: string })[])[0]?.user_id;
+     if (!userId) {
+-      return NextResponse.json({ ok: true, updated: 0, skipped: [], note: "No assets exist yet — nothing to refresh." });
++      return NextResponse.json({ ok: true, securities: { updated: 0, skipped: [] }, nps: { updated: 0, skipped: 0, failed: 0 }, note: "No assets exist yet — nothing to refresh.", ranAt: new Date().toISOString() });
+     }
+ 
+     const assets = (assetRows as AssetRow[]).map(rowToAsset);
+@@ -70,21 +140,19 @@ export async function GET(request: Request) {
+     const holdings = computeHoldingsFrom(assets, transactions).filter((h) => h.quantity > 1e-9);
+ 
+     const today = todayISO();
+-    let updated = 0;
+-    const skipped: string[] = [];
++    const securities: SecuritiesRefreshResult = { updated: 0, skipped: [] };
+ 
+     for (const holding of holdings) {
+       const asset = holding.asset;
+       const quote = await getLiveQuoteForAsset(asset);
+       if (!quote) {
+-        skipped.push(asset.symbol);
++        securities.skipped.push(asset.symbol);
+         continue;
+       }
+       // UPDATE, not INSERT — the row already has its own user_id from
+       // when it was created, untouched by this. Only INSERT triggers a
+       // column's `default auth.uid()`, which is what actually needed the
+-      // explicit userId below (price_history.upsert()). Checked, not
+-      // assumed — this route makes exactly these two writes, nothing else.
++      // explicit userId below (price_history.upsert()).
+       const { error: updateError } = await db
+         .from("assets")
+         .update({ current_price: quote.price, current_price_updated_at: new Date().toISOString() })
+@@ -96,10 +164,12 @@ export async function GET(request: Request) {
+         .upsert({ user_id: userId, asset_id: asset.id, price: quote.price, recorded_date: today }, { onConflict: "asset_id,recorded_date" });
+       if (historyError) throw historyError;
+ 
+-      updated += 1;
++      securities.updated += 1;
+     }
+ 
+-    return NextResponse.json({ ok: true, updated, skipped, ranAt: new Date().toISOString() });
++    const nps = await refreshNPSLiveNAVs(db);
++
++    return NextResponse.json({ ok: true, securities, nps, ranAt: new Date().toISOString() });
+   } catch (err) {
+     console.error("[cron:refresh-prices]", err);
+     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Refresh failed" }, { status: 500 });
