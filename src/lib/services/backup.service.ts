@@ -9,6 +9,7 @@ import { liabilitiesRepository } from "@/lib/database/repositories/liabilities.r
 import { watchlistRepository } from "@/lib/database/repositories/watchlist.repository";
 import { priceHistoryRepository } from "@/lib/database/repositories/price-history.repository";
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
+import { getErrorMessage, logServerError } from "@/lib/utils/log-error";
 import type { Asset } from "@/types/domain/asset";
 import type { Transaction } from "@/types/domain/transaction";
 import type { Goal } from "@/types/domain/goal";
@@ -141,7 +142,8 @@ export const backupService = {
         assetIdMap.set(asset.id, resolved.id);
         summary.assets += 1;
       } catch (err) {
-        summary.errors.push(`Asset ${asset.symbol}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:asset", err);
+        summary.errors.push(`Asset ${asset.symbol}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -156,7 +158,8 @@ export const backupService = {
         });
         summary.transactions += 1;
       } catch (err) {
-        summary.errors.push(`Transaction on ${txn.transactionDate}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:transaction", err);
+        summary.errors.push(`Transaction on ${txn.transactionDate}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -165,7 +168,8 @@ export const backupService = {
         await goalsRepository.create({ name: goal.name, targetAmount: goal.targetAmount, currentAmount: goal.currentAmount, targetDate: goal.targetDate, category: goal.category, description: goal.description });
         summary.goals += 1;
       } catch (err) {
-        summary.errors.push(`Goal ${goal.name}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:goal", err);
+        summary.errors.push(`Goal ${goal.name}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -183,7 +187,8 @@ export const backupService = {
         }
         summary.fixedDeposits += 1;
       } catch (err) {
-        summary.errors.push(`Fixed deposit ${fd.institution}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:fixedDeposit", err);
+        summary.errors.push(`Fixed deposit ${fd.institution}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -199,7 +204,8 @@ export const backupService = {
         npsIdMap.set(account.id, created.id);
         summary.npsAccounts += 1;
       } catch (err) {
-        summary.errors.push(`NPS account ${account.tier}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:npsAccount", err);
+        summary.errors.push(`NPS account ${account.tier}: ${getErrorMessage(err)}`);
       }
     }
     for (const contribution of backup.npsContributions ?? []) {
@@ -212,7 +218,8 @@ export const backupService = {
         });
         summary.npsContributions += 1;
       } catch (err) {
-        summary.errors.push(`NPS contribution on ${contribution.contributionDate}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:npsContribution", err);
+        summary.errors.push(`NPS contribution on ${contribution.contributionDate}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -234,7 +241,8 @@ export const backupService = {
         }
         summary.ppfAccounts += 1;
       } catch (err) {
-        summary.errors.push(`PPF account: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:ppfAccount", err);
+        summary.errors.push(`PPF account: ${getErrorMessage(err)}`);
       }
     }
 
@@ -243,7 +251,8 @@ export const backupService = {
         await bankAccountsRepository.create({ bankName: bank.bankName, accountType: bank.accountType, currentBalance: bank.currentBalance, notes: bank.notes });
         summary.bankAccounts += 1;
       } catch (err) {
-        summary.errors.push(`Bank account ${bank.bankName}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:bankAccount", err);
+        summary.errors.push(`Bank account ${bank.bankName}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -252,7 +261,8 @@ export const backupService = {
         await liabilitiesRepository.create({ name: liability.name, liabilityType: liability.liabilityType, amountOwed: liability.amountOwed, interestRate: liability.interestRate, notes: liability.notes });
         summary.liabilities += 1;
       } catch (err) {
-        summary.errors.push(`Liability ${liability.name}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:liability", err);
+        summary.errors.push(`Liability ${liability.name}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -263,7 +273,8 @@ export const backupService = {
         await watchlistRepository.add({ assetId, targetPrice: item.targetPrice, stopLoss: item.stopLoss, note: item.note });
         summary.watchlistItems += 1;
       } catch (err) {
-        summary.errors.push(`Watchlist item: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:watchlistItem", err);
+        summary.errors.push(`Watchlist item: ${getErrorMessage(err)}`);
       }
     }
 
@@ -278,7 +289,8 @@ export const backupService = {
         await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate);
         summary.priceHistory += 1;
       } catch (err) {
-        summary.errors.push(`Price history point on ${point.recordedDate}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:priceHistory", err);
+        summary.errors.push(`Price history point on ${point.recordedDate}: ${getErrorMessage(err)}`);
       }
     }
 
@@ -305,7 +317,8 @@ export const backupService = {
         });
         summary.portfolioSnapshots += 1;
       } catch (err) {
-        summary.errors.push(`Portfolio snapshot on ${snapshot.snapshotDate}: ${err instanceof Error ? err.message : "failed"}`);
+        logServerError("importBackupAction:portfolioSnapshot", err);
+        summary.errors.push(`Portfolio snapshot on ${snapshot.snapshotDate}: ${getErrorMessage(err)}`);
       }
     }
 
