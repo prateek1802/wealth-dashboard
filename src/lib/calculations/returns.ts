@@ -20,6 +20,22 @@ export function calculateCAGR(beginValue: number, endValue: number, years: numbe
 }
 
 /**
+ * Picks CAGR's starting snapshot — the first one with a POSITIVE net
+ * worth, not just the chronologically first one. An account's earliest
+ * snapshot(s) can legitimately be ₹0 (recorded before any real holdings
+ * existed yet) — real history, not bad data. calculateCAGR() correctly
+ * refuses a zero/negative beginValue, so selecting the raw first snapshot
+ * unconditionally left CAGR permanently stuck on "insufficient data" for
+ * any account whose earliest tracked day(s) happened to start at ₹0, even
+ * with months of perfectly good data right after. `sortedSnapshots` must
+ * already be sorted oldest-first (same contract the analytics page's own
+ * sort already produces).
+ */
+export function selectCAGRBaseSnapshot<T extends { netWorth: number }>(sortedSnapshots: T[]): T | undefined {
+  return sortedSnapshots.find((s) => s.netWorth > 0);
+}
+
+/**
  * XIRR via Newton-Raphson on irregular cash flows. Needs at least one
  * negative and one positive flow to be solvable.
  */

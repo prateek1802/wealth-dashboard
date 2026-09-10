@@ -8,7 +8,7 @@ import { npsService } from "@/lib/services/nps.service";
 import { npsRepository } from "@/lib/database/repositories/nps.repository";
 import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
-import { calculateCAGR, calculateXIRR } from "@/lib/calculations/returns";
+import { calculateCAGR, calculateXIRR, selectCAGRBaseSnapshot } from "@/lib/calculations/returns";
 import { calculateCategoryXIRR } from "@/lib/calculations/category-xirr";
 import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
 import { RISK_METRICS_CUTOFF_DATE } from "@/constants/risk";
@@ -75,7 +75,11 @@ export default async function AnalyticsPage() {
   const sortedSnapshots = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
   const netWorthSeries = sortedSnapshots.map((s) => s.netWorth);
   const snapshotDates = sortedSnapshots.map((s) => s.snapshotDate);
-  const firstSnapshot = sortedSnapshots[0];
+  // See selectCAGRBaseSnapshot()'s doc comment for why this isn't just
+  // sortedSnapshots[0]. `years` below is computed from THIS adjusted
+  // snapshot's own date, not the original (possibly zero-value) first
+  // one, so the CAGR annualization window matches what's actually measured.
+  const firstSnapshot = selectCAGRBaseSnapshot(sortedSnapshots);
   // eslint-disable-next-line react-hooks/purity -- Server Component computing "years since first snapshot" for this request; Date.now() here is standard server-side date math, not a client render-purity concern.
   const asOf = Date.now();
   const years = firstSnapshot
