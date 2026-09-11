@@ -154,8 +154,11 @@ genuinely removed not left dangling.
 ❌ Table memoization (transactions/portfolio views) — still no useMemo. Low
    priority, not currently felt as slow.
 
-❌ Auto-refresh at market close (cron) — still no vercel.json, no scheduled
-   workflow. Needs genuine new infra, not a code-only patch.
+✅ DONE (confirmed fixed this pass — user flagged, re-verified directly
+   against source) Auto-refresh at market close. vercel.json now registers
+   /api/cron/refresh-prices on schedule "15 10 * * 1-5" (weekday IST market
+   close + buffer); route is CRON_SECRET-protected and uses a dedicated
+   admin client since a cron invocation has no user session/cookies.
 
 ❌ Liabilities-not-loading — still needs live diagnosis (a real browser console
    error or Vercel log), not further static code review; source has looked
