@@ -1,0 +1,130 @@
+diff --git a/src/features/portfolio/actions.ts b/src/features/portfolio/actions.ts
+index a2043a7..9d45574 100644
+--- a/src/features/portfolio/actions.ts
++++ b/src/features/portfolio/actions.ts
+@@ -135,3 +135,17 @@ export async function backfillAssetHistoryAction(assetId: string): Promise<{ ok:
+     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+   }
+ }
++
++/** Bulk counterpart — see portfolioService.backfillAllHistory(). Revalidates the whole Portfolio route rather than per-asset detail pages, since it doesn't know which specific assets it touched until after running (and there could be many). */
++export async function backfillAllAssetHistoryAction(): Promise<
++  { ok: true; assetsBackfilled: number; assetsSkipped: number; totalPointsAdded: number } | { ok: false; error: string }
++> {
++  try {
++    const result = await portfolioService.backfillAllHistory();
++    revalidatePath(ROUTES.portfolio);
++    return { ok: true, ...result };
++  } catch (err) {
++    logServerError("backfillAllAssetHistoryAction", err);
++    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++  }
++}
+diff --git a/src/features/portfolio/components/portfolio-view.tsx b/src/features/portfolio/components/portfolio-view.tsx
+index ee06983..0283672 100644
+--- a/src/features/portfolio/components/portfolio-view.tsx
++++ b/src/features/portfolio/components/portfolio-view.tsx
+@@ -8,12 +8,12 @@ import { PriceFreshness } from "@/components/shared/price-freshness";
+ import { Button } from "@/components/ui/button";
+ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+ import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
+-import { refreshLivePricesAction } from "../actions";
++import { refreshLivePricesAction, backfillAllAssetHistoryAction } from "../actions";
+ import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
+ import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
+ import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
+ import { cn } from "@/lib/utils/cn";
+-import { Wallet, Plus, LayoutGrid, List, RefreshCw, ChevronDown } from "lucide-react";
++import { Wallet, Plus, LayoutGrid, List, RefreshCw, History, ChevronDown } from "lucide-react";
+ import Link from "next/link";
+ import { ROUTES } from "@/constants/routes";
+ import type { HoldingWithXIRR } from "@/lib/services/portfolio.service";
+@@ -160,6 +160,7 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
+   const [view, setView] = useState<"cards" | "table">("cards");
+   const [dialogOpen, setDialogOpen] = useState(false);
+   const [isRefreshing, startRefresh] = useTransition();
++  const [isBackfilling, startBackfill] = useTransition();
+ 
+   function handleRefresh() {
+     startRefresh(async () => {
+@@ -176,6 +177,23 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
+     });
+   }
+ 
++  function handleBackfillAll() {
++    startBackfill(async () => {
++      const result = await backfillAllAssetHistoryAction();
++      if (!result.ok) {
++        toast.error(result.error);
++        return;
++      }
++      if (result.assetsBackfilled === 0) {
++        toast.info("No holdings with a historical price source to backfill.");
++      } else {
++        toast.success(
++          `Backfilled ${result.assetsBackfilled} holding${result.assetsBackfilled === 1 ? "" : "s"} · ${result.totalPointsAdded} price${result.totalPointsAdded === 1 ? "" : "s"} added${result.assetsSkipped ? ` · ${result.assetsSkipped} failed` : ""}`
++        );
++      }
++    });
++  }
++
+   const groups = groupHoldings(holdings);
+ 
+   return (
+@@ -188,6 +206,14 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
+           </TabsList>
+         </Tabs>
+         <div className="flex gap-2">
++          <Button
++            variant="outline"
++            onClick={handleBackfillAll}
++            disabled={isBackfilling || holdings.length === 0}
++            title="One-time fetch of real historical prices for every eligible holding (mutual funds, stocks, ETFs, crypto) — not part of the daily price refresh"
++          >
++            <History className="size-4" /> {isBackfilling ? "Backfilling…" : "Backfill All History"}
++          </Button>
+           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing || holdings.length === 0}>
+             <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} /> Refresh Prices
+           </Button>
+diff --git a/src/lib/services/portfolio.service.ts b/src/lib/services/portfolio.service.ts
+index 124e108..efa6338 100644
+--- a/src/lib/services/portfolio.service.ts
++++ b/src/lib/services/portfolio.service.ts
+@@ -479,4 +479,37 @@ export const portfolioService = {
+ 
+     return { updated, skipped };
+   },
++
++  /**
++   * One-time historical backfill for EVERY currently-held asset that has a
++   * real historical source (see BACKFILLABLE_ASSET_TYPES) — the bulk
++   * counterpart to the per-asset "Backfill History" button on the
++   * investment detail page, for someone who doesn't want to click through
++   * holdings one at a time. Sequential, not parallel — same rate-limit-
++   * conscious pattern as refreshPrices() above, and especially important
++   * here since each call can fetch a much larger payload (a fund's entire
++   * NAV history) than a single live quote.
++   */
++  async backfillAllHistory(): Promise<{ assetsBackfilled: number; assetsSkipped: number; totalPointsAdded: number }> {
++    const { priceHistoryService } = await import("@/lib/services/price-history.service");
++    const { BACKFILLABLE_ASSET_TYPES } = await import("@/lib/market-data/historical-provider");
++    const holdings = await this.getHoldings();
++    const targets = holdings.filter((h) => (BACKFILLABLE_ASSET_TYPES as readonly string[]).includes(h.asset.assetType));
++
++    let assetsBackfilled = 0;
++    let assetsSkipped = 0;
++    let totalPointsAdded = 0;
++
++    for (const holding of targets) {
++      try {
++        const { pointsAdded } = await priceHistoryService.backfillHistory(holding.asset.id);
++        totalPointsAdded += pointsAdded;
++        assetsBackfilled += 1;
++      } catch {
++        assetsSkipped += 1; // one asset's source failing (rate limit, unmapped symbol, etc.) never blocks the rest
++      }
++    }
++
++    return { assetsBackfilled, assetsSkipped, totalPointsAdded };
++  },
+ };

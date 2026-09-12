@@ -19,6 +19,7 @@ import type { AllocationCategory } from "@/constants/asset-types";
 import { ASSET_TYPE_GROUP } from "@/constants/asset-types";
 import type { Holding } from "@/types/domain/holding";
 import type { Asset } from "@/types/domain/asset";
+import type { Transaction } from "@/types/domain/transaction";
 import type { CalcResult } from "@/lib/calculations/returns";
 import type { PortfolioSummary, AllocationSlice, PerformancePoint, ActivityItem } from "@/types/domain/snapshot";
 
@@ -478,5 +479,84 @@ export const portfolioService = {
     }
 
     return { updated, skipped };
+  },
+
+  /**
+   * One-time historical backfill for EVERY currently-held asset that has a
+   * real historical source (see BACKFILLABLE_ASSET_TYPES) — the bulk
+   * counterpart to the per-asset "Backfill History" button on the
+   * investment detail page, for someone who doesn't want to click through
+   * holdings one at a time. Sequential, not parallel — same rate-limit-
+   * conscious pattern as refreshPrices() above, and especially important
+   * here since each call can fetch a much larger payload (a fund's entire
+   * NAV history) than a single live quote.
+   */
+  async backfillAllHistory(): Promise<{ assetsBackfilled: number; assetsSkipped: number; totalPointsAdded: number }> {
+    const { priceHistoryService } = await import("@/lib/services/price-history.service");
+    const { BACKFILLABLE_ASSET_TYPES } = await import("@/lib/market-data/historical-provider");
+    const holdings = await this.getHoldings();
+    const targets = holdings.filter((h) => (BACKFILLABLE_ASSET_TYPES as readonly string[]).includes(h.asset.assetType));
+
+    let assetsBackfilled = 0;
+    let assetsSkipped = 0;
+    let totalPointsAdded = 0;
+
+    for (const holding of targets) {
+      try {
+        const { pointsAdded } = await priceHistoryService.backfillHistory(holding.asset.id);
+        totalPointsAdded += pointsAdded;
+        assetsBackfilled += 1;
+      } catch {
+        assetsSkipped += 1; // one asset's source failing (rate limit, unmapped symbol, etc.) never blocks the rest
+      }
+    }
+
+    return { assetsBackfilled, assetsSkipped, totalPointsAdded };
+  },
+
+  /**
+   * Reconstructs net worth for a whole series of past dates in ONE pass —
+   * every raw input (transactions, price history, FDs, snapshots) is
+   * fetched exactly once regardless of how many dates are requested, then
+   * reconstructHistoricalNetWorth() runs per date against the already-
+   * in-memory data. This is the same "compute once per render, not once
+   * per plotted point" discipline this project already applies to
+   * computeHoldings() — see the Dashboard redundant-fetch fix.
+   */
+  async getHistoricalNetWorthSeries(dates: string[]): Promise<{ date: string; netWorth: number; isExact: boolean }[]> {
+    const { reconstructHistoricalNetWorth } = await import("@/lib/calculations/historical-net-worth");
+    const { BACKFILLABLE_ASSET_TYPES } = await import("@/lib/market-data/historical-provider");
+    const { priceHistoryRepository } = await import("@/lib/database/repositories/price-history.repository");
+    const { fixedDepositsRepository } = await import("@/lib/database/repositories/fixed-deposits.repository");
+
+    const [allAssets, allTransactions, fixedDeposits, snapshots] = await Promise.all([
+      assetsRepository.findAll(),
+      transactionsRepository.findAll(),
+      fixedDepositsRepository.findAll(),
+      snapshotsRepository.findAll(),
+    ]);
+
+    const securityAssets = allAssets.filter((a) => (BACKFILLABLE_ASSET_TYPES as readonly string[]).includes(a.assetType));
+
+    const transactionsByAsset = new Map<string, Transaction[]>();
+    for (const t of allTransactions) {
+      const list = transactionsByAsset.get(t.assetId) ?? [];
+      list.push(t);
+      transactionsByAsset.set(t.assetId, list);
+    }
+
+    const priceHistoryByAsset = new Map<string, { recordedDate: string; price: number }[]>();
+    await Promise.all(
+      securityAssets.map(async (asset) => {
+        const history = await priceHistoryRepository.findByAsset(asset.id);
+        priceHistoryByAsset.set(asset.id, history); // already sorted ascending by recordedDate
+      })
+    );
+
+    const snapshotsSortedAsc = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+
+    return dates.map((date) =>
+      reconstructHistoricalNetWorth({ date, securityAssets, transactionsByAsset, priceHistoryByAsset, fixedDeposits, snapshotsSortedAsc })
+    );
   },
 };

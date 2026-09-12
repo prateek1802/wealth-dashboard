@@ -8,12 +8,12 @@ import { PriceFreshness } from "@/components/shared/price-freshness";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
-import { refreshLivePricesAction } from "../actions";
+import { refreshLivePricesAction, backfillAllAssetHistoryAction } from "../actions";
 import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
 import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
 import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
-import { Wallet, Plus, LayoutGrid, List, RefreshCw, ChevronDown } from "lucide-react";
+import { Wallet, Plus, LayoutGrid, List, RefreshCw, History, ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { ROUTES } from "@/constants/routes";
 import type { HoldingWithXIRR } from "@/lib/services/portfolio.service";
@@ -160,6 +160,7 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
   const [view, setView] = useState<"cards" | "table">("cards");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isRefreshing, startRefresh] = useTransition();
+  const [isBackfilling, startBackfill] = useTransition();
 
   function handleRefresh() {
     startRefresh(async () => {
@@ -176,6 +177,23 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
     });
   }
 
+  function handleBackfillAll() {
+    startBackfill(async () => {
+      const result = await backfillAllAssetHistoryAction();
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      if (result.assetsBackfilled === 0) {
+        toast.info("No holdings with a historical price source to backfill.");
+      } else {
+        toast.success(
+          `Backfilled ${result.assetsBackfilled} holding${result.assetsBackfilled === 1 ? "" : "s"} · ${result.totalPointsAdded} price${result.totalPointsAdded === 1 ? "" : "s"} added${result.assetsSkipped ? ` · ${result.assetsSkipped} failed` : ""}`
+        );
+      }
+    });
+  }
+
   const groups = groupHoldings(holdings);
 
   return (
@@ -188,6 +206,14 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
           </TabsList>
         </Tabs>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleBackfillAll}
+            disabled={isBackfilling || holdings.length === 0}
+            title="One-time fetch of real historical prices for every eligible holding (mutual funds, stocks, ETFs, crypto) — not part of the daily price refresh"
+          >
+            <History className="size-4" /> {isBackfilling ? "Backfilling…" : "Backfill All History"}
+          </Button>
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing || holdings.length === 0}>
             <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} /> Refresh Prices
           </Button>

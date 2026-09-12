@@ -135,3 +135,17 @@ export async function backfillAssetHistoryAction(assetId: string): Promise<{ ok:
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
+
+/** Bulk counterpart — see portfolioService.backfillAllHistory(). Revalidates the whole Portfolio route rather than per-asset detail pages, since it doesn't know which specific assets it touched until after running (and there could be many). */
+export async function backfillAllAssetHistoryAction(): Promise<
+  { ok: true; assetsBackfilled: number; assetsSkipped: number; totalPointsAdded: number } | { ok: false; error: string }
+> {
+  try {
+    const result = await portfolioService.backfillAllHistory();
+    revalidatePath(ROUTES.portfolio);
+    return { ok: true, ...result };
+  } catch (err) {
+    logServerError("backfillAllAssetHistoryAction", err);
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
