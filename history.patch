@@ -1,0 +1,131 @@
+diff --git a/src/lib/calculations/fd.ts b/src/lib/calculations/fd.ts
+index bdaa1d9..ea9c633 100644
+--- a/src/lib/calculations/fd.ts
++++ b/src/lib/calculations/fd.ts
+@@ -1,4 +1,5 @@
+ import type { FDPayoutType } from "@/constants/asset-types";
++import type { FixedDeposit } from "@/types/domain/fixed-deposit";
+ 
+ /**
+  * Maturity amount for a cumulative FD (quarterly-compounded, the common
+@@ -40,3 +41,47 @@ export function calculateFDExpectedInterest(
+   // Simple interest for periodic-payout FDs: principal * rate * time.
+   return principal * (annualRatePercent / 100) * (tenureMonths / 12);
+ }
++
++/**
++ * True accrued value on an arbitrary past (or present) date — for
++ * reconstructing historical net worth (see PROJECT-STATUS.md's "real
++ * transaction dates, not snapshot dates" performance-graph work), NOT for
++ * the live Dashboard/FD-page total. Deliberately a SEPARATE notion of
++ * "value" from fdService.totalValue(), which uses flat principal for every
++ * active FD (see that function's own comment calling accrued-interest a
++ * "V2 refinement") — this IS that V2 refinement, but scoped to historical
++ * reconstruction only, not swapped in for the live total. That means the
++ * graph's own "today" point (computed via this function) will read
++ * slightly HIGHER than the flat-principal number shown elsewhere in the
++ * app for the same FD on the same day — a real, visible inconsistency
++ * between two now-coexisting definitions of "FD value," not a bug in
++ * either one individually. Worth deciding later whether fdService should
++ * adopt this same accrual instead, but that's a separate decision — not
++ * bundled into this graph-accuracy work.
++ *
++ * Before the FD started: 0. After withdrawal: 0 from the withdrawal date
++ * onward (the money's presumed moved elsewhere, typically a Bank Account —
++ * see the withdrawal dialog's own note — so counting it here would double
++ * it). Non-cumulative payout types never compound into value (matches
++ * calculateFDMaturityAmount's convention) — value is just principal
++ * throughout, since interest is paid out, not accumulated.
++ */
++export function calculateFDValueAsOf(
++  fd: Pick<FixedDeposit, "principal" | "interestRate" | "startDate" | "maturityDate" | "payoutType" | "status" | "withdrawalDate">,
++  date: string
++): number {
++  if (date < fd.startDate) return 0;
++  if (fd.status === "withdrawn" && fd.withdrawalDate !== null && date >= fd.withdrawalDate) return 0;
++  if (fd.payoutType !== "cumulative") return fd.principal;
++
++  // Compounding stops at maturity even if the FD hasn't been formally
++  // withdrawn yet (e.g. matured last month, withdrawal not logged) —
++  // otherwise this would keep compounding indefinitely past maturity,
++  // which no real FD does.
++  const effectiveDate = date < fd.maturityDate ? date : fd.maturityDate;
++  const elapsedDays = (new Date(effectiveDate).getTime() - new Date(fd.startDate).getTime()) / 86_400_000;
++  const years = elapsedDays / 365.25;
++  const r = fd.interestRate / 100;
++  const compoundingPeriodsPerYear = 4; // quarterly — matches calculateFDMaturityAmount
++  return fd.principal * Math.pow(1 + r / compoundingPeriodsPerYear, compoundingPeriodsPerYear * years);
++}
+diff --git a/test/fd.test.ts b/test/fd.test.ts
+new file mode 100644
+index 0000000..5df3f83
+--- /dev/null
++++ b/test/fd.test.ts
+@@ -0,0 +1,67 @@
++import { describe, it, expect } from "vitest";
++import { calculateFDMaturityAmount, calculateFDExpectedInterest, calculateFDValueAsOf } from "@/lib/calculations/fd";
++
++describe("calculateFDMaturityAmount", () => {
++  it("compounds quarterly for a cumulative FD", () => {
++    // 300000 at 7.1% for 2 years, quarterly compounding.
++    expect(calculateFDMaturityAmount(300_000, 7.1, 24, "cumulative")).toBeCloseTo(345_342.59, 1);
++  });
++
++  it("returns bare principal for non-cumulative payout types", () => {
++    expect(calculateFDMaturityAmount(300_000, 7.1, 24, "monthly")).toBe(300_000);
++    expect(calculateFDMaturityAmount(300_000, 7.1, 24, "quarterly")).toBe(300_000);
++    expect(calculateFDMaturityAmount(300_000, 7.1, 24, "annual")).toBe(300_000);
++  });
++});
++
++describe("calculateFDExpectedInterest", () => {
++  it("is maturity amount minus principal for cumulative FDs", () => {
++    expect(calculateFDExpectedInterest(300_000, 7.1, 24, "cumulative")).toBeCloseTo(45_342.59, 1);
++  });
++
++  it("uses simple interest for periodic-payout FDs", () => {
++    // 300000 * 7.1% * 2 years = 42,600
++    expect(calculateFDExpectedInterest(300_000, 7.1, 24, "monthly")).toBeCloseTo(42_600, 1);
++  });
++});
++
++describe("calculateFDValueAsOf", () => {
++  const fd = {
++    principal: 300_000,
++    interestRate: 7.1,
++    startDate: "2024-01-01",
++    maturityDate: "2026-01-01",
++    payoutType: "cumulative" as const,
++    status: "active" as const,
++    withdrawalDate: null,
++  };
++
++  it("is 0 before the FD started", () => {
++    expect(calculateFDValueAsOf(fd, "2023-06-01")).toBe(0);
++  });
++
++  it("accrues quarterly-compounded value partway through the tenure", () => {
++    expect(calculateFDValueAsOf(fd, "2025-01-01")).toBeCloseTo(321_920.37, 1);
++  });
++
++  it("stops compounding at maturity even if still marked active (not yet withdrawn)", () => {
++    const atMaturity = calculateFDValueAsOf(fd, "2026-01-01");
++    const wellPastMaturity = calculateFDValueAsOf(fd, "2026-06-01");
++    expect(wellPastMaturity).toBeCloseTo(atMaturity, 5);
++    expect(atMaturity).toBeCloseTo(345_375.86, 1);
++  });
++
++  it("is 0 from the withdrawal date onward — the money's presumed moved elsewhere, not double-counted here", () => {
++    const withdrawn = { ...fd, status: "withdrawn" as const, withdrawalDate: "2025-06-01" };
++    expect(calculateFDValueAsOf(withdrawn, "2025-07-01")).toBe(0);
++    expect(calculateFDValueAsOf(withdrawn, "2025-06-01")).toBe(0);
++    // Still accrues normally the day before withdrawal.
++    expect(calculateFDValueAsOf(withdrawn, "2025-05-31")).toBeCloseTo(331_360.39, 1);
++  });
++
++  it("never compounds for non-cumulative payout types — value is flat principal throughout", () => {
++    const monthly = { ...fd, payoutType: "monthly" as const };
++    expect(calculateFDValueAsOf(monthly, "2025-01-01")).toBe(300_000);
++    expect(calculateFDValueAsOf(monthly, "2025-12-31")).toBe(300_000);
++  });
++});
