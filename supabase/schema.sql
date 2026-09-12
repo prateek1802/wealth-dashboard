@@ -272,11 +272,22 @@ create trigger ppf_accounts_set_updated_at before update on ppf_accounts
   for each row execute function set_updated_at();
 
 -- =========================================================================
--- price_history — one row per asset per calendar date, written whenever a
--- price is actually updated (Edit Asset's manual entry, or Refresh Prices).
--- NEVER fabricated or backfilled — a gap in history just means the price
--- wasn't updated that day. This is what powers the per-asset performance
--- chart on the investment detail page.
+-- price_history — one row per asset per calendar date. Two ways a row gets
+-- here, and `source` distinguishes them so nothing downstream (like the
+-- per-asset performance chart on the investment detail page) can mistake
+-- one for the other:
+--   'manual'   — written whenever a price is actually updated (Edit Asset's
+--                manual entry, or Refresh Prices). Never fabricated — a gap
+--                just means the price wasn't updated that day. This is the
+--                ORIGINAL, still-true meaning of this table.
+--   'backfill' — a real historical price pulled from an external source's
+--                own history endpoint (mfapi.in for mutual funds, Yahoo
+--                Finance for stocks/ETFs, CoinGecko for crypto — see
+--                lib/market-data/historical-provider.ts), one-time-fetched
+--                per asset rather than accumulated day by day. Still a
+--                REAL price for that real date, not a guess — just sourced
+--                differently, which is exactly why it's labeled rather than
+--                silently merged into 'manual'.
 -- =========================================================================
 create table price_history (
   id uuid primary key default gen_random_uuid(),
@@ -284,6 +295,7 @@ create table price_history (
   asset_id uuid not null references assets(id) on delete cascade,
   price numeric(18,4) not null,
   recorded_date date not null,
+  source text not null default 'manual' check (source in ('manual', 'backfill')),
   created_at timestamptz not null default now(),
   unique (asset_id, recorded_date)
 );

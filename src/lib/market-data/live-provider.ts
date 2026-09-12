@@ -20,7 +20,7 @@ import type { Asset } from "@/types/domain/asset";
  * interface, no calling code changes.
  */
 
-const COINGECKO_IDS: Record<string, string> = {
+export const COINGECKO_IDS: Record<string, string> = {
   BTC: "bitcoin",
   ETH: "ethereum",
   SOL: "solana",
@@ -55,7 +55,7 @@ async function getCryptoQuote(symbol: string): Promise<Quote | null> {
  * `exchange`/`country` on the asset (see DATABASE.md) drive this mapping —
  * this is exactly what those nullable metadata columns were reserved for.
  */
-function toYahooSymbol(asset: Pick<Asset, "symbol" | "assetType" | "exchange" | "country">): string {
+export function toYahooSymbol(asset: Pick<Asset, "symbol" | "assetType" | "exchange" | "country">): string {
   if (asset.assetType === "stock_us") return asset.symbol;
   if (asset.exchange === "BSE") return `${asset.symbol}.BO`;
   // Default Indian-listed securities (stock_in, most etf/mutual_fund entries) to NSE.

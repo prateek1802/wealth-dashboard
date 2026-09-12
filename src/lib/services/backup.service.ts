@@ -286,7 +286,7 @@ export const backupService = {
       const assetId = assetIdMap.get(point.assetId);
       if (!assetId) { summary.errors.push(`Price history point on ${point.recordedDate}: referenced asset not found in backup`); continue; }
       try {
-        await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate);
+        await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate, point.source ?? "manual");
         summary.priceHistory += 1;
       } catch (err) {
         logServerError("importBackupAction:priceHistory", err);

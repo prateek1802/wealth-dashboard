@@ -166,6 +166,7 @@ export interface PriceHistoryRow {
   asset_id: string;
   price: number;
   recorded_date: string;
+  source: "manual" | "backfill";
   created_at: string;
 }
 

@@ -12,12 +12,14 @@ import { TransactionDialog } from "@/features/transactions/components/transactio
 import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
 import { PriceFreshness } from "@/components/shared/price-freshness";
 import { deleteTransactionAction } from "@/features/transactions/actions";
+import { backfillAssetHistoryAction } from "@/features/portfolio/actions";
+import { BACKFILLABLE_ASSET_TYPES } from "@/lib/market-data/historical-provider";
 import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
 import { formatDate } from "@/lib/utils/date";
 import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
 import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
 import { cn } from "@/lib/utils/cn";
-import { Pencil, Plus, Trash2, LineChart, Receipt } from "lucide-react";
+import { Pencil, Plus, Trash2, LineChart, Receipt, History } from "lucide-react";
 import type { Holding } from "@/types/domain/holding";
 import type { Transaction } from "@/types/domain/transaction";
 import type { PriceHistoryPoint } from "@/types/domain/price-history";
@@ -27,15 +29,28 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
   const [addTxnOpen, setAddTxnOpen] = useState(false);
   const [editTxnTarget, setEditTxnTarget] = useState<Transaction | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
+  const [isBackfilling, setIsBackfilling] = useState(false);
   const TXN_PAGE_SIZE = 50;
   const [visibleTxnCount, setVisibleTxnCount] = useState(TXN_PAGE_SIZE);
   const { asset } = holding;
   const isGain = holding.unrealizedPnl >= 0;
+  const canBackfill = (BACKFILLABLE_ASSET_TYPES as readonly string[]).includes(asset.assetType);
 
   async function handleDelete(txn: Transaction) {
     const result = await deleteTransactionAction(txn.id, asset.id);
     if (result.ok) toast.success("Transaction deleted");
     else toast.error(result.error);
+  }
+
+  async function handleBackfill() {
+    setIsBackfilling(true);
+    const result = await backfillAssetHistoryAction(asset.id);
+    setIsBackfilling(false);
+    if (result.ok) {
+      toast.success(result.pointsAdded > 0 ? `Added ${result.pointsAdded} historical price${result.pointsAdded === 1 ? "" : "s"}` : "No new historical prices found");
+    } else {
+      toast.error(result.error);
+    }
   }
 
   return (
@@ -51,6 +66,11 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
         </div>
         <div className="flex gap-2">
           <AssetRefreshButton assetId={asset.id} assetLabel={getAssetDisplayLabel(asset).primary} className="h-10 w-10" iconClassName="size-4" />
+          {canBackfill && (
+            <Button variant="outline" onClick={handleBackfill} disabled={isBackfilling} title="Fetch real historical prices for this holding, one time, from its own price source">
+              <History className="size-4" /> {isBackfilling ? "Backfilling…" : "Backfill History"}
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setEditOpen(true)}>
             <Pencil className="size-4" /> Edit Asset
           </Button>

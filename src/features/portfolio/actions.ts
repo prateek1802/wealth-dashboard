@@ -115,3 +115,23 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }
+
+/**
+ * One-time historical backfill for a single asset — see
+ * priceHistoryService.backfillHistory / lib/market-data/historical-provider.ts.
+ * Deliberately per-asset and manually triggered, not part of Refresh Prices
+ * (which only ever touches today's price) — a user clicks this once (or
+ * again later if they want to re-check for a wider range as sources allow),
+ * not on every page load.
+ */
+export async function backfillAssetHistoryAction(assetId: string): Promise<{ ok: true; pointsAdded: number } | { ok: false; error: string }> {
+  try {
+    const { priceHistoryService } = await import("@/lib/services/price-history.service");
+    const { pointsAdded } = await priceHistoryService.backfillHistory(assetId);
+    revalidatePath(ROUTES.investmentDetail(assetId));
+    return { ok: true, pointsAdded };
+  } catch (err) {
+    logServerError("backfillAssetHistoryAction", err);
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
