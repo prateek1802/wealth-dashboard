@@ -42,6 +42,8 @@ export interface AllocationSlice {
 export interface PerformancePoint {
   date: string;
   value: number;
+  /** True when this point was reconstructed from real historical prices (see reconstructHistoricalNetWorth); false when it had to fall back to the nearest portfolio_snapshots value; omitted for the older, purely snapshot-derived series (NetWorthCard's sparkline) — omitted is treated the same as true by the chart, since those points were never mixed with anything less reliable than what they always were. */
+  isExact?: boolean;
 }
 
 export interface ActivityItem {

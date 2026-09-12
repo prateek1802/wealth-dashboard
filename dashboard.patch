@@ -1,0 +1,385 @@
+diff --git a/src/app/(app)/analytics/page.tsx b/src/app/(app)/analytics/page.tsx
+index 9af1ead..1f5f08c 100644
+--- a/src/app/(app)/analytics/page.tsx
++++ b/src/app/(app)/analytics/page.tsx
+@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
+ const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
+ 
+ export default async function AnalyticsPage() {
+-  const [summary, allocation, transactions, snapshots, holdingsWithXirr, activeSips, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, perf1M, perf3M, perf1Y, perfAll] = await Promise.all([
++  const [summary, allocation, transactions, snapshots, holdingsWithXirr, activeSips, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, performanceByPeriod] = await Promise.all([
+     portfolioService.getPortfolioSummary(),
+     portfolioService.getAssetAllocation(),
+     transactionsRepository.findAll(),
+@@ -37,13 +37,11 @@ export default async function AnalyticsPage() {
+     npsService.getCashflows(),
+     npsRepository.findAllSchemeHoldings(),
+     npsRepository.findAllSchemeTransactions(),
+-    // All 4 trend-chart periods fetched up front — the period toggle
+-    // (TrendChartCard) just switches which already-fetched series is
++    // All 4 trend-chart periods reconstructed from ONE raw-data fetch (see
++    // portfolioService.getReconstructedPerformance) — the period toggle
++    // (TrendChartCard) just switches which already-computed series is
+     // shown, no client round-trip per click.
+-    portfolioService.getPortfolioPerformance("1M"),
+-    portfolioService.getPortfolioPerformance("3M"),
+-    portfolioService.getPortfolioPerformance("1Y"),
+-    portfolioService.getPortfolioPerformance("All"),
++    portfolioService.getReconstructedPerformance(["1M", "3M", "1Y", "All"]),
+   ]);
+ 
+   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+@@ -131,7 +129,7 @@ export default async function AnalyticsPage() {
+           </Card>
+         )}
+ 
+-        <TrendChartCard performanceByPeriod={{ "1M": perf1M, "3M": perf3M, "1Y": perf1Y, All: perfAll }} />
++        <TrendChartCard performanceByPeriod={{ "1M": performanceByPeriod["1M"], "3M": performanceByPeriod["3M"], "1Y": performanceByPeriod["1Y"], All: performanceByPeriod["All"] }} />
+ 
+         <RiskMetricsSection volatility={volatility} maxDrawdown={maxDrawdown} sharpe={sharpe} sortino={sortino} />
+ 
+diff --git a/src/app/(app)/dashboard/page.tsx b/src/app/(app)/dashboard/page.tsx
+index 008a4a1..a46eadf 100644
+--- a/src/app/(app)/dashboard/page.tsx
++++ b/src/app/(app)/dashboard/page.tsx
+@@ -32,11 +32,18 @@ export default async function DashboardPage() {
+   // getSegregatedBreakdown (each re-running computeHoldings() from
+   // scratch) plus getRecentActivity and a direct transactions fetch here —
+   // 5x assets.findAll() and 5x transactions.findAll() per page load.
+-  const [{ summary, allocation, topHoldings, recentActivity: activity, breakdown, performance, transactions }, goals, fds, npsCashflows] = await Promise.all([
++  const [{ summary, allocation, topHoldings, recentActivity: activity, breakdown, performance, transactions }, goals, fds, npsCashflows, reconstructedPerformance] = await Promise.all([
+     portfolioService.getDashboardData("3M", 6, 5),
+     goalsRepository.findAll(),
+     fdService.listWithProjections(),
+     npsService.getCashflows(),
++    // Separate from the shared fetch above on purpose — this one needs
++    // price_history/FDs/real transaction dates that getDashboardData
++    // doesn't otherwise fetch (see reconstructHistoricalNetWorth). Only
++    // feeds PerformanceCard, NOT NetWorthCard's sparkline below — that
++    // one stays on the cheap snapshot-derived `performance` since it's a
++    // small decorative glance, not the primary interactive chart.
++    portfolioService.getReconstructedPerformance(["3M"]),
+   ]);
+ 
+   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
+@@ -74,7 +81,7 @@ export default async function DashboardPage() {
+ 
+         {/* Row 3 — full-width performance */}
+         <div className="md:col-span-3 lg:col-span-3">
+-          <PerformanceCard initialPeriod="3M" initialPoints={performance} />
++          <PerformanceCard initialPeriod="3M" initialPoints={reconstructedPerformance["3M"]} />
+         </div>
+ 
+         {/* Row 4 — activity / goals / FDs */}
+diff --git a/src/components/charts/performance-line-chart-impl.tsx b/src/components/charts/performance-line-chart-impl.tsx
+index 61e3b39..3888943 100644
+--- a/src/components/charts/performance-line-chart-impl.tsx
++++ b/src/components/charts/performance-line-chart-impl.tsx
+@@ -4,38 +4,74 @@ import { formatCurrency } from "@/lib/utils/currency";
+ import { formatDate } from "@/lib/utils/date";
+ import type { PerformancePoint } from "@/types/domain/snapshot";
+ 
++/**
++ * Splits into two overlapping series sharing the same X axis: a solid,
++ * filled area for the reconstructed-exact stretch, and a dashed, unfilled
++ * line for the snapshot-approximated stretch (see
++ * reconstructHistoricalNetWorth's isExact flag) — never silently presents
++ * approximated history as if it were as reliable as the real thing (same
++ * "be explicit about what a number does and doesn't represent" pattern as
++ * the CAGR caption and Sharpe/Sortino cutoff-date work elsewhere in this
++ * app). Simplifying assumption: treats the LAST point where isExact is
++ * false as a single boundary — everything at or before it renders dashed,
++ * everything after renders solid. In practice isExact transitions once
++ * (older history is approximated, newer history becomes exact as real
++ * transaction dates + backfilled prices cover it), not back and forth
++ * repeatedly, so this is the honest shape of the real data, not an
++ * oversimplification of it.
++ */
+ export function PerformanceLineChart({ points }: { points: PerformancePoint[] }) {
++  const lastApproxIndex = points.reduce((acc, p, i) => (p.isExact === false ? i : acc), -1);
++  const hasApprox = lastApproxIndex >= 0;
++
++  const data = points.map((p, i) => ({
++    date: p.date,
++    value: p.value,
++    exactValue: i >= lastApproxIndex ? p.value : null,
++    approxValue: i <= lastApproxIndex ? p.value : null,
++  }));
++
+   return (
+-    <ResponsiveContainer width="100%" height="100%">
+-      <AreaChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+-        <defs>
+-          <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
+-            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
+-            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+-          </linearGradient>
+-        </defs>
+-        <XAxis
+-          dataKey="date"
+-          tickFormatter={(d) => formatDate(d, "d MMM")}
+-          tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
+-          axisLine={false}
+-          tickLine={false}
+-          minTickGap={40}
+-        />
+-        <YAxis
+-          tickFormatter={(v) => formatCurrency(v)}
+-          tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
+-          axisLine={false}
+-          tickLine={false}
+-          width={70}
+-        />
+-        <Tooltip
+-          labelFormatter={(d) => formatDate(String(d))}
+-          formatter={(value) => [formatCurrency(Number(value)), "Net worth"]}
+-          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
+-        />
+-        <Area type="monotone" dataKey="value" stroke="var(--accent)" strokeWidth={2} fill="url(#netWorthFill)" />
+-      </AreaChart>
+-    </ResponsiveContainer>
++    <div className="flex h-full w-full flex-col gap-1">
++      <ResponsiveContainer width="100%" height="100%">
++        <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
++          <defs>
++            <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
++              <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
++              <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
++            </linearGradient>
++          </defs>
++          <XAxis
++            dataKey="date"
++            tickFormatter={(d) => formatDate(d, "d MMM")}
++            tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
++            axisLine={false}
++            tickLine={false}
++            minTickGap={40}
++          />
++          <YAxis
++            tickFormatter={(v) => formatCurrency(v)}
++            tick={{ fontSize: 11, fill: "var(--ink-muted)" }}
++            axisLine={false}
++            tickLine={false}
++            width={70}
++          />
++          <Tooltip
++            labelFormatter={(d) => formatDate(String(d))}
++            formatter={(value) => [formatCurrency(Number(value)), "Net worth"]}
++            contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12 }}
++          />
++          {hasApprox && (
++            <Area type="monotone" dataKey="approxValue" stroke="var(--ink-muted)" strokeWidth={1.5} strokeDasharray="5 5" fill="none" connectNulls={false} isAnimationActive={false} />
++          )}
++          <Area type="monotone" dataKey={hasApprox ? "exactValue" : "value"} stroke="var(--accent)" strokeWidth={2} fill="url(#netWorthFill)" connectNulls={false} />
++        </AreaChart>
++      </ResponsiveContainer>
++      {hasApprox && (
++        <p className="px-1 text-[11px] text-ink-muted">
++          Dashed portion is estimated from periodic snapshots, not real historical prices — solid portion is reconstructed from actual transaction dates and prices.
++        </p>
++      )}
++    </div>
+   );
+ }
+diff --git a/src/features/dashboard/actions.ts b/src/features/dashboard/actions.ts
+index d4ec5b2..8017246 100644
+--- a/src/features/dashboard/actions.ts
++++ b/src/features/dashboard/actions.ts
+@@ -4,7 +4,8 @@ import { snapshotService } from "@/lib/services/snapshot.service";
+ import type { ChartPeriod } from "@/constants/chart-periods";
+ 
+ export async function getPerformanceAction(period: ChartPeriod) {
+-  return portfolioService.getPortfolioPerformance(period);
++  const result = await portfolioService.getReconstructedPerformance([period]);
++  return result[period];
+ }
+ 
+ /** Fire-and-forget snapshot write — see ARCHITECTURE.md trade-off #2 (no cron in V1). */
+diff --git a/src/lib/calculations/historical-net-worth.ts b/src/lib/calculations/historical-net-worth.ts
+index 723bdfa..e60008a 100644
+--- a/src/lib/calculations/historical-net-worth.ts
++++ b/src/lib/calculations/historical-net-worth.ts
+@@ -116,3 +116,30 @@ export function reconstructHistoricalNetWorth(input: ReconstructInput): Historic
+     isExact: allSecuritiesExact, // FD is always exact (deterministic, no external dependency) — only securities can fail to be
+   };
+ }
++
++/**
++ * Evenly-spaced ISO dates from the period's start to today, inclusive,
++ * capped to at most `maxPoints` — without this, an "All" series spanning
++ * several years would mean thousands of individual reconstruction calls
++ * (each a small in-memory computation, but still needless work and a
++ * cluttered chart). Always ends on today's actual date, even if that
++ * breaks perfectly even spacing — a graph's last point should be "today",
++ * not "today minus a few days because of the step size".
++ *
++ * `days === null` means "All" — starts from `earliestDate` instead of a
++ * fixed lookback.
++ */
++export function buildDateSeries(days: number | null, earliestDate: string, maxPoints = 180): string[] {
++  const todayMs = Date.now();
++  const startMs = days !== null ? todayMs - days * 86_400_000 : new Date(earliestDate).getTime();
++  const totalDays = Math.max(0, Math.round((todayMs - startMs) / 86_400_000));
++  const step = Math.max(1, Math.ceil(totalDays / maxPoints));
++
++  const dates: string[] = [];
++  for (let d = 0; d <= totalDays; d += step) {
++    dates.push(new Date(startMs + d * 86_400_000).toISOString().slice(0, 10));
++  }
++  const todayStr = new Date(todayMs).toISOString().slice(0, 10);
++  if (dates[dates.length - 1] !== todayStr) dates.push(todayStr);
++  return dates;
++}
+diff --git a/src/lib/services/portfolio.service.ts b/src/lib/services/portfolio.service.ts
+index ecfe1e6..c5d0317 100644
+--- a/src/lib/services/portfolio.service.ts
++++ b/src/lib/services/portfolio.service.ts
+@@ -234,7 +234,7 @@ function deriveRecentActivity(
+   });
+ }
+ 
+-/** Pure — no I/O. Shared by getPortfolioPerformance() and getDashboardData(). */
++/** Pure — no I/O. Feeds getDashboardData()'s `performance` field (NetWorthCard's sparkline) — the cheap, snapshot-dates-only series. PerformanceCard/TrendChartCard use getReconstructedPerformance() instead; see that method's doc comment for why they're no longer the same series. */
+ function derivePerformance(snapshots: Awaited<ReturnType<typeof snapshotsRepository.findAll>>, period: ChartPeriod): PerformancePoint[] {
+   const days = periodToDays(period);
+   const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+@@ -308,11 +308,6 @@ export const portfolioService = {
+     return deriveAllocation(holdings, cashValue, fdValue, npsValue, ppfValue);
+   },
+ 
+-  async getPortfolioPerformance(period: ChartPeriod): Promise<PerformancePoint[]> {
+-    const snapshots = await snapshotsRepository.findAll();
+-    return derivePerformance(snapshots, period);
+-  },
+-
+   async getRecentActivity(limit: number = 8): Promise<ActivityItem[]> {
+     const [transactions, assets] = await Promise.all([transactionsRepository.findAll(), assetsRepository.findAll()]);
+     return deriveRecentActivity(transactions, assets, limit);
+@@ -523,8 +518,8 @@ export const portfolioService = {
+    * per plotted point" discipline this project already applies to
+    * computeHoldings() — see the Dashboard redundant-fetch fix.
+    */
+-  async getHistoricalNetWorthSeries(dates: string[]): Promise<{ date: string; netWorth: number; isExact: boolean }[]> {
+-    const { reconstructHistoricalNetWorth } = await import("@/lib/calculations/historical-net-worth");
++  /** Loads every raw input reconstructHistoricalNetWorth() needs, exactly once — shared by getHistoricalNetWorthSeries() and getReconstructedPerformance() so requesting several periods/date-lists in the same request never re-fetches the same data twice. */
++  async _loadHistoricalContext() {
+     const { BACKFILLABLE_ASSET_TYPES } = await import("@/lib/market-data/historical-provider");
+     const { priceHistoryRepository } = await import("@/lib/database/repositories/price-history.repository");
+     const { fixedDepositsRepository } = await import("@/lib/database/repositories/fixed-deposits.repository");
+@@ -555,8 +550,61 @@ export const portfolioService = {
+ 
+     const snapshotsSortedAsc = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+ 
+-    return dates.map((date) =>
+-      reconstructHistoricalNetWorth({ date, securityAssets, transactionsByAsset, priceHistoryByAsset, fixedDeposits, snapshotsSortedAsc })
+-    );
++    // Earliest date worth reconstructing back to, for "All" — the earlier
++    // of the first transaction ever recorded and the first snapshot ever
++    // taken. Falls back to today if there's simply no history yet (the
++    // empty state on both chart cards already handles a sub-2-point
++    // series, so this doesn't need special-casing here).
++    const earliestDate = [
++      ...allTransactions.map((t) => t.transactionDate),
++      ...snapshots.map((s) => s.snapshotDate),
++    ].sort()[0] ?? new Date().toISOString().slice(0, 10);
++
++    return { securityAssets, transactionsByAsset, priceHistoryByAsset, fixedDeposits, snapshotsSortedAsc, earliestDate };
++  },
++
++  async getHistoricalNetWorthSeries(dates: string[]): Promise<{ date: string; netWorth: number; isExact: boolean }[]> {
++    const { reconstructHistoricalNetWorth } = await import("@/lib/calculations/historical-net-worth");
++    const ctx = await this._loadHistoricalContext();
++    return dates.map((date) => reconstructHistoricalNetWorth({ date, ...ctx }));
++  },
++
++  /**
++   * The reconstructed replacement for getPortfolioPerformance() — real
++   * transaction dates and real historical prices where available (see
++   * PROJECT-STATUS.md's performance-graph work), instead of plotting
++   * whichever dates portfolio_snapshots happened to be recorded on.
++   * Multiple periods computed from ONE raw-data fetch (see
++   * _loadHistoricalContext), so the Analytics page's 4-period toggle
++   * doesn't cost 4x the work.
++   *
++   * The LAST point of every period is overridden to the live
++   * getPortfolioSummary().netWorth figure (and forced isExact: true)
++   * rather than left as a reconstructed value — reconstruction and the
++   * live summary can differ by a small amount today (FD's accrual-vs-
++   * flat-principal gap — see calculateFDValueAsOf's doc comment — and any
++   * lag between a security's last price_history point and its live
++   * current_price), and the graph's rightmost point should always exactly
++   * match the big number displayed next to it, not a close-but-not-quite
++   * reconstruction of it.
++   */
++  async getReconstructedPerformance(periods: ChartPeriod[]): Promise<Record<ChartPeriod, PerformancePoint[]>> {
++    const { reconstructHistoricalNetWorth, buildDateSeries } = await import("@/lib/calculations/historical-net-worth");
++    const [ctx, summary] = await Promise.all([this._loadHistoricalContext(), this.getPortfolioSummary()]);
++
++    const result = {} as Record<ChartPeriod, PerformancePoint[]>;
++    for (const period of periods) {
++      const dates = buildDateSeries(periodToDays(period), ctx.earliestDate);
++      const points: PerformancePoint[] = dates.map((date) => {
++        const point = reconstructHistoricalNetWorth({ date, ...ctx });
++        return { date: point.date, value: point.netWorth, isExact: point.isExact };
++      });
++      if (points.length > 0) {
++        const last = points[points.length - 1];
++        points[points.length - 1] = { ...last, value: summary.netWorth, isExact: true };
++      }
++      result[period] = points;
++    }
++    return result;
+   },
+ };
+diff --git a/src/types/domain/snapshot.ts b/src/types/domain/snapshot.ts
+index 152f3af..498a4d3 100644
+--- a/src/types/domain/snapshot.ts
++++ b/src/types/domain/snapshot.ts
+@@ -42,6 +42,8 @@ export interface AllocationSlice {
+ export interface PerformancePoint {
+   date: string;
+   value: number;
++  /** True when this point was reconstructed from real historical prices (see reconstructHistoricalNetWorth); false when it had to fall back to the nearest portfolio_snapshots value; omitted for the older, purely snapshot-derived series (NetWorthCard's sparkline) — omitted is treated the same as true by the chart, since those points were never mixed with anything less reliable than what they always were. */
++  isExact?: boolean;
+ }
+ 
+ export interface ActivityItem {
+diff --git a/test/historical-net-worth.test.ts b/test/historical-net-worth.test.ts
+index 5333174..cf9f568 100644
+--- a/test/historical-net-worth.test.ts
++++ b/test/historical-net-worth.test.ts
+@@ -4,6 +4,7 @@ import {
+   findSnapshotOnOrBefore,
+   reconstructHistoricalAssetValue,
+   reconstructHistoricalNetWorth,
++  buildDateSeries,
+ } from "@/lib/calculations/historical-net-worth";
+ import type { Transaction } from "@/types/domain/transaction";
+ import type { Asset } from "@/types/domain/asset";
+@@ -143,3 +144,26 @@ describe("reconstructHistoricalNetWorth", () => {
+     expect(result.netWorth).toBe(0);
+   });
+ });
++
++describe("buildDateSeries", () => {
++  it("always ends on today's actual date", () => {
++    const dates = buildDateSeries(30, "2020-01-01");
++    const todayStr = new Date().toISOString().slice(0, 10);
++    expect(dates[dates.length - 1]).toBe(todayStr);
++  });
++
++  it("starts from earliestDate when days is null (All)", () => {
++    const dates = buildDateSeries(null, "2023-06-15", 1000);
++    expect(dates[0]).toBe("2023-06-15");
++  });
++
++  it("never produces more than maxPoints + 1 points even over a multi-year range", () => {
++    const dates = buildDateSeries(365 * 5, "2020-01-01", 180);
++    expect(dates.length).toBeLessThanOrEqual(182); // maxPoints + the guaranteed-today point
++  });
++
++  it("produces a dense daily-ish series for a short period", () => {
++    const dates = buildDateSeries(30, "2020-01-01", 180);
++    expect(dates.length).toBeGreaterThan(25); // ~31 days, step 1, well under the cap
++  });
++});

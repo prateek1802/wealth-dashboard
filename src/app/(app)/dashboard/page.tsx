@@ -32,11 +32,18 @@ export default async function DashboardPage() {
   // getSegregatedBreakdown (each re-running computeHoldings() from
   // scratch) plus getRecentActivity and a direct transactions fetch here —
   // 5x assets.findAll() and 5x transactions.findAll() per page load.
-  const [{ summary, allocation, topHoldings, recentActivity: activity, breakdown, performance, transactions }, goals, fds, npsCashflows] = await Promise.all([
+  const [{ summary, allocation, topHoldings, recentActivity: activity, breakdown, performance, transactions }, goals, fds, npsCashflows, reconstructedPerformance] = await Promise.all([
     portfolioService.getDashboardData("3M", 6, 5),
     goalsRepository.findAll(),
     fdService.listWithProjections(),
     npsService.getCashflows(),
+    // Separate from the shared fetch above on purpose — this one needs
+    // price_history/FDs/real transaction dates that getDashboardData
+    // doesn't otherwise fetch (see reconstructHistoricalNetWorth). Only
+    // feeds PerformanceCard, NOT NetWorthCard's sparkline below — that
+    // one stays on the cheap snapshot-derived `performance` since it's a
+    // small decorative glance, not the primary interactive chart.
+    portfolioService.getReconstructedPerformance(["3M"]),
   ]);
 
   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
@@ -74,7 +81,7 @@ export default async function DashboardPage() {
 
         {/* Row 3 — full-width performance */}
         <div className="md:col-span-3 lg:col-span-3">
-          <PerformanceCard initialPeriod="3M" initialPoints={performance} />
+          <PerformanceCard initialPeriod="3M" initialPoints={reconstructedPerformance["3M"]} />
         </div>
 
         {/* Row 4 — activity / goals / FDs */}

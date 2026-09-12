@@ -4,7 +4,8 @@ import { snapshotService } from "@/lib/services/snapshot.service";
 import type { ChartPeriod } from "@/constants/chart-periods";
 
 export async function getPerformanceAction(period: ChartPeriod) {
-  return portfolioService.getPortfolioPerformance(period);
+  const result = await portfolioService.getReconstructedPerformance([period]);
+  return result[period];
 }
 
 /** Fire-and-forget snapshot write — see ARCHITECTURE.md trade-off #2 (no cron in V1). */

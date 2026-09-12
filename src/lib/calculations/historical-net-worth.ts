@@ -116,3 +116,30 @@ export function reconstructHistoricalNetWorth(input: ReconstructInput): Historic
     isExact: allSecuritiesExact, // FD is always exact (deterministic, no external dependency) — only securities can fail to be
   };
 }
+
+/**
+ * Evenly-spaced ISO dates from the period's start to today, inclusive,
+ * capped to at most `maxPoints` — without this, an "All" series spanning
+ * several years would mean thousands of individual reconstruction calls
+ * (each a small in-memory computation, but still needless work and a
+ * cluttered chart). Always ends on today's actual date, even if that
+ * breaks perfectly even spacing — a graph's last point should be "today",
+ * not "today minus a few days because of the step size".
+ *
+ * `days === null` means "All" — starts from `earliestDate` instead of a
+ * fixed lookback.
+ */
+export function buildDateSeries(days: number | null, earliestDate: string, maxPoints = 180): string[] {
+  const todayMs = Date.now();
+  const startMs = days !== null ? todayMs - days * 86_400_000 : new Date(earliestDate).getTime();
+  const totalDays = Math.max(0, Math.round((todayMs - startMs) / 86_400_000));
+  const step = Math.max(1, Math.ceil(totalDays / maxPoints));
+
+  const dates: string[] = [];
+  for (let d = 0; d <= totalDays; d += step) {
+    dates.push(new Date(startMs + d * 86_400_000).toISOString().slice(0, 10));
+  }
+  const todayStr = new Date(todayMs).toISOString().slice(0, 10);
+  if (dates[dates.length - 1] !== todayStr) dates.push(todayStr);
+  return dates;
+}

@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
 const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
 
 export default async function AnalyticsPage() {
-  const [summary, allocation, transactions, snapshots, holdingsWithXirr, activeSips, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, perf1M, perf3M, perf1Y, perfAll] = await Promise.all([
+  const [summary, allocation, transactions, snapshots, holdingsWithXirr, activeSips, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, performanceByPeriod] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     transactionsRepository.findAll(),
@@ -37,13 +37,11 @@ export default async function AnalyticsPage() {
     npsService.getCashflows(),
     npsRepository.findAllSchemeHoldings(),
     npsRepository.findAllSchemeTransactions(),
-    // All 4 trend-chart periods fetched up front — the period toggle
-    // (TrendChartCard) just switches which already-fetched series is
+    // All 4 trend-chart periods reconstructed from ONE raw-data fetch (see
+    // portfolioService.getReconstructedPerformance) — the period toggle
+    // (TrendChartCard) just switches which already-computed series is
     // shown, no client round-trip per click.
-    portfolioService.getPortfolioPerformance("1M"),
-    portfolioService.getPortfolioPerformance("3M"),
-    portfolioService.getPortfolioPerformance("1Y"),
-    portfolioService.getPortfolioPerformance("All"),
+    portfolioService.getReconstructedPerformance(["1M", "3M", "1Y", "All"]),
   ]);
 
   const securitiesCashflows = transactions.map((t) => ({ date: t.transactionDate, amount: netCashFlow(t) }));
@@ -131,7 +129,7 @@ export default async function AnalyticsPage() {
           </Card>
         )}
 
-        <TrendChartCard performanceByPeriod={{ "1M": perf1M, "3M": perf3M, "1Y": perf1Y, All: perfAll }} />
+        <TrendChartCard performanceByPeriod={{ "1M": performanceByPeriod["1M"], "3M": performanceByPeriod["3M"], "1Y": performanceByPeriod["1Y"], All: performanceByPeriod["All"] }} />
 
         <RiskMetricsSection volatility={volatility} maxDrawdown={maxDrawdown} sharpe={sharpe} sortino={sortino} />
 

@@ -234,7 +234,7 @@ function deriveRecentActivity(
   });
 }
 
-/** Pure — no I/O. Shared by getPortfolioPerformance() and getDashboardData(). */
+/** Pure — no I/O. Feeds getDashboardData()'s `performance` field (NetWorthCard's sparkline) — the cheap, snapshot-dates-only series. PerformanceCard/TrendChartCard use getReconstructedPerformance() instead; see that method's doc comment for why they're no longer the same series. */
 function derivePerformance(snapshots: Awaited<ReturnType<typeof snapshotsRepository.findAll>>, period: ChartPeriod): PerformancePoint[] {
   const days = periodToDays(period);
   const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
@@ -306,11 +306,6 @@ export const portfolioService = {
     ]);
 
     return deriveAllocation(holdings, cashValue, fdValue, npsValue, ppfValue);
-  },
-
-  async getPortfolioPerformance(period: ChartPeriod): Promise<PerformancePoint[]> {
-    const snapshots = await snapshotsRepository.findAll();
-    return derivePerformance(snapshots, period);
   },
 
   async getRecentActivity(limit: number = 8): Promise<ActivityItem[]> {
@@ -523,8 +518,8 @@ export const portfolioService = {
    * per plotted point" discipline this project already applies to
    * computeHoldings() — see the Dashboard redundant-fetch fix.
    */
-  async getHistoricalNetWorthSeries(dates: string[]): Promise<{ date: string; netWorth: number; isExact: boolean }[]> {
-    const { reconstructHistoricalNetWorth } = await import("@/lib/calculations/historical-net-worth");
+  /** Loads every raw input reconstructHistoricalNetWorth() needs, exactly once — shared by getHistoricalNetWorthSeries() and getReconstructedPerformance() so requesting several periods/date-lists in the same request never re-fetches the same data twice. */
+  async _loadHistoricalContext() {
     const { BACKFILLABLE_ASSET_TYPES } = await import("@/lib/market-data/historical-provider");
     const { priceHistoryRepository } = await import("@/lib/database/repositories/price-history.repository");
     const { fixedDepositsRepository } = await import("@/lib/database/repositories/fixed-deposits.repository");
@@ -555,8 +550,61 @@ export const portfolioService = {
 
     const snapshotsSortedAsc = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
 
-    return dates.map((date) =>
-      reconstructHistoricalNetWorth({ date, securityAssets, transactionsByAsset, priceHistoryByAsset, fixedDeposits, snapshotsSortedAsc })
-    );
+    // Earliest date worth reconstructing back to, for "All" — the earlier
+    // of the first transaction ever recorded and the first snapshot ever
+    // taken. Falls back to today if there's simply no history yet (the
+    // empty state on both chart cards already handles a sub-2-point
+    // series, so this doesn't need special-casing here).
+    const earliestDate = [
+      ...allTransactions.map((t) => t.transactionDate),
+      ...snapshots.map((s) => s.snapshotDate),
+    ].sort()[0] ?? new Date().toISOString().slice(0, 10);
+
+    return { securityAssets, transactionsByAsset, priceHistoryByAsset, fixedDeposits, snapshotsSortedAsc, earliestDate };
+  },
+
+  async getHistoricalNetWorthSeries(dates: string[]): Promise<{ date: string; netWorth: number; isExact: boolean }[]> {
+    const { reconstructHistoricalNetWorth } = await import("@/lib/calculations/historical-net-worth");
+    const ctx = await this._loadHistoricalContext();
+    return dates.map((date) => reconstructHistoricalNetWorth({ date, ...ctx }));
+  },
+
+  /**
+   * The reconstructed replacement for getPortfolioPerformance() — real
+   * transaction dates and real historical prices where available (see
+   * PROJECT-STATUS.md's performance-graph work), instead of plotting
+   * whichever dates portfolio_snapshots happened to be recorded on.
+   * Multiple periods computed from ONE raw-data fetch (see
+   * _loadHistoricalContext), so the Analytics page's 4-period toggle
+   * doesn't cost 4x the work.
+   *
+   * The LAST point of every period is overridden to the live
+   * getPortfolioSummary().netWorth figure (and forced isExact: true)
+   * rather than left as a reconstructed value — reconstruction and the
+   * live summary can differ by a small amount today (FD's accrual-vs-
+   * flat-principal gap — see calculateFDValueAsOf's doc comment — and any
+   * lag between a security's last price_history point and its live
+   * current_price), and the graph's rightmost point should always exactly
+   * match the big number displayed next to it, not a close-but-not-quite
+   * reconstruction of it.
+   */
+  async getReconstructedPerformance(periods: ChartPeriod[]): Promise<Record<ChartPeriod, PerformancePoint[]>> {
+    const { reconstructHistoricalNetWorth, buildDateSeries } = await import("@/lib/calculations/historical-net-worth");
+    const [ctx, summary] = await Promise.all([this._loadHistoricalContext(), this.getPortfolioSummary()]);
+
+    const result = {} as Record<ChartPeriod, PerformancePoint[]>;
+    for (const period of periods) {
+      const dates = buildDateSeries(periodToDays(period), ctx.earliestDate);
+      const points: PerformancePoint[] = dates.map((date) => {
+        const point = reconstructHistoricalNetWorth({ date, ...ctx });
+        return { date: point.date, value: point.netWorth, isExact: point.isExact };
+      });
+      if (points.length > 0) {
+        const last = points[points.length - 1];
+        points[points.length - 1] = { ...last, value: summary.netWorth, isExact: true };
+      }
+      result[period] = points;
+    }
+    return result;
   },
 };

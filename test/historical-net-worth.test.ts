@@ -4,6 +4,7 @@ import {
   findSnapshotOnOrBefore,
   reconstructHistoricalAssetValue,
   reconstructHistoricalNetWorth,
+  buildDateSeries,
 } from "@/lib/calculations/historical-net-worth";
 import type { Transaction } from "@/types/domain/transaction";
 import type { Asset } from "@/types/domain/asset";
@@ -141,5 +142,28 @@ describe("reconstructHistoricalNetWorth", () => {
     });
     expect(result.isExact).toBe(true);
     expect(result.netWorth).toBe(0);
+  });
+});
+
+describe("buildDateSeries", () => {
+  it("always ends on today's actual date", () => {
+    const dates = buildDateSeries(30, "2020-01-01");
+    const todayStr = new Date().toISOString().slice(0, 10);
+    expect(dates[dates.length - 1]).toBe(todayStr);
+  });
+
+  it("starts from earliestDate when days is null (All)", () => {
+    const dates = buildDateSeries(null, "2023-06-15", 1000);
+    expect(dates[0]).toBe("2023-06-15");
+  });
+
+  it("never produces more than maxPoints + 1 points even over a multi-year range", () => {
+    const dates = buildDateSeries(365 * 5, "2020-01-01", 180);
+    expect(dates.length).toBeLessThanOrEqual(182); // maxPoints + the guaranteed-today point
+  });
+
+  it("produces a dense daily-ish series for a short period", () => {
+    const dates = buildDateSeries(30, "2020-01-01", 180);
+    expect(dates.length).toBeGreaterThan(25); // ~31 days, step 1, well under the cap
   });
 });
