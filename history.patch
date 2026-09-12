@@ -1,552 +1,248 @@
-diff --git a/src/features/portfolio/actions.ts b/src/features/portfolio/actions.ts
-index d3f8f1c..a2043a7 100644
---- a/src/features/portfolio/actions.ts
-+++ b/src/features/portfolio/actions.ts
-@@ -115,3 +115,23 @@ export async function refreshLivePricesAction(assetIds?: string[]): Promise<Refr
-     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
-   }
- }
+diff --git a/src/app/(app)/holdings/page.tsx b/src/app/(app)/holdings/page.tsx
+index 9d5c3b6..33e3d91 100644
+--- a/src/app/(app)/holdings/page.tsx
++++ b/src/app/(app)/holdings/page.tsx
+@@ -2,6 +2,7 @@ import { TopBar } from "@/components/layout/top-bar";
+ import { portfolioService } from "@/lib/services/portfolio.service";
+ import { watchlistRepository } from "@/lib/database/repositories/watchlist.repository";
+ import { HoldingsHubView } from "@/features/holdings/components/holdings-hub-view";
++import { BackfillAllHistoryButton } from "@/features/portfolio/components/backfill-all-history-button";
+ 
+ export const dynamic = "force-dynamic";
+ 
+@@ -11,6 +12,9 @@ export default async function HoldingsHubPage() {
+   return (
+     <div>
+       <TopBar title="Holdings" subtitle="Everything you own, by category — tap a card to see individual holdings" />
++      <div className="flex justify-end px-4 pt-4 md:px-6">
++        <BackfillAllHistoryButton />
++      </div>
+       <HoldingsHubView allocation={allocation} watchlistCount={watchlistItems.length} />
+     </div>
+   );
+diff --git a/src/app/api/cron/backfill-history/route.ts b/src/app/api/cron/backfill-history/route.ts
+new file mode 100644
+index 0000000..5191289
+--- /dev/null
++++ b/src/app/api/cron/backfill-history/route.ts
+@@ -0,0 +1,85 @@
++import { NextResponse } from "next/server";
++import { getAdminSupabaseClient } from "@/lib/database/admin-client";
++import { rowToAsset } from "@/lib/database/asset-mapping";
++import { rowToTransaction } from "@/lib/database/repositories/transactions.repository";
++import { computeHoldingsFrom } from "@/lib/services/portfolio.service";
++import { fetchHistoricalPricesForAsset, BACKFILLABLE_ASSET_TYPES } from "@/lib/market-data/historical-provider";
++import type { AssetRow, TransactionRow } from "@/types/database";
++
++export const maxDuration = 60; // Vercel Hobby plan's ceiling — see refresh-prices/route.ts's identical note. This job's per-asset payloads (a fund's ENTIRE NAV history, refetched in full each run) are heavier than a single live quote, so this is more likely to bump into the cap as holdings grow — if that happens, the fix is to make historical-provider.ts's fetchers accept a since-date and request only the gap, not to raise this further.
 +
 +/**
-+ * One-time historical backfill for a single asset — see
-+ * priceHistoryService.backfillHistory / lib/market-data/historical-provider.ts.
-+ * Deliberately per-asset and manually triggered, not part of Refresh Prices
-+ * (which only ever touches today's price) — a user clicks this once (or
-+ * again later if they want to re-check for a wider range as sources allow),
-+ * not on every page load.
++ * Scheduled via vercel.json at 16:00 UTC / 21:30 IST, every day including
++ * weekends (unlike refresh-prices' weekday-only schedule) — mutual fund
++ * NAVs are typically published through the evening, and crypto trades
++ * 24/7, so there's no "market closed" day to skip the way there is for
++ * equities. Automates what the "Backfill All History" button (Holdings
++ * hub) does on demand, so historical price_history stays topped up
++ * without the user remembering to click it. Mirrors refresh-prices/
++ * route.ts's structure closely (admin client, same userId-from-existing-
++ * row trick, same CRON_SECRET auth) — see that file's comments for why
++ * each piece exists.
++ *
++ * Deliberately NOT a full daily refetch's worth of NEW work most days:
++ * fetchHistoricalPricesForAsset() returns an asset's entire available
++ * series every time (no since-date param — see that module's doc
++ * comment), but this route only INSERTs points for dates not already in
++ * price_history, so a day where nothing changed costs one external fetch
++ * per holding but zero new rows. The dedup is what actually matters here,
++ * not the fetch size — worth revisiting only if holdings count or
++ * maxDuration becomes a real constraint (see the comment above).
 + */
-+export async function backfillAssetHistoryAction(assetId: string): Promise<{ ok: true; pointsAdded: number } | { ok: false; error: string }> {
++export async function GET(request: Request) {
++  const authHeader = request.headers.get("authorization");
++  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
++    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
++  }
++
 +  try {
-+    const { priceHistoryService } = await import("@/lib/services/price-history.service");
-+    const { pointsAdded } = await priceHistoryService.backfillHistory(assetId);
-+    revalidatePath(ROUTES.investmentDetail(assetId));
-+    return { ok: true, pointsAdded };
++    const db = getAdminSupabaseClient();
++
++    const [{ data: assetRows, error: assetsError }, { data: txnRows, error: txnError }] = await Promise.all([
++      db.from("assets").select("*").eq("is_active", true),
++      db.from("transactions").select("*"),
++    ]);
++    if (assetsError) throw assetsError;
++    if (txnError) throw txnError;
++
++    const userId = (assetRows as (AssetRow & { user_id: string })[])[0]?.user_id;
++    if (!userId) {
++      return NextResponse.json({ ok: true, assetsBackfilled: 0, totalPointsAdded: 0, note: "No assets exist yet — nothing to backfill.", ranAt: new Date().toISOString() });
++    }
++
++    const assets = (assetRows as AssetRow[]).map(rowToAsset);
++    const transactions = (txnRows as TransactionRow[]).map(rowToTransaction);
++    const holdings = computeHoldingsFrom(assets, transactions).filter((h) => h.quantity > 1e-9);
++    const targets = holdings.filter((h) => (BACKFILLABLE_ASSET_TYPES as readonly string[]).includes(h.asset.assetType));
++
++    let assetsBackfilled = 0;
++    let totalPointsAdded = 0;
++
++    for (const holding of targets) {
++      const asset = holding.asset;
++      const points = await fetchHistoricalPricesForAsset(asset);
++      if (points.length === 0) continue;
++
++      const { data: existingRows, error: existingError } = await db.from("price_history").select("recorded_date").eq("asset_id", asset.id);
++      if (existingError) throw existingError;
++      const existingDates = new Set((existingRows as { recorded_date: string }[]).map((r) => r.recorded_date));
++
++      const toInsert = points.filter((p) => !existingDates.has(p.date)).map((p) => ({ user_id: userId, asset_id: asset.id, price: p.price, recorded_date: p.date, source: "backfill" as const }));
++      if (toInsert.length === 0) continue;
++
++      const { error: insertError } = await db.from("price_history").insert(toInsert);
++      if (insertError) throw insertError;
++
++      assetsBackfilled += 1;
++      totalPointsAdded += toInsert.length;
++    }
++
++    return NextResponse.json({ ok: true, assetsBackfilled, totalPointsAdded, ranAt: new Date().toISOString() });
 +  } catch (err) {
-+    logServerError("backfillAssetHistoryAction", err);
-+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
++    console.error("[cron:backfill-history]", err);
++    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" }, { status: 500 });
 +  }
 +}
-diff --git a/src/features/portfolio/components/investment-detail.tsx b/src/features/portfolio/components/investment-detail.tsx
-index 917d419..2441f07 100644
---- a/src/features/portfolio/components/investment-detail.tsx
-+++ b/src/features/portfolio/components/investment-detail.tsx
-@@ -9,15 +9,17 @@ import { EmptyState } from "@/components/shared/empty-state";
- import { PerformanceLineChart } from "@/components/charts/performance-line-chart";
- import { EditAssetDialog } from "./edit-asset-dialog";
+diff --git a/src/features/portfolio/components/backfill-all-history-button.tsx b/src/features/portfolio/components/backfill-all-history-button.tsx
+new file mode 100644
+index 0000000..7a45f55
+--- /dev/null
++++ b/src/features/portfolio/components/backfill-all-history-button.tsx
+@@ -0,0 +1,48 @@
++"use client";
++import { useTransition } from "react";
++import { toast } from "sonner";
++import { Button } from "@/components/ui/button";
++import { backfillAllAssetHistoryAction } from "@/features/portfolio/actions";
++import { History } from "lucide-react";
++
++/**
++ * Lives on the Holdings hub (the sidebar-linked top-level page) rather than
++ * buried inside a single filtered /portfolio?type=... category view — it's
++ * a global, cross-category action (every backfillable holding, regardless
++ * of type), so it belongs on the page that's actually the "all holdings"
++ * home, not nested one level deeper. A daily cron (see
++ * api/cron/backfill-history) now also runs this automatically, so this
++ * button is for an on-demand top-up, not the only way it happens.
++ */
++export function BackfillAllHistoryButton() {
++  const [isBackfilling, startBackfill] = useTransition();
++
++  function handleClick() {
++    startBackfill(async () => {
++      const result = await backfillAllAssetHistoryAction();
++      if (!result.ok) {
++        toast.error(result.error);
++        return;
++      }
++      if (result.assetsBackfilled === 0) {
++        toast.info("No holdings with a historical price source to backfill.");
++      } else {
++        toast.success(
++          `Backfilled ${result.assetsBackfilled} holding${result.assetsBackfilled === 1 ? "" : "s"} · ${result.totalPointsAdded} price${result.totalPointsAdded === 1 ? "" : "s"} added${result.assetsSkipped ? ` · ${result.assetsSkipped} failed` : ""}`
++        );
++      }
++    });
++  }
++
++  return (
++    <Button
++      variant="outline"
++      size="sm"
++      onClick={handleClick}
++      disabled={isBackfilling}
++      title="One-time (or top-up) fetch of real historical prices for every eligible holding — mutual funds, stocks, ETFs, crypto. Also runs automatically once a day."
++    >
++      <History className="size-3.5" /> {isBackfilling ? "Backfilling…" : "Backfill All History"}
++    </Button>
++  );
++}
+diff --git a/src/features/portfolio/components/portfolio-view.tsx b/src/features/portfolio/components/portfolio-view.tsx
+index 0283672..ee06983 100644
+--- a/src/features/portfolio/components/portfolio-view.tsx
++++ b/src/features/portfolio/components/portfolio-view.tsx
+@@ -8,12 +8,12 @@ import { PriceFreshness } from "@/components/shared/price-freshness";
+ import { Button } from "@/components/ui/button";
+ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
  import { TransactionDialog } from "@/features/transactions/components/transaction-dialog";
--import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
-+import { AssetRefreshButton } from "@/components/shared/asset-refresh-button";
- import { PriceFreshness } from "@/components/shared/price-freshness";
- import { deleteTransactionAction } from "@/features/transactions/actions";
-+import { backfillAssetHistoryAction } from "@/features/portfolio/actions";
-+import { BACKFILLABLE_ASSET_TYPES } from "@/lib/market-data/historical-provider";
+-import { refreshLivePricesAction, backfillAllAssetHistoryAction } from "../actions";
++import { refreshLivePricesAction } from "../actions";
  import { formatCurrency, formatCurrencyPrecise, formatPercent, formatSignedCurrency, formatQuantity } from "@/lib/utils/currency";
- import { formatDate } from "@/lib/utils/date";
- import { ASSET_TYPE_LABELS } from "@/constants/asset-types";
+ import { ASSET_TYPE_LABELS, type AssetType } from "@/constants/asset-types";
  import { getAssetDisplayLabel, isMutualFundType, quantityLabel, avgPriceLabel, currentPriceLabel } from "@/lib/utils/asset-display";
  import { cn } from "@/lib/utils/cn";
--import { Pencil, Plus, Trash2, LineChart, Receipt } from "lucide-react";
-+import { Pencil, Plus, Trash2, LineChart, Receipt, History } from "lucide-react";
- import type { Holding } from "@/types/domain/holding";
- import type { Transaction } from "@/types/domain/transaction";
- import type { PriceHistoryPoint } from "@/types/domain/price-history";
-@@ -27,10 +29,12 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
-   const [addTxnOpen, setAddTxnOpen] = useState(false);
-   const [editTxnTarget, setEditTxnTarget] = useState<Transaction | null>(null);
-   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
-+  const [isBackfilling, setIsBackfilling] = useState(false);
-   const TXN_PAGE_SIZE = 50;
-   const [visibleTxnCount, setVisibleTxnCount] = useState(TXN_PAGE_SIZE);
-   const { asset } = holding;
-   const isGain = holding.unrealizedPnl >= 0;
-+  const canBackfill = (BACKFILLABLE_ASSET_TYPES as readonly string[]).includes(asset.assetType);
+-import { Wallet, Plus, LayoutGrid, List, RefreshCw, History, ChevronDown } from "lucide-react";
++import { Wallet, Plus, LayoutGrid, List, RefreshCw, ChevronDown } from "lucide-react";
+ import Link from "next/link";
+ import { ROUTES } from "@/constants/routes";
+ import type { HoldingWithXIRR } from "@/lib/services/portfolio.service";
+@@ -160,7 +160,6 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
+   const [view, setView] = useState<"cards" | "table">("cards");
+   const [dialogOpen, setDialogOpen] = useState(false);
+   const [isRefreshing, startRefresh] = useTransition();
+-  const [isBackfilling, startBackfill] = useTransition();
  
-   async function handleDelete(txn: Transaction) {
-     const result = await deleteTransactionAction(txn.id, asset.id);
-@@ -38,6 +42,17 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
-     else toast.error(result.error);
+   function handleRefresh() {
+     startRefresh(async () => {
+@@ -177,23 +176,6 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
+     });
    }
  
-+  async function handleBackfill() {
-+    setIsBackfilling(true);
-+    const result = await backfillAssetHistoryAction(asset.id);
-+    setIsBackfilling(false);
-+    if (result.ok) {
-+      toast.success(result.pointsAdded > 0 ? `Added ${result.pointsAdded} historical price${result.pointsAdded === 1 ? "" : "s"}` : "No new historical prices found");
-+    } else {
-+      toast.error(result.error);
-+    }
-+  }
-+
+-  function handleBackfillAll() {
+-    startBackfill(async () => {
+-      const result = await backfillAllAssetHistoryAction();
+-      if (!result.ok) {
+-        toast.error(result.error);
+-        return;
+-      }
+-      if (result.assetsBackfilled === 0) {
+-        toast.info("No holdings with a historical price source to backfill.");
+-      } else {
+-        toast.success(
+-          `Backfilled ${result.assetsBackfilled} holding${result.assetsBackfilled === 1 ? "" : "s"} · ${result.totalPointsAdded} price${result.totalPointsAdded === 1 ? "" : "s"} added${result.assetsSkipped ? ` · ${result.assetsSkipped} failed` : ""}`
+-        );
+-      }
+-    });
+-  }
+-
+   const groups = groupHoldings(holdings);
+ 
    return (
-     <div className="flex flex-col gap-6 p-4 lg:p-8">
-       <div className="flex flex-wrap items-start justify-between gap-4">
-@@ -50,7 +65,12 @@ export function InvestmentDetail({ holding, transactions, priceHistory }: { hold
-           <p className="text-sm text-ink-muted">{getAssetDisplayLabel(asset).secondary}</p>
-         </div>
+@@ -206,14 +188,6 @@ export function PortfolioView({ holdings, flatten = false }: { holdings: Holding
+           </TabsList>
+         </Tabs>
          <div className="flex gap-2">
--          <AssetRefreshButton assetId={asset.id} assetLabel={getAssetDisplayLabel(asset).primary} className="h-10 w-10" iconClassName="size-4" />
-+          <AssetRefreshButton assetId={asset.id} assetLabel={getAssetDisplayLabel(asset).primary} className="h-10 w-10" iconClassName="size-4" />
-+          {canBackfill && (
-+            <Button variant="outline" onClick={handleBackfill} disabled={isBackfilling} title="Fetch real historical prices for this holding, one time, from its own price source">
-+              <History className="size-4" /> {isBackfilling ? "Backfilling…" : "Backfill History"}
-+            </Button>
-+          )}
-           <Button variant="outline" onClick={() => setEditOpen(true)}>
-             <Pencil className="size-4" /> Edit Asset
+-          <Button
+-            variant="outline"
+-            onClick={handleBackfillAll}
+-            disabled={isBackfilling || holdings.length === 0}
+-            title="One-time fetch of real historical prices for every eligible holding (mutual funds, stocks, ETFs, crypto) — not part of the daily price refresh"
+-          >
+-            <History className="size-4" /> {isBackfilling ? "Backfilling…" : "Backfill All History"}
+-          </Button>
+           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing || holdings.length === 0}>
+             <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} /> Refresh Prices
            </Button>
-diff --git a/src/lib/database/repositories/price-history.repository.ts b/src/lib/database/repositories/price-history.repository.ts
-index 37ad659..8f0c37c 100644
---- a/src/lib/database/repositories/price-history.repository.ts
-+++ b/src/lib/database/repositories/price-history.repository.ts
-@@ -6,7 +6,7 @@ import type { PriceHistoryPoint } from "@/types/domain/price-history";
- import type { PriceHistoryRow } from "@/types/database";
- 
- function rowToPoint(row: PriceHistoryRow): PriceHistoryPoint {
--  return { id: row.id, assetId: row.asset_id, price: row.price, recordedDate: row.recorded_date, createdAt: row.created_at };
-+  return { id: row.id, assetId: row.asset_id, price: row.price, recordedDate: row.recorded_date, source: row.source, createdAt: row.created_at };
- }
- 
- export const priceHistoryRepository = {
-@@ -29,30 +29,64 @@ export const priceHistoryRepository = {
-     return (data as PriceHistoryRow[]).map(rowToPoint);
-   },
- 
--  /** Upsert-by-(assetId, today) — at most one point per asset per calendar date, same pattern as portfolio_snapshots. */
-+  /** Upsert-by-(assetId, today), source='manual' — at most one point per asset per calendar date, same pattern as portfolio_snapshots. */
-   async recordToday(assetId: string, price: number): Promise<PriceHistoryPoint> {
-     return this.recordForDate(assetId, price, todayISO());
-   },
- 
--  /** Same upsert as recordToday but for an arbitrary date — used by backup.service.ts's restore, which needs to write historical points, not just today's. */
--  async recordForDate(assetId: string, price: number, date: string): Promise<PriceHistoryPoint> {
-+  /** Same upsert as recordToday but for an arbitrary date and (optionally) source — defaults to 'manual'. Used by backup.service.ts's restore, which needs to write historical points (preserving whatever source they were originally recorded with) rather than just today's. */
-+  async recordForDate(assetId: string, price: number, date: string, source: "manual" | "backfill" = "manual"): Promise<PriceHistoryPoint> {
-     if (isDemoMode()) {
-       const existing = demoPriceHistory.find((p) => p.assetId === assetId && p.recordedDate === date);
-       if (existing) {
-         existing.price = price;
-         return existing;
-       }
--      const point: PriceHistoryPoint = { id: nextId("price"), assetId, price, recordedDate: date, createdAt: new Date().toISOString() };
-+      const point: PriceHistoryPoint = { id: nextId("price"), assetId, price, recordedDate: date, source, createdAt: new Date().toISOString() };
-       demoPriceHistory.push(point);
-       return point;
+diff --git a/vercel.json b/vercel.json
+index 67c01cb..e1c5ed8 100644
+--- a/vercel.json
++++ b/vercel.json
+@@ -3,6 +3,10 @@
+     {
+       "path": "/api/cron/refresh-prices",
+       "schedule": "15 10 * * 1-5"
++    },
++    {
++      "path": "/api/cron/backfill-history",
++      "schedule": "0 16 * * *"
      }
-     const db = await getServerSupabaseClient();
-     const { data, error } = await db
-       .from("price_history")
--      .upsert({ asset_id: assetId, price, recorded_date: date }, { onConflict: "asset_id,recorded_date" })
-+      .upsert({ asset_id: assetId, price, recorded_date: date, source }, { onConflict: "asset_id,recorded_date" })
-       .select()
-       .single();
-     if (error) throw error;
-     return rowToPoint(data as PriceHistoryRow);
-   },
-+
-+  /**
-+   * Bulk upsert for a one-time historical backfill (see
-+   * lib/market-data/historical-provider.ts) — source='backfill', explicitly
-+   * distinct from the organically-collected 'manual' points (see
-+   * schema.sql's price_history comment for why the distinction exists).
-+   * Never overwrites an existing point (manual OR a prior backfill) for a
-+   * date that already has one — a real recorded price for that day takes
-+   * precedence, since a manual entry may reflect the user's own broker
-+   * statement rather than an API's EOD figure. Returns how many points were
-+   * actually newly inserted (not just fetched — some may already exist).
-+   */
-+  async recordBackfillBatch(assetId: string, points: { date: string; price: number }[]): Promise<number> {
-+    if (points.length === 0) return 0;
-+    if (isDemoMode()) {
-+      let inserted = 0;
-+      for (const p of points) {
-+        const existing = demoPriceHistory.find((x) => x.assetId === assetId && x.recordedDate === p.date);
-+        if (existing) continue;
-+        demoPriceHistory.push({ id: nextId("price"), assetId, price: p.price, recordedDate: p.date, source: "backfill", createdAt: new Date().toISOString() });
-+        inserted += 1;
-+      }
-+      return inserted;
-+    }
-+    const db = await getServerSupabaseClient();
-+    const existing = await db.from("price_history").select("recorded_date").eq("asset_id", assetId);
-+    if (existing.error) throw existing.error;
-+    const existingDates = new Set((existing.data as { recorded_date: string }[]).map((r) => r.recorded_date));
-+    const toInsert = points.filter((p) => !existingDates.has(p.date)).map((p) => ({ asset_id: assetId, price: p.price, recorded_date: p.date, source: "backfill" as const }));
-+    if (toInsert.length === 0) return 0;
-+    const { error } = await db.from("price_history").insert(toInsert);
-+    if (error) throw error;
-+    return toInsert.length;
-+  },
- };
-diff --git a/src/lib/market-data/historical-provider.ts b/src/lib/market-data/historical-provider.ts
-new file mode 100644
-index 0000000..4f3452f
---- /dev/null
-+++ b/src/lib/market-data/historical-provider.ts
-@@ -0,0 +1,150 @@
-+import { normalizeDateString } from "@/lib/utils/date-normalize";
-+import { toYahooSymbol, COINGECKO_IDS } from "./live-provider";
-+import type { Asset } from "@/types/domain/asset";
-+
-+/**
-+ * One-time historical backfill sources — separate from live-provider.ts's
-+ * "latest quote" functions, and deliberately NOT called on every render or
-+ * every Refresh Prices click (see priceHistoryRepository.recordBackfillBatch
-+ * and its 'backfill' vs 'manual' source distinction in schema.sql). Each
-+ * fetcher below was verified directly against the real, current API before
-+ * being written — not assumed from memory or from older docs — per this
-+ * project's established rule for every external market-data integration.
-+ *
-+ * Every function here returns [] on any failure (never throws) and never
-+ * fabricates a point for a date it couldn't get real data for — same
-+ * invariant as the rest of this project's market-data code.
-+ */
-+
-+export interface HistoricalPricePoint {
-+  date: string; // ISO YYYY-MM-DD
-+  price: number;
-+}
-+
-+/**
-+ * mfapi.in's per-scheme endpoint WITHOUT "/latest" returns the fund's
-+ * entire historical NAV series (verified live: api.mfapi.in/mf/{code} —
-+ * no depth limit observed, dates as "DD-MM-YYYY", nav as a string).
-+ * Fetching the full series unfiltered is simplest and most robust for a
-+ * one-time backfill — no pagination or date-range chunking needed.
-+ */
-+export function parseMFAPIHistoryResponse(data: unknown): HistoricalPricePoint[] {
-+  const rows = (data as { data?: unknown })?.data;
-+  if (!Array.isArray(rows)) return [];
-+  const points: HistoricalPricePoint[] = [];
-+  for (const row of rows) {
-+    const dateRaw = (row as Record<string, unknown>)?.date;
-+    const navRaw = (row as Record<string, unknown>)?.nav;
-+    if (typeof dateRaw !== "string" || typeof navRaw !== "string") continue;
-+    const date = normalizeDateString(dateRaw);
-+    const price = parseFloat(navRaw);
-+    if (!date || !Number.isFinite(price)) continue; // skip unparseable rows rather than failing the whole backfill
-+    points.push({ date, price });
-+  }
-+  return points;
-+}
-+
-+export async function fetchMutualFundHistoricalPrices(schemeCode: string): Promise<HistoricalPricePoint[]> {
-+  try {
-+    const res = await fetch(`https://api.mfapi.in/mf/${encodeURIComponent(schemeCode)}`, { cache: "no-store" });
-+    if (!res.ok) return [];
-+    return parseMFAPIHistoryResponse(await res.json());
-+  } catch {
-+    return [];
-+  }
-+}
-+
-+/**
-+ * Yahoo's chart endpoint (same host/path as live-provider.ts's
-+ * getEquityQuote, just a longer range) supports range=max, which returns
-+ * the symbol's entire available daily history — verified against multiple
-+ * current (2026) independent sources describing this exact endpoint/param
-+ * shape; Yahoo itself publishes no official docs, so "verified" here means
-+ * cross-checked against several current write-ups, not a single source.
-+ * Still the same unofficial/no-SLA caveat as the rest of this app's Yahoo
-+ * usage (see live-provider.ts's top-of-file comment).
-+ */
-+export function parseYahooChartHistoryResponse(data: unknown): HistoricalPricePoint[] {
-+  const result = (data as { chart?: { result?: unknown[] } })?.chart?.result?.[0] as
-+    | { timestamp?: unknown; indicators?: { quote?: { close?: unknown }[] } }
-+    | undefined;
-+  const timestamps = result?.timestamp;
-+  const closes = result?.indicators?.quote?.[0]?.close;
-+  if (!Array.isArray(timestamps) || !Array.isArray(closes)) return [];
-+  const points: HistoricalPricePoint[] = [];
-+  for (let i = 0; i < timestamps.length; i++) {
-+    const ts = timestamps[i];
-+    const close = closes[i];
-+    if (typeof ts !== "number" || typeof close !== "number" || !Number.isFinite(close)) continue; // Yahoo returns null close for some days within range (holidays/gaps) — skip rather than fabricate
-+    points.push({ date: new Date(ts * 1000).toISOString().slice(0, 10), price: close });
-+  }
-+  return points;
-+}
-+
-+export async function fetchEquityHistoricalPrices(asset: Pick<Asset, "symbol" | "assetType" | "exchange" | "country">): Promise<HistoricalPricePoint[]> {
-+  const yahooSymbol = toYahooSymbol(asset);
-+  try {
-+    const res = await fetch(
-+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=max`,
-+      { cache: "no-store", headers: { "User-Agent": "Mozilla/5.0" } }
-+    );
-+    if (!res.ok) return [];
-+    return parseYahooChartHistoryResponse(await res.json());
-+  } catch {
-+    return [];
-+  }
-+}
-+
-+/**
-+ * CoinGecko's public (no-key) tier caps historical data to the past 365
-+ * days — confirmed directly from CoinGecko's own support docs, not assumed
-+ * ("with the public plan, access to historical data is limited to the past
-+ * 365 days"). This is a real, external limit, not a choice this app is
-+ * making — a crypto holding older than a year genuinely has no fetchable
-+ * exact history here, and reconstructHistoricalNetWorth (see
-+ * PROJECT-STATUS.md's graph-accuracy work) needs to fall back to the
-+ * snapshot approximation beyond this window, same as it does for NPS,
-+ * just for a different reason. /market_chart/range's granularity is
-+ * "auto" — a 365-day window returns daily points, which is what this
-+ * fetcher relies on rather than requesting an interval explicitly.
-+ */
-+export function parseCoinGeckoRangeResponse(data: unknown): HistoricalPricePoint[] {
-+  const prices = (data as { prices?: unknown })?.prices;
-+  if (!Array.isArray(prices)) return [];
-+  const byDate = new Map<string, number>(); // last point per calendar day wins (closest to that day's close)
-+  for (const entry of prices) {
-+    if (!Array.isArray(entry) || entry.length < 2) continue;
-+    const [ms, price] = entry;
-+    if (typeof ms !== "number" || typeof price !== "number" || !Number.isFinite(price)) continue;
-+    byDate.set(new Date(ms).toISOString().slice(0, 10), price);
-+  }
-+  return Array.from(byDate.entries()).map(([date, price]) => ({ date, price }));
-+}
-+
-+export async function fetchCryptoHistoricalPrices(symbol: string): Promise<HistoricalPricePoint[]> {
-+  const id = COINGECKO_IDS[symbol.toUpperCase()];
-+  if (!id) return [];
-+  const to = Math.floor(Date.now() / 1000);
-+  const from = to - 365 * 86_400; // the hard cap of the free tier — see doc comment above
-+  try {
-+    const res = await fetch(
-+      `https://api.coingecko.com/api/v3/coins/${id}/market_chart/range?vs_currency=inr&from=${from}&to=${to}`,
-+      { cache: "no-store" }
-+    );
-+    if (!res.ok) return [];
-+    return parseCoinGeckoRangeResponse(await res.json());
-+  } catch {
-+    return [];
-+  }
-+}
-+
-+/** Asset types a real historical source exists for (see fetchHistoricalPricesForAsset) — drives whether the "Backfill history" button shows at all. */
-+export const BACKFILLABLE_ASSET_TYPES = ["crypto", "mutual_fund", "mutual_fund_debt", "stock_in", "stock_us", "etf", "bond"] as const;
-+
-+/** Routes by asset type, same shape as live-provider.ts's getLiveQuoteForAsset — FD/PPF/Bank/NPS aren't Assets and have no market history to fetch here (FD's is computed deterministically instead; see calculateFDValueAsOf). */
-+export async function fetchHistoricalPricesForAsset(asset: Pick<Asset, "symbol" | "assetType" | "exchange" | "country">): Promise<HistoricalPricePoint[]> {
-+  if (asset.assetType === "crypto") return fetchCryptoHistoricalPrices(asset.symbol);
-+  if (asset.assetType === "mutual_fund" || asset.assetType === "mutual_fund_debt") return fetchMutualFundHistoricalPrices(asset.symbol);
-+  if (["stock_in", "stock_us", "etf", "bond"].includes(asset.assetType)) return fetchEquityHistoricalPrices(asset);
-+  return [];
-+}
-diff --git a/src/lib/market-data/live-provider.ts b/src/lib/market-data/live-provider.ts
-index e9364be..56ba810 100644
---- a/src/lib/market-data/live-provider.ts
-+++ b/src/lib/market-data/live-provider.ts
-@@ -20,7 +20,7 @@ import type { Asset } from "@/types/domain/asset";
-  * interface, no calling code changes.
-  */
- 
--const COINGECKO_IDS: Record<string, string> = {
-+export const COINGECKO_IDS: Record<string, string> = {
-   BTC: "bitcoin",
-   ETH: "ethereum",
-   SOL: "solana",
-@@ -55,7 +55,7 @@ async function getCryptoQuote(symbol: string): Promise<Quote | null> {
-  * `exchange`/`country` on the asset (see DATABASE.md) drive this mapping —
-  * this is exactly what those nullable metadata columns were reserved for.
-  */
--function toYahooSymbol(asset: Pick<Asset, "symbol" | "assetType" | "exchange" | "country">): string {
-+export function toYahooSymbol(asset: Pick<Asset, "symbol" | "assetType" | "exchange" | "country">): string {
-   if (asset.assetType === "stock_us") return asset.symbol;
-   if (asset.exchange === "BSE") return `${asset.symbol}.BO`;
-   // Default Indian-listed securities (stock_in, most etf/mutual_fund entries) to NSE.
-diff --git a/src/lib/services/backup.service.ts b/src/lib/services/backup.service.ts
-index 181c94a..592ff73 100644
---- a/src/lib/services/backup.service.ts
-+++ b/src/lib/services/backup.service.ts
-@@ -286,7 +286,7 @@ export const backupService = {
-       const assetId = assetIdMap.get(point.assetId);
-       if (!assetId) { summary.errors.push(`Price history point on ${point.recordedDate}: referenced asset not found in backup`); continue; }
-       try {
--        await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate);
-+        await priceHistoryRepository.recordForDate(assetId, point.price, point.recordedDate, point.source ?? "manual");
-         summary.priceHistory += 1;
-       } catch (err) {
-         logServerError("importBackupAction:priceHistory", err);
-diff --git a/src/lib/services/price-history.service.ts b/src/lib/services/price-history.service.ts
-index f402ca3..edd0d47 100644
---- a/src/lib/services/price-history.service.ts
-+++ b/src/lib/services/price-history.service.ts
-@@ -9,4 +9,21 @@ export const priceHistoryService = {
-   async record(assetId: string, price: number) {
-     return priceHistoryRepository.recordToday(assetId, price);
-   },
-+
-+  /**
-+   * One-time historical backfill for one asset — fetches its real
-+   * historical price series (see lib/market-data/historical-provider.ts)
-+   * and stores it with source='backfill'. Manually triggered (an explicit
-+   * "Backfill history" action), never run automatically on page load or on
-+   * every Refresh Prices — see that module's doc comment for why.
-+   */
-+  async backfillHistory(assetId: string): Promise<{ pointsAdded: number }> {
-+    const { assetsRepository } = await import("@/lib/database/repositories/assets.repository");
-+    const { fetchHistoricalPricesForAsset } = await import("@/lib/market-data/historical-provider");
-+    const asset = await assetsRepository.findById(assetId);
-+    if (!asset) throw new Error("Asset not found");
-+    const points = await fetchHistoricalPricesForAsset(asset);
-+    const pointsAdded = await priceHistoryRepository.recordBackfillBatch(assetId, points);
-+    return { pointsAdded };
-+  },
- };
-diff --git a/src/types/database.ts b/src/types/database.ts
-index 927e9ab..39df90c 100644
---- a/src/types/database.ts
-+++ b/src/types/database.ts
-@@ -166,6 +166,7 @@ export interface PriceHistoryRow {
-   asset_id: string;
-   price: number;
-   recorded_date: string;
-+  source: "manual" | "backfill";
-   created_at: string;
+   ]
  }
- 
-diff --git a/src/types/domain/price-history.ts b/src/types/domain/price-history.ts
-index 2a70651..82b1b9a 100644
---- a/src/types/domain/price-history.ts
-+++ b/src/types/domain/price-history.ts
-@@ -3,5 +3,6 @@ export interface PriceHistoryPoint {
-   assetId: string;
-   price: number;
-   recordedDate: string; // ISO date, at most one row per (assetId, recordedDate)
-+  source: "manual" | "backfill";
-   createdAt: string;
- }
-diff --git a/supabase/schema.sql b/supabase/schema.sql
-index a5e28ad..8f6000e 100644
---- a/supabase/schema.sql
-+++ b/supabase/schema.sql
-@@ -272,11 +272,22 @@ create trigger ppf_accounts_set_updated_at before update on ppf_accounts
-   for each row execute function set_updated_at();
- 
- -- =========================================================================
---- price_history — one row per asset per calendar date, written whenever a
---- price is actually updated (Edit Asset's manual entry, or Refresh Prices).
---- NEVER fabricated or backfilled — a gap in history just means the price
---- wasn't updated that day. This is what powers the per-asset performance
---- chart on the investment detail page.
-+-- price_history — one row per asset per calendar date. Two ways a row gets
-+-- here, and `source` distinguishes them so nothing downstream (like the
-+-- per-asset performance chart on the investment detail page) can mistake
-+-- one for the other:
-+--   'manual'   — written whenever a price is actually updated (Edit Asset's
-+--                manual entry, or Refresh Prices). Never fabricated — a gap
-+--                just means the price wasn't updated that day. This is the
-+--                ORIGINAL, still-true meaning of this table.
-+--   'backfill' — a real historical price pulled from an external source's
-+--                own history endpoint (mfapi.in for mutual funds, Yahoo
-+--                Finance for stocks/ETFs, CoinGecko for crypto — see
-+--                lib/market-data/historical-provider.ts), one-time-fetched
-+--                per asset rather than accumulated day by day. Still a
-+--                REAL price for that real date, not a guess — just sourced
-+--                differently, which is exactly why it's labeled rather than
-+--                silently merged into 'manual'.
- -- =========================================================================
- create table price_history (
-   id uuid primary key default gen_random_uuid(),
-@@ -284,6 +295,7 @@ create table price_history (
-   asset_id uuid not null references assets(id) on delete cascade,
-   price numeric(18,4) not null,
-   recorded_date date not null,
-+  source text not null default 'manual' check (source in ('manual', 'backfill')),
-   created_at timestamptz not null default now(),
-   unique (asset_id, recorded_date)
- );
-diff --git a/test/historical-provider.test.ts b/test/historical-provider.test.ts
-new file mode 100644
-index 0000000..f29817f
---- /dev/null
-+++ b/test/historical-provider.test.ts
-@@ -0,0 +1,86 @@
-+import { describe, it, expect } from "vitest";
-+import { parseMFAPIHistoryResponse, parseYahooChartHistoryResponse, parseCoinGeckoRangeResponse } from "@/lib/market-data/historical-provider";
-+
-+describe("parseMFAPIHistoryResponse", () => {
-+  it("parses a real mfapi.in response shape (DD-MM-YYYY dates, string NAVs)", () => {
-+    const fixture = {
-+      meta: { fund_house: "SBI Mutual Fund", scheme_code: 125497 },
-+      data: [
-+        { date: "29-12-2023", nav: "161.23570" },
-+        { date: "28-12-2023", nav: "159.96250" },
-+      ],
-+      status: "SUCCESS",
-+    };
-+    expect(parseMFAPIHistoryResponse(fixture)).toEqual([
-+      { date: "2023-12-29", price: 161.2357 },
-+      { date: "2023-12-28", price: 159.9625 },
-+    ]);
-+  });
-+
-+  it("skips unparseable rows instead of failing the whole batch", () => {
-+    const fixture = { data: [{ date: "29-12-2023", nav: "161.23570" }, { date: "not-a-date", nav: "100" }, { date: "28-12-2023", nav: "not-a-number" }] };
-+    expect(parseMFAPIHistoryResponse(fixture)).toEqual([{ date: "2023-12-29", price: 161.2357 }]);
-+  });
-+
-+  it("returns [] for a missing or malformed data array", () => {
-+    expect(parseMFAPIHistoryResponse({})).toEqual([]);
-+    expect(parseMFAPIHistoryResponse({ data: "not an array" })).toEqual([]);
-+    expect(parseMFAPIHistoryResponse(null)).toEqual([]);
-+  });
-+});
-+
-+describe("parseYahooChartHistoryResponse", () => {
-+  it("zips timestamp[] and close[] into date/price points", () => {
-+    const fixture = {
-+      chart: {
-+        result: [
-+          {
-+            timestamp: [1701216600, 1701303000],
-+            indicators: { quote: [{ close: [150.5, 151.25] }] },
-+          },
-+        ],
-+      },
-+    };
-+    const points = parseYahooChartHistoryResponse(fixture);
-+    expect(points).toHaveLength(2);
-+    expect(points[0].price).toBe(150.5);
-+    expect(points[1].price).toBe(151.25);
-+    // Just check these parse to valid ISO dates, not exact values — timezone
-+    // conversion from a unix timestamp shouldn't be pinned to one offset.
-+    expect(points[0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-+  });
-+
-+  it("skips days with a null close (holidays/gaps) rather than fabricating one", () => {
-+    const fixture = {
-+      chart: { result: [{ timestamp: [1701216600, 1701303000], indicators: { quote: [{ close: [150.5, null] }] } }] },
-+    };
-+    expect(parseYahooChartHistoryResponse(fixture)).toHaveLength(1);
-+  });
-+
-+  it("returns [] when the expected arrays are missing", () => {
-+    expect(parseYahooChartHistoryResponse({ chart: { result: [] } })).toEqual([]);
-+    expect(parseYahooChartHistoryResponse({})).toEqual([]);
-+  });
-+});
-+
-+describe("parseCoinGeckoRangeResponse", () => {
-+  it("converts [ms, price] pairs into date/price points", () => {
-+    const fixture = { prices: [[1701216600000, 37250.5], [1701303000000, 37500.1]] };
-+    const points = parseCoinGeckoRangeResponse(fixture);
-+    expect(points).toHaveLength(2);
-+    expect(points.map((p) => p.price)).toEqual([37250.5, 37500.1]);
-+  });
-+
-+  it("dedupes same-day points, keeping the last one (closest to that day's close)", () => {
-+    // Both timestamps fall on the same UTC calendar day.
-+    const fixture = { prices: [[1701216600000, 100], [1701219600000, 105]] };
-+    const points = parseCoinGeckoRangeResponse(fixture);
-+    expect(points).toHaveLength(1);
-+    expect(points[0].price).toBe(105);
-+  });
-+
-+  it("returns [] for a missing or malformed prices array", () => {
-+    expect(parseCoinGeckoRangeResponse({})).toEqual([]);
-+    expect(parseCoinGeckoRangeResponse({ prices: "nope" })).toEqual([]);
-+  });
-+});

@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/refresh-prices",
       "schedule": "15 10 * * 1-5"
+    },
+    {
+      "path": "/api/cron/backfill-history",
+      "schedule": "0 16 * * *"
     }
   ]
 }
