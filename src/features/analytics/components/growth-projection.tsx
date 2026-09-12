@@ -4,14 +4,16 @@ import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CurrencyInput } from "@/components/shared/inputs";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { formatCurrency, formatPercent } from "@/lib/utils/currency";
 import { projectFutureValue, projectFutureValueWithSIP } from "@/lib/calculations/returns";
 import { cn } from "@/lib/utils/cn";
 import { getAssetDisplayLabel } from "@/lib/utils/asset-display";
-import { addActiveSipAction, stopActiveSipAction } from "@/features/active-sips/actions";
-import { TrendingUp, Plus, X } from "lucide-react";
+import { addActiveSipAction, updateActiveSipAmountAction, deleteActiveSipAction } from "@/features/active-sips/actions";
+import { TrendingUp, Plus, Pencil, Trash2, Check, X } from "lucide-react";
 import type { CalcResult } from "@/lib/calculations/returns";
 import type { HoldingWithXIRR } from "@/lib/services/portfolio.service";
 import type { ActiveSIP } from "@/types/domain/active-sip";
@@ -46,7 +48,11 @@ export function GrowthProjection({
   const [isPending, startTransition] = useTransition();
   const [addingAssetId, setAddingAssetId] = useState("");
   const [addingAmount, setAddingAmount] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ActiveSIP | null>(null);
 
   const activeOnly = activeSips.filter((s) => s.status === "active");
   const sipByAsset = new Map(activeOnly.map((s) => [s.assetId, s.monthlyAmount]));
@@ -56,7 +62,7 @@ export function GrowthProjection({
   const eligibleForNewSip = holdings.filter((h) => !sipByAsset.has(h.asset.id));
 
   function handleAdd() {
-    setError(null);
+    setAddError(null);
     startTransition(async () => {
       const result = await addActiveSipAction({ assetId: addingAssetId, monthlyAmount: Number(addingAmount) });
       if (result.ok) {
@@ -64,16 +70,36 @@ export function GrowthProjection({
         setAddingAssetId("");
         setAddingAmount("");
       } else {
-        setError(result.error);
+        setAddError(result.error);
       }
     });
   }
 
-  function handleStop(sip: ActiveSIP) {
+  function startEdit(sip: ActiveSIP) {
+    setEditingId(sip.id);
+    setEditAmount(String(sip.monthlyAmount));
+    setEditError(null);
+  }
+
+  function handleSaveEdit(id: string) {
+    setEditError(null);
     startTransition(async () => {
-      const result = await stopActiveSipAction(sip.id);
-      if (result.ok) toast.success("SIP stopped");
+      const result = await updateActiveSipAmountAction(id, { monthlyAmount: Number(editAmount) });
+      if (result.ok) {
+        toast.success("SIP updated");
+        setEditingId(null);
+      } else {
+        setEditError(result.error);
+      }
+    });
+  }
+
+  function handleDelete(sip: ActiveSIP) {
+    startTransition(async () => {
+      const result = await deleteActiveSipAction(sip.id);
+      if (result.ok) toast.success("SIP deleted");
       else toast.error(result.error);
+      setDeleteTarget(null);
     });
   }
 
@@ -149,7 +175,7 @@ export function GrowthProjection({
                     <tr key={h.asset.id} className="border-b border-border-subtle last:border-0">
                       <td className="py-2 pr-4">
                         <span className={cn("font-medium text-ink", h.asset.assetType !== "mutual_fund" && h.asset.assetType !== "mutual_fund_debt" && "font-mono")}>{getAssetDisplayLabel(h.asset).primary}</span>
-                        {sipAmount !== undefined && <span className="ml-2 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">SIP {formatCurrency(sipAmount)}/mo</span>}
+                        {sipAmount !== undefined && <span className="ml-2 whitespace-nowrap rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">SIP {formatCurrency(sipAmount)}/mo</span>}
                       </td>
                       <td className="py-2 pr-4 text-right font-tabular text-ink">{formatCurrency(h.currentValue, h.asset.currency)}</td>
                       <td className={cn("py-2 pr-4 text-right font-tabular", h.xirr.status === "ok" && h.xirr.value >= 0 ? "text-gain" : h.xirr.status === "ok" ? "text-loss" : "text-ink-muted")}>
@@ -175,43 +201,88 @@ export function GrowthProjection({
           </div>
         )}
 
-        {/* Active SIPs — compact management, no dedicated page. One active SIP per asset (schema-enforced); stop + re-add for a changed amount rather than an in-place edit. */}
-        <div className="flex flex-col gap-2 rounded-[var(--radius-control)] border border-border-subtle p-3">
+        {/* Active SIPs — compact management, no dedicated page. One active SIP per asset (schema-enforced). */}
+        <div className="flex flex-col gap-3 rounded-[var(--radius-control)] border border-border-subtle p-3">
           <p className="text-xs font-medium text-ink-muted">Active SIPs</p>
           {activeOnly.length > 0 && (
-            <ul className="flex flex-col gap-1.5">
+            <ul className="flex flex-col gap-2">
               {activeOnly.map((s) => {
                 const asset = holdings.find((h) => h.asset.id === s.assetId)?.asset;
+                const label = asset ? getAssetDisplayLabel(asset).primary : s.assetId;
+                if (editingId === s.id) {
+                  return (
+                    <li key={s.id} className="flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-sm text-ink" title={label}>{label}</span>
+                        <CurrencyInput
+                          autoFocus
+                          className="h-8 w-28"
+                          value={editAmount}
+                          onChange={(e) => setEditAmount(e.target.value)}
+                        />
+                        <Button size="icon" variant="ghost" className="size-8" disabled={isPending || !editAmount} onClick={() => handleSaveEdit(s.id)} aria-label="Save">
+                          <Check className="size-4 text-gain" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="size-8" disabled={isPending} onClick={() => setEditingId(null)} aria-label="Cancel">
+                          <X className="size-4" />
+                        </Button>
+                      </div>
+                      {editError && <p className="text-xs text-loss">{editError}</p>}
+                    </li>
+                  );
+                }
                 return (
-                  <li key={s.id} className="flex items-center justify-between text-sm">
-                    <span className="text-ink">{asset ? getAssetDisplayLabel(asset).primary : s.assetId} — {formatCurrency(s.monthlyAmount)}/mo</span>
-                    <button type="button" onClick={() => handleStop(s)} disabled={isPending} className="text-xs text-ink-muted hover:text-loss" aria-label="Stop SIP">
-                      <X className="size-3.5" />
-                    </button>
+                  <li key={s.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 flex-1 truncate text-ink" title={label}>{label} — {formatCurrency(s.monthlyAmount)}/mo</span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button size="icon" variant="ghost" className="size-8" disabled={isPending} onClick={() => startEdit(s)} aria-label="Edit SIP amount">
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="size-8 hover:text-loss" disabled={isPending} onClick={() => setDeleteTarget(s)} aria-label="Delete SIP">
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
                   </li>
                 );
               })}
             </ul>
           )}
           {eligibleForNewSip.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <Select value={addingAssetId} onValueChange={setAddingAssetId}>
-                <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Choose a holding" /></SelectTrigger>
-                <SelectContent>
-                  {eligibleForNewSip.map((h) => (
-                    <SelectItem key={h.asset.id} value={h.asset.id}>{getAssetDisplayLabel(h.asset).primary}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <CurrencyInput className="h-9 w-32" placeholder="₹/month" value={addingAmount} onChange={(e) => setAddingAmount(e.target.value)} />
+            <div className="flex flex-wrap items-end gap-2 border-t border-border-subtle pt-3">
+              <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-initial sm:w-56">
+                <Label className="text-xs text-ink-muted">Holding</Label>
+                <Select value={addingAssetId} onValueChange={setAddingAssetId}>
+                  <SelectTrigger className="h-9 min-w-0">
+                    <span className="min-w-0 flex-1 truncate text-left"><SelectValue placeholder="Choose a holding" /></span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {eligibleForNewSip.map((h) => (
+                      <SelectItem key={h.asset.id} value={h.asset.id}>{getAssetDisplayLabel(h.asset).primary}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex w-32 flex-col gap-1">
+                <Label className="text-xs text-ink-muted">Monthly amount</Label>
+                <CurrencyInput className="h-9" value={addingAmount} onChange={(e) => setAddingAmount(e.target.value)} />
+              </div>
               <Button size="sm" variant="outline" disabled={isPending || !addingAssetId || !addingAmount} onClick={handleAdd}>
                 <Plus className="size-3.5" /> Add SIP
               </Button>
             </div>
           )}
-          {error && <p className="text-xs text-loss">{error}</p>}
+          {addError && <p className="text-xs text-loss">{addError}</p>}
         </div>
       </CardContent>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete this SIP?"
+        description={deleteTarget ? `This removes the SIP on ${holdings.find((h) => h.asset.id === deleteTarget.assetId)?.asset ? getAssetDisplayLabel(holdings.find((h) => h.asset.id === deleteTarget.assetId)!.asset).primary : "this holding"} — its projections will no longer include this contribution.` : ""}
+        onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
+        confirmLabel="Delete"
+      />
     </Card>
   );
 }

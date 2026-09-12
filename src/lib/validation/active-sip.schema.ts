@@ -5,4 +5,8 @@ export const activeSipSchema = z.object({
   monthlyAmount: z.coerce.number().positive("Monthly amount must be greater than zero"),
 });
 
+export const activeSipAmountSchema = z.object({
+  monthlyAmount: z.coerce.number().positive("Monthly amount must be greater than zero"),
+});
+
 export type ActiveSipInput = z.infer<typeof activeSipSchema>;

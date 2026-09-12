@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { activeSipsRepository } from "@/lib/database/repositories/active-sips.repository";
-import { activeSipSchema } from "@/lib/validation/active-sip.schema";
+import { activeSipSchema, activeSipAmountSchema } from "@/lib/validation/active-sip.schema";
 import { ROUTES } from "@/constants/routes";
 import { logServerError } from "@/lib/utils/log-error";
 import type { ActionResult } from "@/features/transactions/actions";
@@ -15,6 +15,19 @@ export async function addActiveSipAction(input: unknown): Promise<ActionResult> 
     return { ok: true };
   } catch (err) {
     logServerError("addActiveSipAction", err);
+    return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
+export async function updateActiveSipAmountAction(id: string, input: unknown): Promise<ActionResult> {
+  const parsed = activeSipAmountSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  try {
+    await activeSipsRepository.updateAmount(id, parsed.data.monthlyAmount);
+    revalidatePath(ROUTES.analytics);
+    return { ok: true };
+  } catch (err) {
+    logServerError("updateActiveSipAmountAction", err);
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
   }
 }

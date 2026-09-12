@@ -18,11 +18,11 @@ function rowToActiveSIP(row: ActiveSIPRow): ActiveSIP {
 }
 
 /**
- * Deliberately minimal CRUD — no generic "update" for changing amount:
- * a SIP amount change is rare enough, and important enough to the resulting
- * projection, that it goes through stop + re-add (a fresh, dated row) rather
- * than a silent in-place edit. See schema.sql's active_sips comment for why
- * there's no future end-date field either.
+ * CRUD for a user's Active SIPs. Amount edits go through a direct update()
+ * (not stop+re-add) per user feedback that in-place editing is worth the
+ * simplicity — the audit trigger on active_sips (see schema.sql) already
+ * captures the before/after on every update, so nothing is lost by editing
+ * in place instead of forcing a new row.
  */
 export const activeSipsRepository = {
   /** All SIPs (active and stopped) for the signed-in user, most-recently-started first. */
@@ -59,7 +59,22 @@ export const activeSipsRepository = {
     return rowToActiveSIP(data as ActiveSIPRow);
   },
 
-  /** Flips status to 'stopped' and stamps stopped_at — never deletes, so the SIP's history (and its audit trail) is preserved. */
+  /** In-place amount edit — see the class-level doc comment for why this replaced the earlier stop+re-add-only design. */
+  async updateAmount(id: string, monthlyAmount: number): Promise<ActiveSIP> {
+    if (isDemoMode()) {
+      const sip = demoActiveSIPs.find((s) => s.id === id);
+      if (!sip) throw new Error("SIP not found");
+      sip.monthlyAmount = monthlyAmount;
+      sip.updatedAt = new Date().toISOString();
+      return sip;
+    }
+    const db = await getServerSupabaseClient();
+    const { data, error } = await db.from("active_sips").update({ monthly_amount: monthlyAmount }).eq("id", id).select().single();
+    if (error) throw error;
+    return rowToActiveSIP(data as ActiveSIPRow);
+  },
+
+  /** Flips status to 'stopped' and stamps stopped_at. Kept for the "paused, might resume, want it excluded from projections but not gone" case — distinct from delete(), which removes the row outright. */
   async markStopped(id: string): Promise<ActiveSIP> {
     const stoppedAt = new Date().toISOString().slice(0, 10);
     if (isDemoMode()) {
@@ -81,7 +96,7 @@ export const activeSipsRepository = {
     return rowToActiveSIP(data as ActiveSIPRow);
   },
 
-  /** Removes a SIP entirely — for correcting an accidental add, not for normal "I stopped contributing" (use markStopped for that, which keeps history). */
+  /** Removes a SIP entirely. Still audit-logged (active_sips is in the audit-trigger table list — see schema.sql), just no longer visible in the active list. */
   async delete(id: string): Promise<void> {
     if (isDemoMode()) {
       const idx = demoActiveSIPs.findIndex((s) => s.id === id);
