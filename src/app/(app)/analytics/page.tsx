@@ -8,6 +8,7 @@ import { npsService } from "@/lib/services/nps.service";
 import { npsRepository } from "@/lib/database/repositories/nps.repository";
 import { transactionsRepository } from "@/lib/database/repositories/transactions.repository";
 import { snapshotsRepository } from "@/lib/database/repositories/snapshots.repository";
+import { activeSipsRepository } from "@/lib/database/repositories/active-sips.repository";
 import { calculateCAGR, calculateXIRR, selectCAGRBaseSnapshot } from "@/lib/calculations/returns";
 import { calculateCategoryXIRR } from "@/lib/calculations/category-xirr";
 import { calculateVolatility, calculateMaxDrawdown, calculateSharpeRatio, calculateSortinoRatio } from "@/lib/calculations/risk";
@@ -26,12 +27,13 @@ export const dynamic = "force-dynamic";
 const RISK_FREE_RATE = 7; // annual %, assumption used for Sharpe/Sortino
 
 export default async function AnalyticsPage() {
-  const [summary, allocation, transactions, snapshots, holdingsWithXirr, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, perf1M, perf3M, perf1Y, perfAll] = await Promise.all([
+  const [summary, allocation, transactions, snapshots, holdingsWithXirr, activeSips, npsCashflows, npsSchemeHoldings, npsSchemeTransactions, perf1M, perf3M, perf1Y, perfAll] = await Promise.all([
     portfolioService.getPortfolioSummary(),
     portfolioService.getAssetAllocation(),
     transactionsRepository.findAll(),
     snapshotsRepository.findAll(),
     portfolioService.getHoldingsWithXIRR(),
+    activeSipsRepository.findAll(),
     npsService.getCashflows(),
     npsRepository.findAllSchemeHoldings(),
     npsRepository.findAllSchemeTransactions(),
@@ -135,7 +137,7 @@ export default async function AnalyticsPage() {
 
         <XIRRSelectorCard defaultResult={xirr} holdings={xirrHoldingsInput} transactions={xirrTransactionsInput} npsCashflows={npsCashflows} today={todayISO()} />
 
-        <GrowthProjection holdings={holdingsWithXirr} portfolioXirr={xirr} portfolioValue={summary.currentValue} />
+        <GrowthProjection holdings={holdingsWithXirr} portfolioXirr={xirr} portfolioValue={summary.currentValue} activeSips={activeSips} />
 
         <Card>
           <CardHeader><CardTitle>Asset Allocation</CardTitle></CardHeader>

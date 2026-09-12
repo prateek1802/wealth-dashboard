@@ -90,3 +90,28 @@ export function projectFutureValue(currentValue: number, annualRatePercent: numb
   if (years <= 0) return currentValue;
   return currentValue * Math.pow(1 + annualRatePercent / 100, years);
 }
+
+/**
+ * Same idea as projectFutureValue(), but also compounds a fixed monthly
+ * contribution forward (an "Active SIP" against this holding — see
+ * active_sips in schema.sql) instead of assuming the current value grows
+ * as an untouched lump sum. Deliberately a SEPARATE function rather than
+ * an optional-parameter extension of projectFutureValue(): that function's
+ * existing callers (every holding/portfolio total with no active SIP) stay
+ * on annual compounding exactly as tested; this one compounds monthly to
+ * match how a SIP actually posts (mirrors projectNPSCorpus()'s monthly
+ * loop in lib/calculations/nps.ts) — the two are not meant to agree at
+ * monthlyContribution = 0, since they compound at different frequencies.
+ * Still just an ESTIMATE assuming the given rate holds — same FINANCIAL
+ * SAFETY labeling requirement as projectFutureValue().
+ */
+export function projectFutureValueWithSIP(currentValue: number, annualRatePercent: number, years: number, monthlyContribution: number): number {
+  if (years <= 0) return currentValue;
+  const monthlyRate = annualRatePercent / 100 / 12;
+  const totalMonths = Math.round(years * 12);
+  let value = currentValue;
+  for (let m = 0; m < totalMonths; m++) {
+    value = value * (1 + monthlyRate) + monthlyContribution;
+  }
+  return value;
+}

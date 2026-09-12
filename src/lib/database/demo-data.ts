@@ -8,6 +8,7 @@ import type { BankAccount } from "@/types/domain/bank-account";
 import type { Liability } from "@/types/domain/liability";
 import type { WatchlistItem } from "@/types/domain/watchlist";
 import type { PortfolioSnapshot } from "@/types/domain/snapshot";
+import type { ActiveSIP } from "@/types/domain/active-sip";
 
 /**
  * DEMO / DEVELOPMENT SEED DATA — fictional, not the user's real financial
@@ -161,4 +162,9 @@ export const demoSnapshots: PortfolioSnapshot[] = Array.from({ length: 40 }, (_,
 
 export const demoLiabilities: Liability[] = [
   { id: "liability-1", name: "HDFC Credit Card", liabilityType: "credit_card", amountOwed: 22_000, interestRate: 42, notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+];
+
+export const demoActiveSIPs: ActiveSIP[] = [
+  { id: "sip-1", assetId: "asset-parag", monthlyAmount: 15_000, startDate: daysAgo(300), status: "active", stoppedAt: null, createdAt: daysAgo(300), updatedAt: daysAgo(300) },
+  { id: "sip-2", assetId: "asset-niftybees", monthlyAmount: 5_000, startDate: daysAgo(150), status: "stopped", stoppedAt: daysAgo(20), createdAt: daysAgo(150), updatedAt: daysAgo(20) },
 ];

@@ -199,3 +199,14 @@ export interface AuditLogRow {
   new_data: Record<string, unknown> | null;
   changed_at: string;
 }
+
+export interface ActiveSIPRow {
+  id: string;
+  asset_id: string;
+  monthly_amount: number;
+  start_date: string;
+  status: "active" | "stopped";
+  stopped_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -331,6 +331,35 @@ create trigger watchlist_items_set_updated_at before update on watchlist_items
   for each row execute function set_updated_at();
 
 -- =========================================================================
+-- active_sips — a running monthly SIP against an already-held asset, used
+-- purely to make Growth Projection (Analytics) account for ongoing
+-- contributions instead of assuming a lump sum. Deliberately projections-
+-- only: no reminder/scheduling functionality (a separate, previously
+-- discussed idea, not bundled in here). A SIP continues indefinitely once
+-- added — there's no future end-date field, only a status flip to
+-- 'stopped' (mirrors fixed_deposits' active/withdrawn pattern) — because a
+-- SIP end date is rarely known in advance and a wrong guess would silently
+-- skew projections; stopping is an explicit, in-the-moment action instead.
+-- One active SIP per asset per user (the partial unique index below) — if
+-- you stop one and start a new one on the same asset, that's a fresh row,
+-- so the stopped one's history is preserved rather than overwritten.
+-- =========================================================================
+create table active_sips (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  asset_id uuid not null references assets(id) on delete cascade,
+  monthly_amount numeric(18,4) not null check (monthly_amount > 0),
+  start_date date not null default current_date,
+  status text not null default 'active' check (status in ('active', 'stopped')),
+  stopped_at date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index active_sips_one_active_per_asset_idx on active_sips (user_id, asset_id) where status = 'active';
+create trigger active_sips_set_updated_at before update on active_sips
+  for each row execute function set_updated_at();
+
+-- =========================================================================
 -- ROW LEVEL SECURITY
 -- Every table above has a `user_id uuid default auth.uid()` column. Below,
 -- each table gets RLS enabled and ONE policy: a row is only visible,
@@ -353,6 +382,8 @@ create index bank_accounts_user_id_idx on bank_accounts (user_id);
 create index ppf_accounts_user_id_idx on ppf_accounts (user_id);
 create index price_history_user_id_idx on price_history (user_id);
 create index watchlist_items_user_id_idx on watchlist_items (user_id);
+create index active_sips_user_id_idx on active_sips (user_id);
+create index active_sips_asset_id_idx on active_sips (asset_id);
 
 alter table assets enable row level security;
 alter table transactions enable row level security;
@@ -367,6 +398,7 @@ alter table bank_accounts enable row level security;
 alter table ppf_accounts enable row level security;
 alter table price_history enable row level security;
 alter table watchlist_items enable row level security;
+alter table active_sips enable row level security;
 
 create policy "owner_only" on assets for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on transactions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
@@ -381,6 +413,7 @@ create policy "owner_only" on bank_accounts for all using (auth.uid() = user_id)
 create policy "owner_only" on ppf_accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on price_history for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "owner_only" on watchlist_items for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "owner_only" on active_sips for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- =========================================================================
 -- audit_log — append-only history of edits/deletes to financial records.
@@ -448,7 +481,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['transactions', 'assets', 'fixed_deposits', 'bank_accounts', 'ppf_accounts', 'liabilities', 'goals', 'nps_accounts', 'nps_contributions', 'nps_scheme_transactions']
+  foreach t in array array['transactions', 'assets', 'fixed_deposits', 'bank_accounts', 'ppf_accounts', 'liabilities', 'goals', 'nps_accounts', 'nps_contributions', 'nps_scheme_transactions', 'active_sips']
   loop
     execute format('drop trigger if exists %I_audit_update on %I', t, t);
     execute format('create trigger %I_audit_update after update on %I for each row when (old is distinct from new) execute function fn_audit_log()', t, t);

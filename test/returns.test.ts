@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calculateCAGR, calculateXIRR, projectFutureValue, selectCAGRBaseSnapshot } from "@/lib/calculations/returns";
+import { calculateCAGR, calculateXIRR, projectFutureValue, projectFutureValueWithSIP, selectCAGRBaseSnapshot } from "@/lib/calculations/returns";
 
 describe("calculateCAGR", () => {
   it("computes CAGR for doubling over 3 years", () => {
@@ -104,5 +104,32 @@ describe("projectFutureValue", () => {
 
   it("handles a negative rate (declining value)", () => {
     expect(projectFutureValue(100_000, -10, 1)).toBeCloseTo(90_000, 0);
+  });
+});
+
+describe("projectFutureValueWithSIP", () => {
+  it("matches a hand-checked reference case (₹5L base + ₹10k/month at 12%/yr for 1 year)", () => {
+    // Monthly rate r = 1%, n = 12 months.
+    // FV = base*(1+r)^n + contribution*[(1+r)^n - 1]/r
+    //    = 500000*(1.01)^12 + 10000*[(1.01)^12 - 1]/0.01
+    //    = 500000*1.12682503... + 10000*12.682503...
+    //    = 563412.5... + 126825.03... = 690237.5...
+    expect(projectFutureValueWithSIP(500_000, 12, 1, 10_000)).toBeCloseTo(690_237.55, 1);
+  });
+
+  it("returns the current value unchanged for zero or negative years, ignoring the contribution", () => {
+    expect(projectFutureValueWithSIP(500_000, 12, 0, 10_000)).toBe(500_000);
+    expect(projectFutureValueWithSIP(500_000, 12, -1, 10_000)).toBe(500_000);
+  });
+
+  it("reduces to pure compounding with a zero contribution (still monthly, so it does NOT equal projectFutureValue's annual compounding at the same nominal rate)", () => {
+    const withSip = projectFutureValueWithSIP(100_000, 10, 3, 0);
+    const annualOnly = projectFutureValue(100_000, 10, 3);
+    expect(withSip).toBeGreaterThan(annualOnly); // monthly compounding > annual at the same nominal rate
+    expect(withSip).toBeCloseTo(134_818.18, 1);
+  });
+
+  it("compounds over a longer horizon (₹2L base + ₹5k/month at 8%/yr for 5 years)", () => {
+    expect(projectFutureValueWithSIP(200_000, 8, 5, 5_000)).toBeCloseTo(665_353.42, 1);
   });
 });
